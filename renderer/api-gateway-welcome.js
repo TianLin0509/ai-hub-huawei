@@ -9,7 +9,7 @@
   const KINDS = ['claude', 'codex', 'deepseek-acp'];
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // draft：用户在表单里填了还没保存成功的地址和 key，重画（报错、验证中）时原样保留，不让他重填（E2E 实测发现）。
-  let state = { gateway: null, codeagent: null, claude: null, expanded: false, editAddr: false, busy: false, error: null, justSaved: false, draft: { baseURL: null, apiKey: '' }, found: [] };
+  let state = { gateway: null, codeagent: null, claude: null, codex: null, dsh: null, expanded: false, editAddr: false, busy: false, error: null, justSaved: false, draft: { baseURL: null, apiKey: '' }, found: [] };
   let box = null;
 
   function mount() {
@@ -81,7 +81,15 @@
     if (what === 'expand') { state.expanded = true; state.justSaved = false; return render(); }
     if (what === 'collapse' || what === 'done') { state.expanded = false; state.justSaved = false; state.error = null; return render(); }
     if (what === 'addr') { state.editAddr = true; return render(); }
-    if (what === 'start') { state.justSaved = false; state.expanded = false; render(); document.getElementById('btn-new')?.click(); return; }
+    // 「开始第一个会话」直接开 Claude Code（走刚保存的部门 key）：不落回上次的 CodeAgent（R45：装了 CodeAgent 但没模型权限的同事点了就失败）。
+    if (what === 'start') {
+      state.justSaved = false; state.expanded = false; render();
+      // 本机已装、能走部门 key 的第一个（Claude Code → Codex → DSH），都没装才落回 Claude Code（审查 P1-3）。
+      const target = require('./launch-model-cards').gatewayLaunchTarget(option => (option === 'claude' ? state.claude : option === 'codex' ? state.codex : state.dsh));
+      if (window.WorkspaceController?.openNewSessionModal) window.WorkspaceController.openNewSessionModal({ kind: target.kind });
+      else document.getElementById('btn-new')?.click();
+      return;
+    }
     if (!['save', 'adopt'].includes(what) || state.busy) return;
     const baseURL = box.querySelector('input[name="baseURL"]')?.value || state.gateway.baseURL;
     const apiKey = box.querySelector('input[name="apiKey"]')?.value || '';
@@ -115,13 +123,15 @@
   }
   async function refresh() {
     try {
-      const [gw, setup, det] = await Promise.all([ipcRenderer.invoke('api-gateway:get'), ipcRenderer.invoke('community:setup'),
-        ipcRenderer.invoke('api-gateway:detect').catch(() => null)]);
+      const [gw, setup, det, api] = await Promise.all([ipcRenderer.invoke('api-gateway:get'), ipcRenderer.invoke('community:setup'),
+        ipcRenderer.invoke('api-gateway:detect').catch(() => null), ipcRenderer.invoke('company-api:get').catch(() => null)]);
       state.gateway = gw?.gateway || state.gateway;
       state.found = det?.found || [];
       const find = id => setup?.providers?.find(p => p.id === id);
       state.codeagent = find('codeagent') ? !!find('codeagent').installed : null;
       state.claude = find('claude') ? !!find('claude').installed : null;
+      state.codex = find('codex') ? !!find('codex').installed : null;
+      state.dsh = typeof api?.dshCliReady === 'boolean' ? api.dshCliReady : null;
     } catch { /* 首页其余部分照常 */ }
     render();
   }

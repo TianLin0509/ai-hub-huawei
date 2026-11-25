@@ -66,6 +66,19 @@ function gatewayModels(provider) {
     .map(m => ({ id: m.id, label: m.label || m.id, note: m.note || '' }));
 }
 const onGateway = provider => provider?.backend === 'proxy' && provider.upstream === 'gateway';
+// 自有接口 / API 账号的模型表（R45：一个接口可配多个模型）：默认模型排第一；老配置只有默认模型这一个。
+const listOr = (list, model) => (Array.isArray(list) && list.length ? list : [model || '']);
+function ownModelList(provider) {
+  const own = provider?.own || {};
+  return listOr(own.models || provider?.ownModels, own.model || provider?.model || '');
+}
+const profileModels = profile => listOr(profile?.models, profile?.model || '');
+// 卡片编号：默认模型沿用老编号（own / api:<账号>），其余模型在后面接「#模型名」。
+const cardId = (base, list, model) => (model === list[0] ? base : `${base}#${model}`);
+function parseCardId(id) {
+  const m = /^(own|api:[A-Za-z0-9_-]{1,64})#(.+)$/.exec(String(id || ''));
+  return m ? { base: m[1], model: m[2] } : { base: String(id || ''), model: '' };
+}
 
 function companyModels(provider) {
   const list = Array.isArray(provider?.companyModels) && provider.companyModels.length ? provider.companyModels
@@ -105,16 +118,27 @@ function defaultPick(kind, provider, { codeagentInstalled = null } = {}) {
 // 新建会话前要不要先改保存的设置（选了和保存的不同的卡）：返回 company-api:save 的请求，或 null。
 function saveRequest(kind, provider, pick) {
   if (!pick || !provider || !COMPANY_KINDS.has(kind)) return null;
-  if (pick.source === 'api') return { kind, profileAction: 'select', profileId: pick.profileId };
+  if (pick.source === 'api') {
+    // 选了这个账号的另一个模型：一并记成它的默认模型（下次打开默认选它）。
+    const profile = provider.apiProfiles?.find(item => item.id === pick.profileId);
+    return { kind, profileAction: 'select', profileId: pick.profileId, ...(pick.model && profile && pick.model !== profile.model ? { model: pick.model } : {}) };
+  }
   if (pick.source === 'gateway') {
     return onGateway(provider) && provider.model === pick.model ? null : { kind, backend: 'gateway', model: pick.model };
   }
   if (pick.source === 'company') {
     return provider.backend === 'proxy' && !onGateway(provider) && provider.model === pick.model ? null : { kind, backend: 'proxy', model: pick.model };
   }
-  if (kind === 'deepseek-acp') return provider.backend === 'proxy' && provider.own?.backend === 'api' ? { kind, backend: 'own' } : null;
+  // 自有接口选了另一个模型：带上 ownModel，记成它的默认模型（下次打开默认选它，R45-3）。
+  const ownDefault = provider.own?.model || provider.model || '';
+  const remember = pick.model && pick.model !== ownDefault && ownModelList(provider).includes(pick.model) ? { ownModel: pick.model } : {};
+  if (kind === 'deepseek-acp') {
+    if (provider.backend === 'proxy' && provider.own?.backend === 'api') return { kind, backend: 'own', ...remember };
+    return remember.ownModel ? { kind, ...remember } : null;
+  }
   if (provider.apiProfiles?.length) return { kind, useLocal: true };
-  return provider.backend === 'proxy' || provider.companyDefault === true ? { kind, backend: 'own' } : null;
+  if (provider.backend === 'proxy' || provider.companyDefault === true) return { kind, backend: 'own', ...remember };
+  return remember.ownModel ? { kind, ...remember } : null;
 }
 
 // 群聊成员（建群 / 加成员）选了 Claude Code、Codex、DSH：每个成员各带各的模型，但同一种工具的来源（公司模型 / 自有来源）
@@ -127,9 +151,9 @@ function memberSaveRequests(slots, providers) {
     if (!models.length || !provider) continue;
     const companyIds = new Set(companyModels(provider).map(m => m.id));
     const gatewayIds = new Set(gatewayModels(provider).map(m => m.id));
-    const apiProfile = provider.apiProfiles?.find(profile => profile.id === provider.selectedProfileId && models.every(id => id === profile.model));
-    // 当前走自有接口（没有命名 profile 的老配置）且模型就是它的模型：也算自有来源，不悄悄换到网关。
-    const ownApi = provider.backend === 'api' && models.every(id => id === provider.model);
+    const apiProfile = provider.apiProfiles?.find(profile => profile.id === provider.selectedProfileId && models.every(id => profileModels(profile).includes(id)));
+    // 当前走自有接口（没有命名 profile 的老配置）且模型都在它的模型表里：也算自有来源，不悄悄换到网关。
+    const ownApi = provider.backend === 'api' && models.every(id => listOr(provider.ownModels, provider.model).includes(id));
     // 成员模型都在网关表里：走网关线路（当前就走网关，或这些名字既不是公司模型、也不是当前选中的自有接口——从公司线路切过来的也算，11-19 审查发现）。
     if (gatewayIds.size && models.every(id => gatewayIds.has(id)) && (onGateway(provider) || (!apiProfile && !ownApi && !models.some(id => companyIds.has(id))))) {
       const request = saveRequest(kind, provider, { source: 'gateway', model: models[0] });
@@ -166,17 +190,25 @@ function cardsFor(kind, provider, status, pick, { codeagentInstalled = null } = 
     const own = provider.apiProfiles?.length ? { backend: 'local' }
       : provider.own || { backend: provider.backend === 'api' ? 'api' : 'local', model: provider.model || '' };
     const api = own.backend === 'api';
-    cards.push({ id: 'own', name: api ? (own.model || '自有接口默认模型') : '沿用本机 CLI 配置', detail: '', source: 'own',
+    const list = api ? ownModelList({ ...provider, own }) : [''];
+    // 一个接口配了多个模型：每个模型一张卡（R45），选哪张会话就用哪个模型。
+    for (const model of list) cards.push({ id: cardId('own', list, model), model, name: api ? (model || '自有接口默认模型') : '沿用本机 CLI 配置', detail: '', source: 'own',
       sourceText: api ? '自有接口' : 'CLI 默认', state: api && provider.apiKeyNeedsInput ? 'needs' : 'ready', statusText: api && provider.apiKeyNeedsInput ? 'Key 无法解密，点此补填' : api ? '用你在「自有 API」里填的接口' : '用这台电脑上 CLI 自己的配置',
-      tip: api ? '经你自己的接口地址和 Key，不走公司模型。' : '不经 Hub 改接口，CLI 用它本机的登录和模型设置。', checked: pick?.source === 'own' });
-    for (const profile of provider.apiProfiles || []) cards.push({ id: 'api:' + profile.id, profileId: profile.id,
-      name: profile.label, detail: profile.model, source: 'api', sourceText: '自有 API', state: profile.apiKeyNeedsInput ? 'needs' : 'ready',
-      statusText: profile.apiKeyNeedsInput ? 'Key 无法解密，点此补填' : profile.baseURL, tip: profile.baseURL,
-      checked: pick?.source === 'api' && pick.profileId === profile.id });
+      tip: api ? '经你自己的接口地址和 Key，不走公司模型。' : '不经 Hub 改接口，CLI 用它本机的登录和模型设置。',
+      checked: pick?.source === 'own' && (!api || list.length < 2 || (pick.model || list[0]) === model) });
+    for (const profile of provider.apiProfiles || []) {
+      const models = profileModels(profile);
+      for (const model of models) cards.push({ id: cardId('api:' + profile.id, models, model), profileId: profile.id, model,
+        name: profile.label, detail: model, source: 'api', sourceText: '自有 API', state: profile.apiKeyNeedsInput ? 'needs' : 'ready',
+        statusText: profile.apiKeyNeedsInput ? 'Key 无法解密，点此补填' : profile.baseURL, tip: profile.baseURL,
+        checked: pick?.source === 'api' && pick.profileId === profile.id && (models.length < 2 || (pick.model || models[0]) === model) });
+    }
   } else if (provider.own?.backend === 'api') {
     // DSH 只有填过自有接口才有自有卡（公司版 DSH 没有可沿用的本机配置）。
-    cards.push({ id: 'own', name: provider.own.model || '自有接口', detail: '', source: 'own', sourceText: '自有接口', state: provider.apiKeyNeedsInput ? 'needs' : 'ready',
-      statusText: provider.apiKeyNeedsInput ? 'Key 无法解密，点此补填' : '用你在「自有 API」里填的接口', tip: '直连你自己的 OpenAI 兼容接口和 Key，不走公司模型和 API 网关。', checked: pick?.source === 'own' });
+    const list = ownModelList(provider);
+    for (const model of list) cards.push({ id: cardId('own', list, model), model, name: model || '自有接口', detail: '', source: 'own', sourceText: '自有接口', state: provider.apiKeyNeedsInput ? 'needs' : 'ready',
+      statusText: provider.apiKeyNeedsInput ? 'Key 无法解密，点此补填' : '用你在「自有 API」里填的接口', tip: '直连你自己的 OpenAI 兼容接口和 Key，不走公司模型和 API 网关。',
+      checked: pick?.source === 'own' && (list.length < 2 || (pick.model || list[0]) === model) });
   }
   // 正走 API 网关的工具，网关模型卡排在最前；否则排在公司模型后面。
   // 走 API 网关的用户多半没有 CodeAgent：公司模型此刻用不了就不显示那两张卡，免得一屏「公司上游信息不全」（E2E 截图发现）。
@@ -191,13 +223,48 @@ function cardsFor(kind, provider, status, pick, { codeagentInstalled = null } = 
   return companyReady ? [...cards.slice(0, companyCount), setup, ...cards.slice(companyCount)] : [setup, ...cards];
 }
 
+// 选了 CodeAgent、部门 key 已配好、而 CodeAgent 实时读不到任何可用模型（R45，v5.6.100「连上了对话不生效」）：
+// CodeAgent 不走部门 key（已拍板），请求只会发去 CodeAgent 自己的账号然后失败。返回要就地显示的一句话；不该提示时返回空串。
+// 模型清单还在读（loading / 还没读）时不提示，免得一闪而过。
+function codeagentGatewayHint({ selectedKind, gatewayReady, catalogState, usableCount } = {}) {
+  if (selectedKind !== 'codeagent' || !gatewayReady) return '';
+  if (!catalogState || catalogState === 'loading' || usableCount == null || usableCount > 0) return '';
+  return 'CodeAgent 这边没有可用模型；部门 API key 不走 CodeAgent，选 Claude Code / Codex / DSH 才会用它。';
+}
+
+// 「改用部门 key」该开哪个工具（审查 P1-3）：本机已装、能走部门 key 的第一个，顺序 Claude Code → Codex → DSH；
+// 都没装（或还不知道）才落回 Claude Code（点了会就地给安装说明）。installed(option) 返回 true / false / null。
+const GATEWAY_TARGETS = Object.freeze([
+  { option: 'claude', kind: 'claude', label: 'Claude Code' },
+  { option: 'codex', kind: 'codex', label: 'Codex' },
+  { option: 'deepseek', kind: 'deepseek-acp', label: 'DSH' },
+]);
+function gatewayLaunchTarget(installed = () => null) {
+  return GATEWAY_TARGETS.find(t => installed(t.option, t.kind) === true) || GATEWAY_TARGETS[0];
+}
+
+// 模型卡太多时折叠（R45-3 审查 P1-3）：默认 3 行 = 8 张模型卡 + 1 张「更多模型（+K）」，当前选中的卡一定在可见的 8 张里；
+// 点「更多模型」在同一区域展开全部，最后一张变「收起」。不超过 9 张时原样全显示。
+const FOLD_CELLS = 9;
+function foldCards(cards, { expanded = false, cells = FOLD_CELLS } = {}) {
+  const list = Array.isArray(cards) ? cards : [];
+  if (list.length <= cells) return list;
+  const toggle = n => ({ id: 'more', name: expanded ? '收起' : `更多模型（+${n}）`, detail: '', source: 'more', sourceText: '',
+    state: 'more', statusText: expanded ? '只显示前几个模型' : '展开这个工具的全部模型', tip: '', checked: false });
+  if (expanded) return [...list, toggle(0)];
+  let shown = list.slice(0, cells - 1);
+  const picked = list.find(c => c.checked);
+  if (picked && !shown.includes(picked)) shown = [...shown.slice(0, cells - 2), picked];
+  return [...shown, toggle(list.length - shown.length)];
+}
+
 function renderCards(cards, escapeHtml) {
   return cards.map(c => `<button type="button" class="session-model-card" role="radio" aria-checked="${c.checked ? 'true' : 'false'}" tabindex="${c.checked ? '0' : '-1'}"`
     + ` data-model-card="${escapeHtml(c.id)}" data-source="${escapeHtml(c.source)}" data-state="${escapeHtml(c.state)}" title="${escapeHtml(c.tip || '')}">`
-    + `<span class="smc-top"><span class="smc-name">${escapeHtml(c.name)}</span><span class="smc-source" data-source="${escapeHtml(c.source)}">${escapeHtml(c.sourceText)}</span></span>`
+    + `<span class="smc-top"><span class="smc-name">${escapeHtml(c.name)}</span>${c.sourceText ? `<span class="smc-source" data-source="${escapeHtml(c.source)}">${escapeHtml(c.sourceText)}</span>` : ''}</span>`
     + (c.detail ? `<span class="smc-detail">${escapeHtml(c.detail)}</span>` : '')
     + `<span class="smc-status"><i class="smc-dot" aria-hidden="true"></i>${escapeHtml(c.statusText)}</span>`
     + '</button>').join('');
 }
 
-module.exports = { COMPANY_KINDS, proxyBadge, companyModels, gatewayModels, defaultPick, saveRequest, memberSaveRequests, cardsFor, renderCards };
+module.exports = { COMPANY_KINDS, proxyBadge, companyModels, gatewayModels, ownModelList, profileModels, parseCardId, defaultPick, saveRequest, memberSaveRequests, cardsFor, renderCards, codeagentGatewayHint, gatewayLaunchTarget, foldCards };

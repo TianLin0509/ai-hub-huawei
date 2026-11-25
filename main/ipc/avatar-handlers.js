@@ -12,7 +12,29 @@ function listAvatarBackends({ dataDir, sessionManager, env = process.env }) {
     if (me) rows.push({ id: 'personal', label: '个人账号', usable: true, models: me.defaultModel ? [me.defaultModel] : [], defaultModel: me.defaultModel || '', pool: false });
   } catch { /* 个人账号没登录时不列 */ }
   for (const r of team.rows.filter(row => !row.personal)) rows.push({ id: r.id, label: r.label, usable: r.usable, reason: r.unavailableReason, models: r.models || [], defaultModel: r.defaultModel || '', activeSessions: r.activeSessions || 0, pool: true });
+  const gateway = gatewayRow(dataDir);
+  if (gateway) rows.push(gateway);
   return { rows };
+}
+
+// 部门 API key（网关）这一行（R45，11-24 反馈「分身不能配自定义 API / 平台模型，只能用 CodeAgent」）：
+// 和「设置 → 功能使用的 Agent → 分身」是同一个设置（所有分身共用），这里只是把它放到分身页能直接点到的地方。
+// 模型 = key 的对话模型表 + 手填测通的；没存 key 时照样列出、置灰并写原因，同事知道有这条路。
+function gatewayRow(dataDir, deps = {}) {
+  try {
+    const route = deps.route || require('../../core/assistant-gateway-route');
+    const gw = deps.gateway || require('../../core/api-gateway');
+    const pref = (deps.routes || require('../../core/codeagent-assistant-route')).featurePreference(dataDir, 'avatar');
+    const view = gw.read(dataDir);
+    const a = route.availability(dataDir, deps.availability || {});
+    const models = [...new Set([...gw.modelChoices(dataDir).map(m => m.id), ...(view.customModels || [])])];
+    // configured：存了「分身用部门 key」；selected：它此刻真的生效（key 能用、所选模型还在表里）。
+    // 和会话实际走的线路同一口径（core/feature-agent-choice.js resolve）：失效时页面亮实际生效的 CodeAgent 账号，残留由点回 CodeAgent 时一并清掉（审查 P1）。
+    const configured = pref?.kind === route.KIND;
+    const selected = configured && a.available && (!pref.model || models.includes(pref.model));
+    return { id: route.KIND, label: route.LABEL, usable: a.available, reason: a.available ? '' : `${a.reason}（设置 → 自有 API → API 网关）`,
+      models, defaultModel: view.model || '', pool: false, gateway: true, configured, selected, model: selected ? pref.model || '' : '' };
+  } catch { return null; }
 }
 
 function registerAvatarIpc(ipcMain, getService, { dialog = null, getWindow = () => null } = {}) {
@@ -50,4 +72,4 @@ function registerAvatarIpc(ipcMain, getService, { dialog = null, getWindow = () 
   }
 }
 
-module.exports = { registerAvatarIpc, listAvatarBackends };
+module.exports = { registerAvatarIpc, listAvatarBackends, gatewayRow };

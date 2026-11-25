@@ -799,7 +799,8 @@ function applyClaudeSessionEnv(sessionEnv, cv, launch = {}) {
     // Empty fields belong to the installed CLI. In particular, do not delete
     // its existing login environment or synthesize an endpoint/model.
     if (cv.CLAUDE_API_BASE_URL) sessionEnv.ANTHROPIC_BASE_URL = cv.CLAUDE_API_BASE_URL;
-    if (cv.CLAUDE_API_MODEL) sessionEnv.ANTHROPIC_MODEL = cv.CLAUDE_API_MODEL;
+    // 一个接口多个模型时，用启动中心选的那个（R45-3 审查 P2-1），没选才用接口的默认模型。
+    if (launch.model || cv.CLAUDE_API_MODEL) sessionEnv.ANTHROPIC_MODEL = launch.model || cv.CLAUDE_API_MODEL;
     if (cv.CLAUDE_API_KEY) {
       sessionEnv.ANTHROPIC_AUTH_TOKEN = cv.CLAUDE_API_KEY;
       for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR', 'CLAUDE_CODE_SESSION_ACCESS_TOKEN']) delete sessionEnv[key];
@@ -2518,7 +2519,8 @@ class SessionManager extends EventEmitter {
           model: resolveCodexLaunchModel(cv, opts.model), projectDir: spawnCwd, account: opts.companyProxyAccount, gateway: cv.CODEX_UPSTREAM === 'gateway' });
         codexSessionsRoot = path.join(sessionEnv.CODEX_HOME, 'sessions');
       } else if (isCodexApiBackend(cv)) {
-        sessionEnv.CODEX_HOME = ensureCodexApiProfile(cv, spawnCwd);
+        // config.toml 里的默认模型也写这次选的那个（一个接口多个模型，R45-3 审查 P2-1）。
+        sessionEnv.CODEX_HOME = ensureCodexApiProfile(cv.COMPANY_CLI && opts.model ? { ...cv, CODEX_API_MODEL: resolveCodexLaunchModel(cv, opts.model) } : cv, spawnCwd);
         // API 模式 codex 把 rollout 写到 isolated home（不写 ~/.codex/sessions）。
         // 记到 info 让 transcript-tap 注册时把这个 root 加进 CodexTap 的扫描列表。
         codexSessionsRoot = path.join(sessionEnv.CODEX_HOME, 'sessions');

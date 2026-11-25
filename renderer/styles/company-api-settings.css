@@ -65,3 +65,13 @@
 #company-api-dialog [data-api-form] [hidden]{display:none!important}
 #company-api-dialog [data-api-form]>.company-api-message{margin:0;min-height:22px}
 #company-api-dialog [data-api-form]>footer{position:static;margin:0;padding:0}
+/* 可选模型（R45）：标签旁的「全部加入」小按钮，测试连接后才出现 */
+#company-api-dialog [data-own-models]>span{display:flex;align-items:center;gap:8px}
+#company-api-dialog .company-api-inline-link{height:auto;margin:0;padding:0;border:0;background:none;color:var(--hw-accent,#3478f6);font-size:var(--hw-fs-12,12px);cursor:pointer}
+/* 网关手填模型（R45）：默认模型下拉选「手填模型名…」才展开 */
+#company-api-dialog .api-gw-custom{display:flex;gap:8px;align-items:center;margin:-4px 0 4px}
+#company-api-dialog .api-gw-custom[hidden]{display:none}
+#company-api-dialog .api-gw-custom input{flex:1;min-width:0;height:34px;margin:0}
+/* 测试连接的修复按钮（改用 API 网关接入 / 改用 chat 协议）放在底栏左侧，原因写在状态行 */
+#company-api-dialog [data-api-form] footer [data-own-fix]{margin-right:auto}
+#company-api-dialog [data-api-form] footer:has([data-own-fix]) button{white-space:nowrap;padding-inline:12px}

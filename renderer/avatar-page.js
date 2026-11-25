@@ -113,6 +113,16 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     try { const r = await call(op, payload); accept(r); return r; } catch (e) { error = e.message; return null; } finally { busy = ''; render(); }
   }
   const save = patch => run('正在保存', 'update', { avatarId: sel, patch });
+  async function setGateway(choice, done = '') {
+    busy = '正在保存'; error = ''; render();
+    try {
+      const r = await ipcRenderer.invoke('feature-agents:set', { feature: 'avatar', choice });
+      if (!r || r.ok === false) throw new Error(r?.error || '没有保存成功');
+      accept(await call('status'));
+      if (done) flash(done);
+      return true;
+    } catch (e) { error = e.message; return false; } finally { busy = ''; render(); }
+  }
   const flash = (text, action = null) => { notice = { text, action }; clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { notice = null; if (isOpen() && !typing()) render(); }, action ? 12000 : 4000); noticeTimer.unref?.(); };
 
   function build() {
@@ -230,10 +240,16 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
       <div class="avx-stack"><div class="avx-card grow col"><h3>补充要求<small>随时告诉它怎么做</small></h3><textarea class="avx-ta grow" data-save="notes" placeholder="比如：涉及排期的问题都转给我">${esc(a.notes)}</textarea></div>
       <div class="avx-card"><h3>当前会话</h3><p class="avx-m">${a.session.alive ? `运行中，已处理 ${a.session.questions} 条，到 80 条自动换新。` : '闲置时自动休眠，有新消息时启动。'}记忆都在文件里，换新不丢。</p></div></div></div>`;
   }
+  // 部门 API key（网关）行选中时（所有分身共用，R45）：账号卡亮它，模型卡列网关模型。
+  const gatewayOn = () => data?.backends?.rows?.find(r => r.gateway && r.selected) || null;
+  // 存过「分身用部门 key」（不管此刻是否生效）：点回 CodeAgent 账号时连失效的残留一起清掉。
+  const gatewayStored = () => !!data?.backends?.rows?.some(r => r.gateway && (r.selected || r.configured));
   function backend(a) {
-    const rows = data.backends.rows, chosen = rows.find(r => r.id === a.backend.account) || rows[0], models = chosen?.models || [];
-    return `<div class="avx-c3"><div class="avx-card scroll" data-sc="ac"><h3>账号<small>和启动中心同一份</small></h3>${rows.map(r => `<button class="avx-ac ${r.id === (chosen?.id) ? 'on' : ''}" data-av="account" data-id="${esc(r.id)}" ${r.usable ? '' : 'disabled'}><b><i class="avx-dot ${r.usable ? 'g' : ''}"></i>${esc(r.label)}</b><small>${r.id === 'auto' ? '挑当前最空闲的账号' : r.usable ? `${r.models.length} 个模型` : esc(r.reason || '不可用')}</small></button>`).join('')}</div>
-      <div class="avx-card scroll" data-sc="md"><h3>模型</h3><button class="avx-ac ${a.backend.model ? '' : 'on'}" data-av="model" data-id=""><b>账号默认模型</b><small>${esc(chosen?.defaultModel || '由账号决定')}</small></button>${models.map(m => `<button class="avx-ac ${a.backend.model === m ? 'on' : ''}" data-av="model" data-id="${esc(m)}"><b>${esc(m)}</b></button>`).join('')}<label class="avx-lb">思考档位</label><div class="avx-seg">${EFFORT.map(([k, n]) => `<button class="${(a.backend.effort || '') === k ? 'on' : ''}" data-av="effort" data-k="${k}">${n}</button>`).join('')}</div><p class="avx-m">换账号或模型后，下一条消息会用新的会话处理。</p></div>
+    const rows = data.backends.rows, gw = gatewayOn(), chosen = gw || rows.find(r => r.id === a.backend.account && !r.gateway) || rows[0], models = chosen?.models || [];
+    const model = gw ? gw.model : a.backend.model;
+    const sub = r => (r.id === 'auto' ? '挑当前最空闲的账号' : !r.usable ? esc(r.reason || '不可用') : r.gateway ? `${r.models.length} 个模型 · 所有分身共用；切回 CodeAgent 账号即撤销` : `${r.models.length} 个模型`);
+    return `<div class="avx-c3"><div class="avx-card scroll" data-sc="ac"><h3>账号<small>和启动中心同一份</small></h3>${rows.map(r => `<button class="avx-ac ${r.id === (chosen?.id) ? 'on' : ''}" data-av="account" data-id="${esc(r.id)}" ${r.usable ? '' : 'disabled'}><b><i class="avx-dot ${r.usable ? 'g' : ''}"></i>${esc(r.label)}</b><small>${sub(r)}</small></button>`).join('')}</div>
+      <div class="avx-card scroll" data-sc="md"><h3>模型</h3><button class="avx-ac ${model ? '' : 'on'}" data-av="model" data-id=""><b>${gw ? '网关默认模型' : '账号默认模型'}</b><small>${esc(chosen?.defaultModel || '由账号决定')}</small></button>${models.map(m => `<button class="avx-ac ${model === m ? 'on' : ''}" data-av="model" data-id="${esc(m)}"><b>${esc(m)}</b></button>`).join('')}<label class="avx-lb">思考档位</label><div class="avx-seg">${EFFORT.map(([k, n]) => `<button class="${(a.backend.effort || '') === k ? 'on' : ''}" data-av="effort" data-k="${k}">${n}</button>`).join('')}</div><p class="avx-m">${gw ? '部门 API key 由 Claude Code 经本机转发作答，所有分身共用这一项；点左边任一 CodeAgent 账号就换回。' : ''}换账号或模型后，下一条消息会用新的会话处理。</p></div>
       <div class="avx-stack"><div class="avx-card"><h3>发言前缀</h3><div class="avx-pfx"><span>🤖</span><input class="avx-in" maxlength="20" data-save="prefix" value="${esc(a.prefix)}"></div><p class="avx-m">🤖 不能去掉：同事能看出是 AI，其他分身也靠它避免对聊。群答疑和空白分身发送时带前缀。</p><label class="avx-lb">群里看到的样子</label><div class="avx-bub" id="avx-preview">🤖【${esc(a.prefix)}】张三 关于『导出纪要』：在纪要页右上角选导出，格式选 Word。</div></div>
       <div class="avx-card grow"><h3>名字与身份</h3><label class="avx-lb">分身名字</label><input class="avx-in" maxlength="30" data-save="name" value="${esc(a.name)}"><label class="avx-line mt"><input type="checkbox" data-chg="hide" ${a.hideModel ? 'checked' : ''}> 不透露底层用的是哪个模型</label></div></div></div>`;
   }
@@ -250,8 +266,8 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     const scopeHtml = need ? `<h3>它管哪些群或人？</h3>${targets?.stale || targetsFailed ? targetsBar() : ''}<label class="avx-lb">群</label><div class="avx-chips">${groups.map(x => pill(x, wiz.targets, 'wiz-target')).join('') || `<span class="avx-m">${esc(noGroupsText())}</span>${!targetsLoading && (targetsFailed || targets?.reason) ? ' <button class="avx-btn s" data-av="targets-retry">重试</button>' : ''}`}</div>${wiz.tpl === 'blank' ? `<label class="avx-lb">人</label><div class="avx-chips">${people.map(x => pill(x, wiz.targets, 'wiz-target')).join('')}</div>` : ''}`
       : `<h3>它会管这些</h3><div class="avx-q">${wiz.tpl === 'watch' ? '全部会话。新建的群和新联系人自动包含。' : '所有私聊，以及群里 @我 的消息。'}</div><label class="avx-lb">不想让它看的群（可选）</label><div class="avx-chips">${groups.map(x => pill(x, wiz.skip, 'wiz-skip')).join('')}</div>`;
     return `<div class="avx-ov"><div class="avx-md">${title}<div class="avx-mb"><div class="avx-w2"><div>${scopeHtml}<p class="avx-m mt">${wiz.tpl === 'watch' ? '只提醒，不会替你发任何消息。' : '写好草稿后由你点发送，不会自动发言。'}</p></div>
-      <div class="avx-card tint"><h3>已经替你配好</h3><div class="avx-li"><span>名字</span><small>${esc(wiz.name)}</small></div><div class="avx-li"><span>人设</span><small>${wiz.persona ? '你写的' : '从近期发言生成'}</small></div><div class="avx-li"><span>知识</span><small>${wiz.tpl === 'qa' ? '所选群的历史问答' : '最近的对话'}</small></div><div class="avx-li"><span>后端</span><small>${esc(rows.find(r => r.id === wiz.account)?.label || '自动选择')}</small></div><button class="avx-btn s mt" data-av="wiz-adv">${wiz.adv ? '收起高级设置' : '高级设置'}</button>
-      ${wiz.adv ? `<label class="avx-lb">名字</label><input class="avx-in" maxlength="30" data-wiz="name" value="${esc(wiz.name)}"><label class="avx-lb">前缀（🤖 保留，留空用默认）</label><input class="avx-in" maxlength="20" data-wiz="prefix" value="${esc(wiz.prefix)}"><label class="avx-lb">人设（留空自动生成）</label><textarea class="avx-ta" rows="2" data-wiz="persona">${esc(wiz.persona)}</textarea><label class="avx-lb">账号</label><select class="avx-in" data-chg="wiz-account">${rows.filter(r => r.usable).map(r => `<option value="${esc(r.id)}" ${wiz.account === r.id ? 'selected' : ''}>${esc(r.label)}</option>`).join('')}</select>` : ''}</div></div></div>
+      <div class="avx-card tint"><h3>已经替你配好</h3><div class="avx-li"><span>名字</span><small>${esc(wiz.name)}</small></div><div class="avx-li"><span>人设</span><small>${wiz.persona ? '你写的' : '从近期发言生成'}</small></div><div class="avx-li"><span>知识</span><small>${wiz.tpl === 'qa' ? '所选群的历史问答' : '最近的对话'}</small></div><div class="avx-li"><span>后端</span><small>${esc(gatewayOn()?.label || rows.find(r => r.id === wiz.account)?.label || '自动选择')}</small></div><button class="avx-btn s mt" data-av="wiz-adv">${wiz.adv ? '收起高级设置' : '高级设置'}</button>
+      ${wiz.adv ? `<label class="avx-lb">名字</label><input class="avx-in" maxlength="30" data-wiz="name" value="${esc(wiz.name)}"><label class="avx-lb">前缀（🤖 保留，留空用默认）</label><input class="avx-in" maxlength="20" data-wiz="prefix" value="${esc(wiz.prefix)}"><label class="avx-lb">人设（留空自动生成）</label><textarea class="avx-ta" rows="2" data-wiz="persona">${esc(wiz.persona)}</textarea><label class="avx-lb">账号</label><select class="avx-in" data-chg="wiz-account">${rows.filter(r => r.usable && !r.gateway).map(r => `<option value="${esc(r.id)}" ${wiz.account === r.id ? 'selected' : ''}>${esc(r.label)}</option>`).join('')}</select>` : ''}</div></div></div>
       <div class="avx-mf"><p>${ready ? '创建后马上开始工作，随时可以改或暂停。' : '至少选一个群或人。'}</p><button class="avx-btn" data-av="wiz-back">上一步</button><button class="avx-btn p" data-av="wiz-go" ${ready ? '' : 'disabled'}>创建分身</button></div></div></div>`;
   }
 
@@ -322,7 +338,10 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (op === 'persona') { if (await run('正在生成', 'persona', { avatarId: sel })) flash('已根据你的发言重新生成'); render(); return; }
     if (op === 'source') { const r = await call('pick-source', { type: b.dataset.t }); if (r.source) { await save({ sources: [...av.sources, r.source] }); flash('已添加，下一条消息开始使用'); render(); } return; }
     if (op === 'source-del') { await save({ sources: av.sources.filter((_, n) => n !== Number(b.dataset.i)) }); return; }
-    if (op === 'account') { await save({ backend: { ...av.backend, account: b.dataset.id, model: '' } }); return; }
+    // 部门 API key（网关）：写「功能使用的 Agent → 分身」那一项（所有分身共用）；点回 CodeAgent 账号时撤掉它。
+    if (op === 'account' && b.dataset.id === 'api-gateway') { await setGateway({ kind: 'api-gateway', model: '' }, '已改用部门 API key，下一条消息起生效'); return; }
+    if (op === 'account') { if (gatewayStored() && !(await setGateway(null))) return; await save({ backend: { ...av.backend, account: b.dataset.id, model: '' } }); return; }
+    if (op === 'model' && gatewayOn()) { await setGateway({ kind: 'api-gateway', model: b.dataset.id }, '已换模型，下一条消息起生效'); return; }
     if (op === 'model') { await save({ backend: { ...av.backend, model: b.dataset.id } }); return; }
     if (op === 'effort') { await save({ backend: { ...av.backend, effort: b.dataset.k } }); }
   }
@@ -361,7 +380,9 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   function close() { stopTargets(); if (!page || page.hidden) return; page.hidden = true; document.body.classList.remove('avatar-page-open'); }
   const onChanged = () => { if (isOpen() && !busy) void load({ soft: true }); };
   ipcRenderer.on?.('avatar:changed', onChanged);
-  return { open, close, isOpen, destroy() { close(); window.removeEventListener('resize', place); ipcRenderer.removeListener?.('avatar:changed', onChanged); page?.remove(); page = null; } };
+  // 同页「⚙ Agent」或设置里改了功能 Agent（含分身用部门 key、手填模型）：后端卡跟着刷新（审查 P2）。
+  ipcRenderer.on?.('feature-agents:changed', onChanged);
+  return { open, close, isOpen, destroy() { close(); window.removeEventListener('resize', place); ipcRenderer.removeListener?.('avatar:changed', onChanged); ipcRenderer.removeListener?.('feature-agents:changed', onChanged); page?.remove(); page = null; } };
 }
 
 module.exports = { createAvatarPage, paginate, waited, scopeText, modeText, scopeSummary };

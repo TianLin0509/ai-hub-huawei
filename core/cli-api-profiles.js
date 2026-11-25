@@ -15,8 +15,12 @@ function profiles(raw, kind) {
   return Array.isArray(list) ? list : [];
 }
 function publicProfiles(raw, kind) {
-  return profiles(raw, kind).map(({ id, label, baseURL, model, wireApi, apiKey, apiKeyNeedsInput }) =>
-    ({ id, label, baseURL, model, wireApi, apiKeySet: !!apiKey, ...(apiKeyNeedsInput ? { apiKeyNeedsInput: true } : {}) }));
+  return profiles(raw, kind).map(({ id, label, baseURL, model, modelList, wireApi, apiKey, apiKeyNeedsInput }) =>
+    ({ id, label, baseURL, model, ...(listOf(modelList, model).length > 1 ? { models: listOf(modelList, model) } : {}), wireApi, apiKeySet: !!apiKey, ...(apiKeyNeedsInput ? { apiKeyNeedsInput: true } : {}) }));
+}
+// 一个 API 账号可配多个模型（R45）：model 是默认，modelList 是启动中心可选的全部；老账号没有表就只有默认模型。
+function listOf(list, model) {
+  try { return require('./company-api-config').modelList(list || [], model || ''); } catch { return model ? [model] : []; }
 }
 function withProfile(raw, request) {
   const kind = baseKind(request.kind);
@@ -28,6 +32,8 @@ function withProfile(raw, request) {
     const legacy = provider.backend === 'proxy' ? provider.own_api : provider.backend === 'api' ? provider : null;
     if (legacy && (legacy.base_url || legacy.api_key || legacy.model)) list.push({
       id: crypto.randomUUID(), label: '原有接口', baseURL: legacy.base_url || '', apiKey: legacy.api_key || '', model: legacy.model || '',
+      // 原有接口配过多个模型：模型表一起迁过来（R45-3 审查 P2-2）。
+      ...(Array.isArray(legacy.model_list) && legacy.model_list.length > 1 ? { modelList: legacy.model_list } : {}),
       ...(legacy.api_keyNeedsInput ? { apiKeyNeedsInput: true, encryptedApiKey: legacy.encrypted_api_key } : {}),
       ...(kind === 'codex' ? { wireApi: legacy.wire_api || 'responses' } : {}),
     });
@@ -43,16 +49,19 @@ function withProfile(raw, request) {
     if (!label || label.length > 80) throw new Error('请填写 1–80 字的账号名称');
     const apiKey = api.optionalText(request.apiKey || previous.apiKey, 'API Key');
     if (!apiKey) throw new Error('请填写 API Key');
-    const model = api.optionalText(request.model, '模型名称');
+    const names = api.modelList(request.models !== undefined ? request.models : (previous.modelList || []), api.optionalText(request.model, '模型名称'));
+    const model = api.optionalText(request.model, '模型名称') || names[0] || '';
     if (!require('./local-cli-models').isLocalCliModelId(model)) throw new Error('请填写有效的模型名称');
-    const next = { id, label, baseURL: api.baseUrl(request.baseURL), apiKey, model,
+    const next = { id, label, baseURL: api.baseUrl(request.baseURL), apiKey, model, ...(names.length > 1 ? { modelList: names } : {}),
       ...(kind === 'codex' ? { wireApi: api.wireApi(request.wireApi || previous.wireApi || 'responses') } : {}) };
     if (index < 0) list.push(next); else list[index] = next;
   } else if (request.profileAction === 'delete') {
     // 删除（2026-11-20，群诉求：自有 API 只能加不能删）：已开的会话用的是启动时落盘的那一版，不受影响。
     // 删的是当前选中的：改选剩下的第一个；一个不剩就回到「沿用本机配置」。
     list.splice(index, 1);
-    const { own_api, encrypted_api_key, api_keyNeedsInput, ...rest } = provider;
+    // 顶层模型表跟着当前选中的账号走：删掉选中的账号时清掉，改选的账号有模型表再写回（R45-3 审查 P2-2）。
+    const { own_api, encrypted_api_key, api_keyNeedsInput, model_list: _oldList, ...rest } = provider;
+    const listField = item => (Array.isArray(item?.modelList) && item.modelList.length > 1 ? { model_list: item.modelList } : {});
     const wasSelected = provider.selected_api_profile === id;
     const next = wasSelected ? list[0] : list.find(item => item.id === provider.selected_api_profile);
     // 没删到正在用的，或这个工具此刻走公司模型 / API 网关：只改列表，不动当前线路。
@@ -70,14 +79,22 @@ function withProfile(raw, request) {
     if (!next) return { ...raw, providers: { ...raw.providers, [kind]: { ...rest, api_profiles: list, selected_api_profile: '',
       backend: 'api', base_url: '', api_key: '', model: '', ...(kind === 'codex' ? { wire_api: 'responses' } : {}) } } };
     return { ...raw, providers: { ...raw.providers, [kind]: { ...rest, api_profiles: list, selected_api_profile: next.id, backend: 'api',
-      base_url: next.baseURL, ...providerKey(next), model: next.model, ...(kind === 'codex' ? { wire_api: next.wireApi } : {}) } } };
+      base_url: next.baseURL, ...providerKey(next), model: next.model, ...listField(next), ...(kind === 'codex' ? { wire_api: next.wireApi } : {}) } } };
   } else if (request.profileAction !== 'select') throw new Error('API 账号操作无效');
-  const selected = list.find(item => item.id === id);
+  let selected = list.find(item => item.id === id);
   secrets.assertReadable(selected);
+  // 启动中心选了这个账号的另一个模型：记成它的默认模型，下次打开默认选它（R45-3，和网关卡一致）。只认它模型表里的。
+  const wantedModel = String(request.model || '').trim();
+  if (wantedModel && wantedModel !== selected.model && Array.isArray(selected.modelList) && selected.modelList.includes(wantedModel)) {
+    selected = { ...selected, model: wantedModel };
+    list[list.findIndex(item => item.id === id)] = selected;
+  }
   const { own_api, encrypted_api_key, api_keyNeedsInput, ...rest } = provider;
-  return { ...raw, providers: { ...raw.providers, [kind]: { ...rest, api_profiles: list,
+  const { model_list: _oldList, ...restKept } = rest;
+  return { ...raw, providers: { ...raw.providers, [kind]: { ...restKept, api_profiles: list,
     selected_api_profile: id, backend: 'api', base_url: selected.baseURL, api_key: selected.apiKey,
-    model: selected.model, ...(kind === 'codex' ? { wire_api: selected.wireApi } : {}) } } };
+    model: selected.model, ...(Array.isArray(selected.modelList) && selected.modelList.length > 1 ? { model_list: selected.modelList } : {}),
+    ...(kind === 'codex' ? { wire_api: selected.wireApi } : {}) } } };
 }
 
 function metadata(session) {

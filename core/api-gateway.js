@@ -62,7 +62,8 @@ function read(dataDir) {
     baseURL: raw.baseURL ? normalizeBaseUrlSafe(raw.baseURL) : DEFAULT_BASE_URL,
     keySet: typeof raw.encryptedKey === 'string' && raw.encryptedKey.length > 0,
     models,
-    model: models.includes(raw.model) ? raw.model : defaultModelOf(models),
+    // 默认模型可以是手填测通的（R45）；都不在时退回推荐模型。
+    model: models.includes(raw.model) || (cleanModels(raw.customModels).includes(raw.model) && models.length > 0) ? raw.model : defaultModelOf(models),
     checkedAt: Number(raw.checkedAt) || 0,
     unlimited: raw.unlimited === true,
     // 网关目录推出来的分组（free / max / default / vip），保存 key 与一键体检时更新。
@@ -213,7 +214,8 @@ async function save(dataDir, { baseURL, apiKey, model } = {}, { safeStorage, fet
 function modelFields(keyModels, catalog, raw, wanted) {
   const chat = chatOnly(keyModels, catalog);
   const models = chat.length ? chat : keyModels;
-  const chosen = models.includes(wanted) ? wanted : (models.includes(raw.model) ? raw.model : defaultModelOf(models));
+  const custom = cleanModels(raw.customModels);
+  const chosen = models.includes(wanted) || custom.includes(wanted) ? wanted : (models.includes(raw.model) || custom.includes(raw.model) ? raw.model : defaultModelOf(models));
   const inferred = catalog ? catalogStore().inferGroup(catalog, keyModels) : { group: raw.group || '', exact: raw.groupExact === true };
   return { models, keyModels, model: chosen, group: inferred.group || '', groupExact: !!inferred.exact };
 }
@@ -276,7 +278,8 @@ function setThinking(dataDir, model, enabled) {
 function setModel(dataDir, model) {
   const raw = readRaw(dataDir);
   const models = cleanModels(raw.models);
-  if (models.length && !models.includes(model)) throw new Error('网关上没有这个模型');
+  // 手填测通的模型也能设成默认（R45）。
+  if (models.length && !models.includes(model) && !cleanModels(raw.customModels).includes(model)) throw new Error('网关上没有这个模型');
   writeRaw(dataDir, { ...raw, model: String(model) });
   return read(dataDir);
 }

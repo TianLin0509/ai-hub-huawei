@@ -126,9 +126,10 @@ function launchModel(model, { gateway = false, dataDir = '' } = {}) {
   if (gateway) return gatewayConfig().resolveModel(dataDir, model);
   try { return normalizeModel(model, dataDir || undefined); } catch { return companyDefaultModel(dataDir || undefined); }
 }
+// 网关模型表含手填测通的模型（R45-3 审查 P1-1）：DSH / Codex 走网关选手填模型时，模型定义里要有它，会话内也能切到它。
 function gatewayModelIds(dataDir) {
-  const view = gatewayConfig().read(dataDir);
-  return view.models.length ? view.models : [view.model];
+  const all = gatewayConfig().allModels(dataDir);
+  return all.length ? all : [gatewayConfig().read(dataDir).model];
 }
 // 网关模型的上下文上限：网关目录里的真实值（如 256K），取不到用保守默认 128000（core/api-gateway-catalog.js）。
 function gatewayModels(dataDir) { return gatewayModelIds(dataDir).map(id => ({ id, input: gatewayConfig().contextOf(dataDir, id) })); }

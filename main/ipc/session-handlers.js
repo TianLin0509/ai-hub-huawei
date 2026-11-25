@@ -631,8 +631,13 @@ function registerSessionIpc(ipcMain, deps) {
     const kind = String(session?.kind || '').replace(/-resume$/, '');
     if ((session?.companyRoute !== 'local' && !session?.cliApiProfileId) || !['codex', 'claude'].includes(kind)) throw new Error('这个会话没有选择沿用本机 CLI 配置');
     if (session.cliApiProfileId) {
-      const profile = require('../../core/cli-api-profiles').readConnection(kind, session, require('../../core/data-dir').getHubDataDir());
-      return { ok: true, models: [{ id: profile.model, label: profile.model }], defaultModel: profile.model };
+      const profiles = require('../../core/cli-api-profiles');
+      const profile = profiles.readConnection(kind, session, require('../../core/data-dir').getHubDataDir());
+      // 这个 API 账号配了多个模型：会话内模型菜单列全部（同一个接口地址才列，R45-3 审查 P2-1）。
+      let current = null;
+      try { current = profiles.profiles(require('../../core/hub-config').readConfigJsonForUpdate(), kind).find(p => p.id === profile.id); } catch { current = null; }
+      const ids = [...new Set([profile.model, ...(current && current.baseURL === profile.baseURL && Array.isArray(current.modelList) ? current.modelList : [])].filter(Boolean))];
+      return { ok: true, models: ids.map(id => ({ id, label: id })), defaultModel: profile.model };
     }
     const configDir = kind === 'codex' ? session.codexRuntimeHome || (session.codexSessionsRoot ? require('path').dirname(session.codexSessionsRoot) : undefined)
       : session.claudeConfigDir || session.claudeRuntimeHome;

@@ -97,3 +97,7 @@
 :root:is([data-theme='dark'],[data-theme='frost']) .gw-inline-form input { background: var(--hw-surface-3); border-color: var(--hw-line-strong); color: var(--hw-text-1); }
 :root:is([data-theme='dark'],[data-theme='frost']) .gw-inline-form input[readonly] { background: var(--hw-surface-2); color: var(--hw-text-2); }
 :root:is([data-theme='dark'],[data-theme='frost']) .gw-inline button:not(.primary):not(.gw-inline-link) { background: var(--hw-surface-3); border-color: var(--hw-line-strong); color: var(--hw-text-1); }
+/* 「更多模型（+K）/ 收起」（R45-3）：和模型卡同大小，虚线框，不像一个可选模型 */
+.session-model-card[data-source="more"] { border-style: dashed; justify-content: center; background: transparent; }
+.session-model-card[data-source="more"] .smc-name { font-weight: 500; color: var(--hw-brand, #0A59F7); }
+.session-model-card[data-source="more"] .smc-dot { display: none; }

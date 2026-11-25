@@ -83,6 +83,9 @@ const lf = t => { t = t.split(String.fromCharCode(13) + NL).join(NL); return t.e
 async function componentCatalog(root, { mod, file, label }) {
   const m = require(path.join(root, mod));
   const { compareVersions } = require(path.join(root, 'core/app-update/manifest'));
+  // 2026-11-25 HUB-H 铁律：只走内源的模块（如开场动画）客户端不再写外网目录地址，SOURCES 为空；
+  // 它的快照随资源包发布时一并提交，这里跳过、不报「读不到」。
+  if (!m.SOURCES || !m.SOURCES.length) return null;
   let best = null, bestText = '';
   const errors = [];
   for (const s of m.SOURCES) {
@@ -118,6 +121,7 @@ async function fetchBundledManifests(root = ROOT) {
   for (const get of [cliCatalog, doctorManifest, materialsManifest, appearanceCatalog, petCatalog, bootSplashCatalog, ocrManifest]) {
     try {
       const item = await get(root);
+      if (!item) continue;
       let old = '';
       try { old = fs.readFileSync(path.join(root, item.file), 'utf8').replace(/\r\n/g, '\n'); } catch (_) {}
       if (old !== item.content) changed.push(item);

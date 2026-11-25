@@ -62,7 +62,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     ? require('./company-model-proxy').dshRoute({ dataDir, sessionId: opts.dshCardKeyTag || opts.id, model: opts.model || config.dshApiModel, account: opts.companyProxyAccount,
       gateway: config.dshUpstream === 'gateway', midStreamRetry: !!(opts.dshCliRuntime && !opts.dshCardAcp) })
     : kind === 'deepseek-acp' && config.companyCli && config.dshBackend === 'api'
-      ? require('./company-model-proxy').dshOwnRoute({ baseURL: config.dshApiBaseUrl, apiKey: config.dshApiKey, model: config.dshApiModel }) : null;
+      ? require('./company-model-proxy').dshOwnRoute({ baseURL: config.dshApiBaseUrl, apiKey: config.dshApiKey, model: opts.model || config.dshApiModel }) : null;
   // 套餐额度用完且配了 DeepSeek Key 时，DeepSeek 旧 Harness 整条会话改走 DeepSeek 官方 API；千问 / GLM 等重置（core/token-plan-fallback.js）。
   const fallback = require('./token-plan-fallback');
   const requestedRoute = kind === 'deepseek-acp' ? opts.deepseekRoute : undefined;
@@ -103,8 +103,9 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
       : require('./company-model-proxy').MODELS.map(m => ({ ...m, source: 'company-proxy' })))
     : deepseekRoute ? fallback.FALLBACK_MODELS.map(id => ({ id, label: id, source: 'deepseek-api' }))
     : catalog.acpModelOptions(kind, model);
-  // 自有接口的模型名按网关同口径放宽（部门平台的模型名常带 / 或 :）。
-  if(!(companyRoute?.own ? /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/ : /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/).test(model))throw new Error(companyRoute?.own ? `DSH 自有接口的模型名「${model}」格式不对：只能含字母、数字和 . _ : / -，请在设置里点「测试连接」从列表里选` : '请填写套餐模型 ID，不可切到其他供应商命名空间');
+  // 公司模型 / 网关 / 自有接口的模型名按自有接口同口径放宽（部门平台的模型名常带 / : 或括号，R45-3 审查 P1-2）；只有套餐线路用严格口径。
+  const companyName = /^[A-Za-z0-9][A-Za-z0-9._:/()+@-]{0,127}$/;
+  if(!(companyRoute ? companyName : /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/).test(model))throw new Error(companyRoute ? `DSH 的模型名「${model}」格式不对：只能含字母、数字和 . _ : / - ( ) + @，请在设置里点「测试连接」从列表里选` : '请填写套餐模型 ID，不可切到其他供应商命名空间');
   let mcpServers=[];
   if(opts.assistantMcpServers) {
     if(opts.purpose!=='hub-assistant'||!Array.isArray(opts.assistantMcpServers)

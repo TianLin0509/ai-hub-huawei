@@ -534,31 +534,9 @@ function registerConfigIpc(ipcMain, deps) {
     // 自有接口「测试连接」（2026-11-20，群诉求：配了自有 API 还是不行、不知道哪里错）：请求一次 /models，
     // 不发对话、不耗额度；Key 留空时用已保存的那份。地址少了 /v1 时自动补上再试，并把补好的地址告诉界面。
     ipcMain.handle('company-api:probe', async (_event, request = {}) => {
-      try {
-        const kind = companyApi.baseKind(request.kind);
-        require('../../core/company-ai-policy').assertKind(kind);
-        const raw = readConfigJsonForUpdate();
-        const profile = request.profileId ? require('../../core/cli-api-profiles').profiles(raw, kind).find(p => p.id === request.profileId) : null;
-        if (request.profileId && !profile) return { ok: false, error: '这个 API 账号已不存在，请重新打开设置再试。' };
-        const stored = profile || companyApi.connection(raw, kind);
-        if (!String(request.apiKey || '').trim()) require('../../core/own-api-secrets').assertReadable(stored);
-        const base = companyApi.baseUrl(request.baseURL);
-        // 已保存的 Key 只发往它保存时的地址（Codex 审查 P1）：地址改了就要重新粘贴 Key，免得把 Key 发到别处。
-        const same = (a, b) => String(a || '').replace(/\/+$/, '').toLowerCase() === String(b || '').replace(/\/+$/, '').toLowerCase();
-        const savedFits = stored.apiKey && stored.baseURL && (same(stored.baseURL, base) || same(stored.baseURL, base + '/v1'));
-        if (!String(request.apiKey || '').trim() && stored.apiKey && !savedFits) return { ok: false, code: 'key_needed', error: '接口地址和保存时不一样了：已保存的 Key 只会发往原来的地址。请在「API Key」里重新粘贴 Key 再测试。' };
-        const apiKey = String(request.apiKey || '').trim() || (savedFits ? stored.apiKey : '');
-        // 自有接口不是网关：网关口径的人话里「网关」换成「接口」。
-        const own = text => String(text || '').replace(/API 网关|网关/g, '接口');
-        let result = await require('../../core/api-gateway').probe({ baseURL: base, apiKey: apiKey || 'none' });
-        let fixed = '';
-        if (!result.ok && ['http_404', 'no_models'].includes(result.code) && !/\/v\d+$/.test(base)) {
-          const retry = await require('../../core/api-gateway').probe({ baseURL: base + '/v1', apiKey: apiKey || 'none' });
-          if (retry.ok) { result = retry; fixed = base + '/v1'; }
-        }
-        if (!result.ok) return { ok: false, code: result.code, error: own(result.message) };
-        return { ok: true, models: result.models, ...(fixed ? { baseURL: fixed } : {}), keyUsed: apiKey ? (request.apiKey ? 'typed' : 'saved') : 'none' };
-      } catch (error) { return { ok: false, error: error.message }; }
+      // 整条路径（补 /v1 → 选模型 → 按会话真实协议对话测试）在 main/ipc/company-api-probe.js，单测直接调它。
+      try { return await require('./company-api-probe').probeOwnApi(request, { raw: readConfigJsonForUpdate() }); }
+      catch (error) { return { ok: false, error: error.message }; }
     });
 
     // API 网关（部门 API key 用户，2026-11-19）：欢迎页「用 API key 开始」和设置里的「API 网关」共用这几个入口。
@@ -611,6 +589,8 @@ function registerConfigIpc(ipcMain, deps) {
         const switched = kinds.length ? routeKindsToGateway(kinds, result.model) : [];
         if (companyProxyService) await companyProxyService.applyGatewayChange().catch(() => {});
         if (apiKey) void startHealthcheck();
+        // 网关模型表变了，启动中心等处要跟着刷新（审查 P2：useFor 为空时 routeKindsToGateway 不会广播）。
+        if (!switched.length) sendToRenderer('company-api:changed', {});
         return { ok: true, switched, healthRunning: !!healthRun, ...gatewayPayload() };
       } catch (error) { return { ok: false, error: error.message, ...gatewayPayload() }; }
     };
@@ -624,7 +604,19 @@ function registerConfigIpc(ipcMain, deps) {
       try {
         gateway.setModel(gatewayDir(), String(request.model || ''));
         if (companyProxyService) await companyProxyService.applyGatewayChange().catch(() => {});
+        sendToRenderer('company-api:changed', {});
         return { ok: true, ...gatewayPayload() };
+      } catch (error) { return { ok: false, error: error.message, ...gatewayPayload() }; }
+    });
+    // 手填网关模型（R45，11-23 反馈「只会检测搜索到的，不能完全自定义」）：在网关设置里就能加，先试跑一句测通才记下；
+    // 记下后启动中心的网关卡、默认模型下拉、各功能的网关模型表都能选到。不通时返回网关口径的一句人话。
+    ipcMain.handle('api-gateway:add-model', async (_event, request = {}) => {
+      try {
+        const r = await gateway.addCustomModel(gatewayDir(), request.model, { safeStorage: safe() });
+        if (!r.ok) return { ok: false, code: r.code, error: r.message, actions: r.actions || [], ...gatewayPayload() };
+        if (companyProxyService) await companyProxyService.applyGatewayChange().catch(() => {});
+        sendToRenderer('company-api:changed', {});
+        return { ok: true, model: r.model, already: !!r.already, firstMs: r.firstMs || null, ...gatewayPayload() };
       } catch (error) { return { ok: false, error: error.message, ...gatewayPayload() }; }
     });
     ipcMain.handle('api-gateway:test', async () => {
@@ -659,6 +651,7 @@ function registerConfigIpc(ipcMain, deps) {
     ipcMain.handle('api-gateway:clear', async () => {
       gateway.clear(gatewayDir());
       if (companyProxyService) await companyProxyService.applyGatewayChange().catch(() => {});
+      sendToRenderer('company-api:changed', {});
       return { ok: true, ...gatewayPayload() };
     });
   }

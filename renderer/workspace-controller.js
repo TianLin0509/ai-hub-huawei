@@ -19,6 +19,8 @@
     if (pick.source === 'company') return pick.model;
     if (pick.source === 'api') return pick.model;
     if (pick.source === 'gateway') return pick.model;
+    // 自有接口配了多个模型时，点的哪张卡就用哪个模型（R45）。
+    if (pick.source === 'own' && pick.model) return pick.model;
     if (companyProvider[kind]?.apiProfiles?.length) return '';
     const own = companyProvider[kind]?.own;
     return own && own.backend === 'api' ? own.model || '' : '';
@@ -135,6 +137,7 @@
   // 两处必须同一口径——摘要写空就是不承诺，那也确实是按配置里写的起。
   let codeagentDefaultModel = '';
   let codeagentCatalog = null;
+  let codeagentLiveUsable = null;
   // 这个号用不了的模型（main codeagent:models 标 unavailable 的，core/codeagent-models.js unavailableModels）：不进可选清单，
   // 下拉最后单列「暂不可用」一组，选了只说明原因（2026-11-19 反馈：模型列表只保留能用的）。
   let codeagentUnavailableOptions = [];
@@ -1294,7 +1297,8 @@
     const kind = selectedKind;
     const cards = modelCards.cardsFor(kind, companyProvider[kind], companyProxyStatus, companyPick[kind],
       { codeagentInstalled: require('./codeagent-preference').detectedInstalled() });
-    const html = modelCards.renderCards(cards, escapeHtml);
+    // 卡太多时折成 3 行 +「更多模型」，1440×900 一屏放下（R45-3 审查 P1-3）。
+    const html = modelCards.renderCards(modelCards.foldCards(cards, { expanded: !!modelCardsExpanded[kind] }), escapeHtml);
     if (list.dataset.built !== html) { list.innerHTML = html; list.dataset.built = html; }
     list.dataset.kind = kind;
     list.querySelectorAll('.session-model-card').forEach(card => { card.disabled = submitting; });
@@ -1308,6 +1312,7 @@
 
   // 启动中心就地配 API 网关（renderer/api-gateway-inline.js）：点「用部门 API key」卡展开，保存后选中网关默认模型。
   let gatewayInline = null, gatewayAutoOpened = false;
+  const modelCardsExpanded = Object.create(null);
   function gatewaySetup() {
     if (!gatewayInline) gatewayInline = require('./api-gateway-inline').createGatewayInline({ document, ipcRenderer, escapeHtml,
       onSaved: gateway => {
@@ -1331,14 +1336,16 @@
     if (!card || !companyApiKind(kind) || submitting) return;
     const id = card.dataset.modelCard;
     if (id === 'gw-setup') { const g = gatewaySetup(); if (g.isOpen) g.close(); else void g.open(); return; }
-    const apiProfile = companyProvider[kind]?.apiProfiles?.find(item => id === 'api:' + item.id);
+    if (id === 'more') { modelCardsExpanded[kind] = !modelCardsExpanded[kind]; paint(); return; }
+    const parsed = modelCards.parseCardId(id);
+    const apiProfile = companyProvider[kind]?.apiProfiles?.find(item => parsed.base === 'api:' + item.id);
     // 解密失败时直接定位到这个账号补 Key，保留启动中心的目录及其他选择。
-    if (apiProfile?.apiKeyNeedsInput || (id === 'own' && companyProvider[kind]?.apiKeyNeedsInput && !companyProvider[kind]?.apiProfiles?.length)) {
+    if (apiProfile?.apiKeyNeedsInput || (parsed.base === 'own' && companyProvider[kind]?.apiKeyNeedsInput && !companyProvider[kind]?.apiProfiles?.length)) {
       void window.__companyApiOpen?.(kind, apiProfile?.id || '');
       return;
     }
-    companyPick[kind] = apiProfile ? { source: 'api', profileId: apiProfile.id, model: apiProfile.model }
-      : id === 'own' ? { source: 'own', model: '' } : id.startsWith('gw:') ? { source: 'gateway', model: id.slice(3) } : { source: 'company', model: id };
+    companyPick[kind] = apiProfile ? { source: 'api', profileId: apiProfile.id, model: parsed.model || apiProfile.model }
+      : parsed.base === 'own' ? { source: 'own', model: parsed.model } : id.startsWith('gw:') ? { source: 'gateway', model: id.slice(3) } : { source: 'company', model: id };
     selectedModel = companyPickModel(kind);
     modelTouchedByUser = true;
     tuningTouchedByUser = true;
@@ -1733,10 +1740,35 @@
       const notices = [];
       if (unavailable.length) notices.push(`${unavailable.join('、')}当前不可用，已显示可用选项，请确认后创建。`);
       if (selectedKind === 'codeagent' && codeagentUnavailableNote) notices.push(codeagentUnavailableNote);
+      // 部门 key 已配好、CodeAgent 却没有可用模型（R45：v5.6.100「连上了对话不生效」那例）：CodeAgent 不走部门 key，就地说清并给一键改用。
+      const gatewayHint = modelCards.codeagentGatewayHint({ selectedKind, gatewayReady: modelCards.gatewayModels(companyProvider.claude).length > 0,
+        catalogState: codeagentCatalog?.state || null, usableCount: codeagentLiveUsable });
       if (showFast && selectedFastMode) notices.push('快速模式可能影响回复记录；卡片收不到回复时可关闭。');
       if (selectedKind === 'codex' && codexTuningCatalog?.refreshError) notices.push('在线模型目录刷新失败，当前使用缓存；下次打开会重试。');
       warning.textContent = notices.join(' ');
-      warning.hidden = !notices.length;
+      if (gatewayHint) {
+        const line = document.createElement('span');
+        line.dataset.gatewayHint = '1';
+        line.textContent = (notices.length ? ' ' : '') + gatewayHint + ' ';
+        // 挑本机已装、能走部门 key 的第一个工具（Claude Code → Codex → DSH），都没装才落回 Claude Code。
+        const target = modelCards.gatewayLaunchTarget(option => {
+          const flag = menuEl?.querySelector(`.new-session-option[data-kind="${option}"]`)?.dataset.installed;
+          return flag === '1' ? true : flag === '0' ? false : null;
+        });
+        const go = Object.assign(document.createElement('button'), { type: 'button', className: 'tuning-default-btn', textContent: `改用 ${target.label}（部门 key）` });
+        go.dataset.gatewayHintAction = 'use-gateway';
+        go.dataset.gatewayTarget = target.kind;
+        go.addEventListener('click', () => {
+          const provider = companyProvider[target.kind] || companyProvider.claude;
+          const models = modelCards.gatewayModels(provider);
+          const saved = provider?.backend === 'proxy' && provider?.upstream === 'gateway' ? provider.model : '';
+          companyPick[target.kind] = { source: 'gateway', model: models.some(m => m.id === saved) ? saved : models[0]?.id || '' };
+          menuEl?.querySelector(`.new-session-option[data-kind="${target.option}"]`)?.click();
+        });
+        line.appendChild(go);
+        warning.appendChild(line);
+      }
+      warning.hidden = !notices.length && !gatewayHint;
     }
     grid.style.gridTemplateColumns = (showEffort || showMcp || showFast || showCodexTier) ? '' : '1fr';
   }
@@ -2016,6 +2048,7 @@
 
   function openNewSessionModal(options = {}) {
     gatewayAutoOpened = false; gatewayInline?.close();
+    for (const key of Object.keys(modelCardsExpanded)) delete modelCardsExpanded[key];
     void codeagentSetup.refresh().catch(error => setError('安装检测失败：' + error.message));
     window.__codeagentAccountsHide?.();
     if (!menuEl) return;
@@ -2147,8 +2180,9 @@
       : (provider.own || { backend: provider.backend === 'api' ? 'api' : 'local', model: provider.model || '' });
     const models = [...modelCards.companyModels(provider),
       ...modelCards.gatewayModels(provider).map(m => ({ id: m.id, label: m.id + '（API 网关）' })),
-      ...(provider.apiProfiles || []).map(profile => ({ id: profile.model, label: profile.label + ' · ' + profile.model })),
-      ...(own ? [own.backend === 'api' ? { id: own.model || '', label: own.model ? own.model + '（自有接口）' : '自有接口默认模型' } : { id: '', label: '沿用本机 CLI 配置' }] : [])];
+      ...(provider.apiProfiles || []).flatMap(profile => modelCards.profileModels(profile).map(model => ({ id: model, label: profile.label + ' · ' + model }))),
+      ...(own ? (own.backend === 'api' ? modelCards.ownModelList({ ...provider, own }).map(model => ({ id: model || '', label: model ? model + '（自有接口）' : '自有接口默认模型' })) : [{ id: '', label: '沿用本机 CLI 配置' }]) : []),
+      ...(kind === 'deepseek-acp' && provider.own?.backend === 'api' ? modelCards.ownModelList(provider).map(model => ({ id: model, label: model + '（自有接口）' })) : [])];
     companyApiModels[kind] = models;
     setRuntimeModelOptions(kind, models);
     // 本次打开里没点过卡：默认选保存的来源和模型（也就是上次选的）。点过就保留点选，不被重新读配置冲掉。
@@ -2269,6 +2303,8 @@
       if (unavailable) { setRuntimeModelOptions('codeagent', []); return null; }
       return ipcRenderer.invoke('codeagent:models', { account: codeagentUsesPool() ? 'pool' : 'personal', poolAccount: codeagentManualPick() || undefined });
     }).then(result => {
+      // 实时读到的可用模型数（R45）：静态兜底清单不算，没读到时为 null。
+      codeagentLiveUsable = result && Array.isArray(result.options) ? result.options.filter(option => !option.unavailable).length : null;
       if (result && Array.isArray(result.options)) {
         setRuntimeModelOptions('codeagent', result.options.filter(option => !option.unavailable));
         codeagentUnavailableOptions = result.options.filter(option => option.unavailable);

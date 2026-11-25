@@ -239,7 +239,8 @@
     const others = KINDS.filter(k => k !== kind && !(snapshot?.providers?.[k]?.backend === 'proxy' && snapshot.providers[k].upstream === 'gateway'));
     const optionsHtml = (gw, chosen) => {
       const choices = gw.choices?.length ? gw.choices : [{ id: gw.model, label: gw.model, note: '' }];
-      return choices.map(c => `<option value="${esc(c.id)}"${c.id === chosen ? ' selected' : ''}>${esc(c.id)}${c.note ? ' — ' + esc(c.note) : ''}</option>`).join('');
+      return choices.map(c => `<option value="${esc(c.id)}"${c.id === chosen ? ' selected' : ''}>${esc(c.id)}${c.note ? ' — ' + esc(c.note) : ''}</option>`).join('')
+        + (gw.keySet ? '<option value="__custom__">手填模型名…</option>' : '');
     };
     const gwHost = (() => { try { return new URL(g.baseURL).host; } catch { return ''; } })();
     target.insertAdjacentHTML('beforeend', '<div class="api-gw-layout"><form data-gateway-form>'
@@ -248,6 +249,8 @@
       + `<label>网关地址<input name="baseURL" value="${esc(g.baseURL)}" spellcheck="false" autocomplete="off"></label>`
       + `<label><span>API key${require('./launch-field-hint').iconHintHtml(require('./credential-hints').gatewayKey())}</span><input name="apiKey" type="password" placeholder="${g.keySet ? '已加密保存；留空保留原 key' : '粘贴部门发的 key（通常以 sk- 开头）'}" spellcheck="false" autocomplete="off"></label>`
       + `<label>默认模型<select name="model">${optionsHtml(g, current)}</select></label>`
+      // 手填模型（R45）：表里没有、网关实际能用的模型（如带日期后缀的版本），先试跑一句测通再加进表。
+      + '<div class="api-gw-custom" data-gw-custom hidden><input data-gw-custom-input maxlength="128" placeholder="模型名，例如 deepseek-v4.1-flash-1017" aria-label="手填模型名" spellcheck="false" autocomplete="off"><button type="button" data-api-action="gw-custom-check">检测并加入</button></div>'
       + (others.length ? `<label class="company-api-check"><input type="checkbox" name="alsoOthers"${g.keySet ? '' : ' checked'}> ${others.map(k => esc(LABELS[k])).join('、')} 也用网关</label>` : '')
       + `<div class="company-proxy-state" data-proxy-state="${g.keySet ? 'running' : 'stopped'}"><div><span class="company-proxy-dot" aria-hidden="true"></span><strong>${g.keySet ? `网关：key 已保存 · ${(g.models || []).length} 个对话模型${g.group ? ` · ${esc(g.group)} 分组` : ''}` : '网关：还没保存 key'}</strong></div>`
       + '<p>Key 只存在本机，用 Windows 账户加密。保存时先请求一次模型列表验证，再自动体检一次（每个模型发一句极短的话，free 分组几乎不耗额度）。</p></div>'
@@ -292,7 +295,7 @@
       if ('catalog' in r) gwExtra.catalog = r.catalog;
       gwExtra.loaded = true;
       const select = form.isConnected ? form.elements.model : null;
-      if (select && r.gateway) { const keep = select.value; select.innerHTML = optionsHtml(r.gateway, r.gateway.models?.includes(keep) ? keep : r.gateway.model); }
+      if (select && r.gateway) { const keep = select.value; select.innerHTML = optionsHtml(r.gateway, r.gateway.choices?.some(c => c.id === keep) ? keep : r.gateway.model); }
     };
     async function runHealth() {
       const button = target.querySelector('[data-api-action="gw-health"]');
@@ -319,6 +322,36 @@
     }
     paintAside();
     target.querySelector('[data-api-action="gw-health"]').onclick = () => void runHealth();
+    // 默认模型下拉选「手填模型名…」：展开输入框；检测通过就加进下拉并选中，不通在状态行写原因。
+    const customBox = form.querySelector('[data-gw-custom]');
+    let lastPick = form.elements.model.value;
+    form.elements.model.addEventListener('change', () => {
+      const picking = form.elements.model.value === '__custom__';
+      if (customBox) customBox.hidden = !picking;
+      if (picking) { form.elements.model.value = lastPick; form.querySelector('[data-gw-custom-input]')?.focus(); status().textContent = '填模型名后点「检测并加入」：先发一句极短的话测通，再加进模型表。'; }
+      else lastPick = form.elements.model.value;
+    });
+    const customCheck = form.querySelector('[data-api-action="gw-custom-check"]');
+    // 手填框里按回车 =「检测并加入」，不提交外层表单（R45-3 审查 P2-4）。
+    form.querySelector('[data-gw-custom-input]')?.addEventListener('keydown', event => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault(); customCheck?.click();
+    });
+    if (customCheck) customCheck.onclick = async () => {
+      const input = form.querySelector('[data-gw-custom-input]'), name = input.value.trim();
+      if (!name) { status().textContent = '先填模型名。'; input.focus(); return; }
+      customCheck.disabled = true; status().textContent = `正在检测 ${name}：发一句极短的话，网关排队时可能要等十几秒…`;
+      try {
+        const r = await ipcRenderer.invoke('api-gateway:add-model', { model: name });
+        if (r?.gateway) snapshot = { ...snapshot, gateway: r.gateway, providers: r.providers || snapshot?.providers };
+        if (!r?.ok) { status().textContent = `没加上：${r?.error || '未知原因'}`; return; }
+        form.elements.model.innerHTML = optionsHtml(snapshot.gateway, r.model);
+        form.elements.model.value = r.model; lastPick = r.model;
+        customBox.hidden = true; input.value = '';
+        status().textContent = `${r.already ? '模型表里已经有' : '已测通并加入'} ${r.model}，已选为默认模型；点「保存配置」生效。`;
+      } catch (error) { status().textContent = '没加上：' + error.message; }
+      finally { customCheck.disabled = false; }
+    };
     // 打开时：刷新公开目录；已存 key 但还没体检过 → 自动体检一次。
     if (!gwExtra.loaded) {
       void ipcRenderer.invoke('api-gateway:catalog').then(r => {
@@ -455,6 +488,7 @@
   }
   // 自有接口「测试连接」（2026-11-20）：请求一次模型列表，结果就地写清；模型名给下拉候选，地址缺 /v1 时自动补。
   // Claude Code 只认 Anthropic 格式：能列出模型的多半是 OpenAI 兼容接口，就地给「改用 API 网关接入」（Hub 本机转格式）。
+  const BASE_NOTE = { 'added-v1': '，地址已自动补上 /v1', 'removed-v1': '，地址已去掉末尾的 /v1（Claude Code 会自己拼 /v1/messages）' };
   function bindOwnTest(target, kind, profileId) {
     const button = target.querySelector('[data-api-action="own-test"]');
     if (!button) return;
@@ -462,14 +496,17 @@
       const form = target.querySelector('form[data-api-form]'), status = form.querySelector('[role="status"]'), hint = form.querySelector('[data-own-hint]');
       const baseURL = form.elements.baseURL.value.trim(), apiKey = form.elements.apiKey.value.trim();
       hint.hidden = true; hint.innerHTML = '';
+      form.querySelectorAll('footer [data-own-fix]').forEach(item => item.remove());
       if (!baseURL) { status.textContent = '先填接口地址再测试（例如 http://xxx/v1）。'; form.elements.baseURL.focus(); return; }
-      button.disabled = true; status.textContent = '正在测试连接…（请求一次模型列表，不发对话、不耗额度）';
+      button.disabled = true; status.textContent = '正在测试连接…（先读模型列表，再按会话实际走的协议发一句极短的话）';
       try {
-        const r = await ipcRenderer.invoke('company-api:probe', { kind, baseURL, apiKey, profileId });
+        const typedModel = form.elements.model.value.trim();
+        const r = await ipcRenderer.invoke('company-api:probe', { kind, baseURL, apiKey, profileId, model: typedModel, wireApi: form.elements.wireApi?.value || 'responses' });
         if (!r?.ok) { status.textContent = '测试没通过：' + (r?.error || '未知原因'); return; }
         if (r.baseURL) form.elements.baseURL.value = r.baseURL;
         const model = form.elements.model;
-        if (!r.models.includes(model.value.trim())) model.value = r.models.includes('deepseek-v4.1-flash') ? 'deepseek-v4.1-flash' : r.models[0];
+        // 主进程总会给出这次测对话用的模型（留空时自动填推荐模型；旧接口的模型在新接口测不通时改选新接口的）。
+        model.value = r.model || model.value;
         // 用普通下拉框列出接口上的模型（不用 datalist：Electron 里弹 datalist 候选框有崩溃风险），选了就填进模型框。
         const pick = form.querySelector('[data-own-model-pick]'), select = form.querySelector('[data-own-model-select]');
         if (pick && select) {
@@ -477,14 +514,46 @@
           select.onchange = () => { model.value = select.value; };
           pick.hidden = false;
         }
-        status.textContent = `连接正常：接口上有 ${r.models.length} 个模型${r.baseURL ? '，地址已自动补上 /v1' : ''}；模型已填「${model.value}」，可在「接口上的模型」里换。点「${editing() ? '保存修改' : '保存配置'}」生效。`
-          + (r.keyUsed === 'none' ? '（没填 Key 也连上了；如果发消息报 key 无效，请补上 Key）' : '');
-        if (kind === 'claude') {
+        // 一键把接口上的模型都加进「可选模型」（R45），不用一个个抄。
+        const all = form.querySelector('[data-own-models-all]');
+        if (all && form.elements.models && r.models.length > 1) {
+          all.hidden = false;
+          all.textContent = `全部加入（${r.models.length} 个）`;
+          all.onclick = () => {
+            form.elements.models.value = [model.value.trim(), ...r.models].filter((id, i, list) => id && list.indexOf(id) === i).join(', ');
+            status.textContent = `已把接口上的 ${r.models.length} 个模型加进「可选模型」，默认用「${model.value.trim()}」。点「${editing() ? '保存修改' : '保存配置'}」生效。`;
+          };
+        }
+        // 对话测试（R45）：和会话同一个地址 / Key / 模型 / 协议。没通过时在这里一行说清原因，按钮就在旁边。
+        const chat = r.chat || null;
+        const chatLine = chat ? (chat.ok ? chat.message : '') : '';
+        // 对话没通过：原因直接写在状态行（一处说清），下面只放按钮，省高度、一屏放下。
+        status.textContent = chat && !chat.ok && !chat.skipped
+          ? `模型列表能读到（${r.models.length} 个），但对话测试没通过：${chat.message}`
+          : `连接正常：接口上有 ${r.models.length} 个模型${BASE_NOTE[r.baseChange] || ''}；模型已填「${model.value}」${r.replacedModel ? `（原来的「${r.replacedModel}」在这个接口上测不通，已改选）` : ''}，可在「接口上的模型」里换。${chatLine ? chatLine + ' ' : chat?.skipped ? chat.message + ' ' : ''}点「${editing() ? '保存修改' : '保存配置'}」生效。`
+            + (r.keyUsed === 'none' ? '（没填 Key 也连上了；如果发消息报 key 无效，请补上 Key）' : '');
+        // 原因已写在状态行时，修复按钮放进底栏左侧（不另占一行，1440×900 一屏放下）。
+        const toFooter = () => {
+          const fix = hint.querySelector('button'), footer = form.querySelector('footer');
+          if (!fix || !footer || hint.querySelector('p')) return;
+          fix.dataset.ownFix = '1'; footer.prepend(fix); hint.hidden = true;
+        };
+        if (chat && !chat.ok && !chat.skipped && chat.fix !== 'gateway') {
+          hint.innerHTML = `<span data-own-chat-error hidden>${esc(chat.message)}</span>` + (chat.fix === 'chat' ? '<button type="button" data-api-action="own-to-chat">改用 chat 协议</button>' : '');
+          hint.hidden = true;
+          const toChat = hint.querySelector('[data-api-action="own-to-chat"]');
+          if (toChat) toChat.onclick = () => { if (form.elements.wireApi) form.elements.wireApi.value = 'chat'; button.click(); };
+          toFooter();
+        }
+        // Claude Code：对话测试确认是 OpenAI 格式（或没能测到对话）时，给「改用 API 网关接入」；对话测试通过就不打扰。
+        if (kind === 'claude' && (!chat || chat.fix === 'gateway' || chat.skipped)) {
           hint.hidden = false;
-          hint.innerHTML = '<p>这个地址能列出模型，多半是 <strong>OpenAI 兼容接口</strong>。Claude Code 只认 Anthropic 格式，直接填进来发消息常会报 404 或格式错误。'
-            + '想用 Claude Code 就改用「API 网关」接入：Hub 在本机把请求转成 OpenAI 格式，地址、Key、模型照用这一份。</p>'
+          hint.innerHTML = (chat?.fix === 'gateway' ? `<span data-own-chat-error hidden>${esc(chat.message)}</span>`
+            : '<p>这个地址能列出模型，多半是 <strong>OpenAI 兼容接口</strong>。Claude Code 只认 Anthropic 格式，直接填进来发消息常会报 404 或格式错误。'
+              + '想用 Claude Code 就改用「API 网关」接入：Hub 在本机把请求转成 OpenAI 格式，地址、Key、模型照用这一份。</p>')
             + '<button type="button" data-api-action="own-to-gateway">改用 API 网关接入</button>';
-          hint.querySelector('[data-api-action="own-to-gateway"]').onclick = async event => {
+          toFooter();
+          form.querySelector('[data-api-action="own-to-gateway"]').onclick = async event => {
             const key = form.elements.apiKey.value.trim(), go = event.currentTarget;
             if (!key) { status.textContent = '请在「API Key」里再粘贴一次 key，然后点「改用 API 网关接入」（已保存的 Key 不会转给网关）。'; form.elements.apiKey.focus(); return; }
             // 网关是各工具共用的一份（Codex 审查 P1）：已配了别的网关地址时，先说清会影响谁，再点一次才替换。
@@ -513,6 +582,8 @@
     };
     const editing = () => !!target.querySelector('[data-api-action="profile-delete"]');
   }
+  // 可选模型输入框的初值：模型表有两个以上才写（只有默认模型时留空，看占位提示）。
+  const ownListText = list => (Array.isArray(list) && list.length > 1 ? list.join(', ') : '');
   function render(kind) {
     const target = makeDialog();
     const value = snapshot?.providers?.[kind] || {};
@@ -535,7 +606,9 @@
       + (profileId ? `<label>账号名称<input name="label" value="${esc(editing?.label)}" maxlength="80" required placeholder="例如：供应商 A · 账号 1"></label>` : '')
       + `<label class="own-api-wide">接口地址<input name="baseURL" type="url" value="${esc(own.baseURL)}" placeholder="留空沿用本机配置" autocomplete="off" spellcheck="false"></label>`
       + `<label class="own-api-wide"><span>API Key${require('./launch-field-hint').iconHintHtml(require('./credential-hints').ownApiKey())}</span><input name="apiKey" type="password" ${needsKey ? 'required' : ''} placeholder="${needsKey ? '请重新粘贴此接口的 Key' : own.apiKeySet ? '已保存；留空保留原 Key' : '可选；留空沿用本机登录'}" autocomplete="off" spellcheck="false"></label>`
-      + `<label>模型<input name="model" value="${esc(own.model)}" placeholder="${kind === 'deepseek-acp' ? '必填；点「测试连接」从列表里选' : '留空沿用 CLI 配置的模型'}" autocomplete="off" spellcheck="false"></label><label data-own-model-pick hidden>接口上的模型<select data-own-model-select></select></label>`
+      + `<label>默认模型<input name="model" value="${esc(own.model)}" placeholder="${kind === 'deepseek-acp' ? '必填；点「测试连接」从列表里选' : '留空沿用 CLI 配置的模型'}" autocomplete="off" spellcheck="false"></label><label data-own-model-pick hidden>接口上的模型<select data-own-model-select></select></label>`
+      // 可选模型（R45）：一个接口配多个模型，启动中心每个模型一张卡；「测试连接」后可一键把接口上的模型都加进来。
+      + `<label data-own-models><span>可选模型<button type="button" class="company-api-inline-link" data-own-models-all hidden></button></span><input name="models" value="${esc(ownListText(editing ? editing.models : profileId === 'new' ? null : value.backend === 'proxy' ? value.ownConnection?.ownModels : value.ownModels))}" placeholder="可填多个，逗号分隔；新建会话时都能选。点「测试连接」可一键全部加入" autocomplete="off" spellcheck="false"></label>`
       + (kind === 'codex' ? `<label>接口协议<select name="wireApi"><option value="responses"${own.wireApi === 'chat' ? '' : ' selected'}>responses（默认）</option><option value="chat"${own.wireApi === 'chat' ? ' selected' : ''}>chat</option></select></label>` : '')
       + `<p class="company-api-message" role="status" aria-live="polite">${needsKey ? 'Key 无法解密，请补填后保存并继续。' : ''}</p><div class="company-api-own-hint" data-own-hint hidden></div><footer>`
       + '<button type="button" data-api-action="own-test">测试连接</button>'
