@@ -7,8 +7,9 @@ function menuStatusText(state, { labelVersion = '' } = {}) {
   if (!state) return '';
   const current = String(state.current || '').trim();
   const cur = current ? `v${current}` : '';
+  if (state.pinned) return cur ? `已固定在 ${cur}` : '已固定版本';
   if (state.phase === 'checking') return '正在检查…';
-  const latest = state.latest ? String(state.latest.version || '') : '';
+  const latest = state.latest && !state.latest.rollback ? String(state.latest.version || '') : '';
   const pending = !!latest && !!state.plan && state.plan.kind !== 'none';
   if (pending && labelVersion && labelVersion === latest) return cur ? `当前 ${cur}` : '';
   if (pending && state.phase === 'ready') return `v${latest} 已就绪，重启生效`;

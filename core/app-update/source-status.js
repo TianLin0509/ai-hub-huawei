@@ -46,7 +46,8 @@ function itemsOf(spec) {
   const seen = new Set();
   return list.filter(i => i && i.file && !seen.has(String(i.file).toLowerCase()) && seen.add(String(i.file).toLowerCase()));
 }
-async function check(spec = {}, { fetchImpl, env = process.env, timeoutMs = openxSource.REACH_TIMEOUT_MS, now = Date.now, fresh = false } = {}) {
+// timeoutMs 不传时用 find 的默认（列表 8 秒、详情 3 秒，R44）。
+async function check(spec = {}, { fetchImpl, env = process.env, timeoutMs, now = Date.now, fresh = false } = {}) {
   // 本来就只从公司内部渠道下载的组件（CodeAgent 官方渠道、WeLink 内部 npm）：不查 openx，直接标明来源。
   if (spec.internal) return view('internal', { internalName: String(spec.internal), env });
   const items = itemsOf(spec);

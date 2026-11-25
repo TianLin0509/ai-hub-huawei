@@ -155,9 +155,12 @@ test('更新窗真实渲染（R35）：只有一行「公司内源」状态，�
     for (const phase of ['none', 'available', 'error']) {
       const html = await render({ phase, current: version, latest: { version }, plan: { kind: 'full' }, internalSource: row, checks: [row], attempts: [] }, true);
       assert.ok(html.includes('内测先锋版'));
-      assert.equal((html.match(/data-source=/g) || []).length, 1, phase + ' 只有一行来源');
-      assert.ok(html.includes('data-source="openx"'));
-      assert.ok(html.includes(internalLine(row).replace(/</g, '&lt;').replace(/>/g, '&gt;')), phase);
+      // R44：error 时红框已写明原因，不再另列「公司内源」一行重复同一句话。
+      assert.equal((html.match(/data-source=/g) || []).length, phase === 'error' ? 0 : 1, phase + ' 来源行数');
+      if (phase !== 'error') {
+        assert.ok(html.includes('data-source="openx"'));
+        assert.ok(html.includes(internalLine(row).replace(/</g, '&lt;').replace(/>/g, '&gt;')), phase);
+      }
       assert.doesNotMatch(html, /公开版|成员版|更新源|外网源|按顺序尝试|抢先版|放行下载服务器|data-au="preview"|只能更新到最新版/);
     }
   }

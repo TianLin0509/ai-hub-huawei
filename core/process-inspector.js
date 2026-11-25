@@ -135,7 +135,8 @@ function createProcessInspector(options = {}) {
   const execFile = options.execFile || execFileAsync;
   const now = options.now || Date.now;
   const logger = options.logger || console;
-  const ttlMs = Math.max(2_000, Number(options.ttlMs) || DEFAULT_TTL_MS);
+  // 缓存下限 500 ms（2026-11-25 R40b 审查：原 2 秒下限把资源页的 1 秒缓存钳成 2 秒，首屏 1.5 秒补读命中旧采样、算不出 CPU）。
+  const ttlMs = Math.max(500, Number(options.ttlMs) || DEFAULT_TTL_MS);
   const timeoutMs = Math.max(3_000, Number(options.timeoutMs) || DEFAULT_TIMEOUT_MS);
   const powershellPath = options.powershellPath || 'powershell.exe';
 

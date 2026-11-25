@@ -231,6 +231,15 @@
       foot = `${manualR ? `<button class="au-btn" data-au="manual">${esc(manualR.label)}</button>` : ''}<button class="au-btn" data-au="close">稍后</button><button class="au-btn primary" data-au="apply">${plan && plan.kind === 'incremental' ? '立即重启' : '立即安装'}</button>`;
     } else if (s.phase === 'applying') {
       body += '<div class="au-msg info">正在保存会话并关闭窗口，随后屏幕中间会出现升级进度小窗，换好后自动打开新版（通常 10–40 秒）。期间不用再点图标，点了也只会回到进度小窗。</div>';
+    } else if (s.phase === 'error' && s.errorKind === 'offline') {
+      // 提示旁放一个不高亮的「重试」（刚连上 VPN 想马上再查时用），底部不再有高亮按钮。
+      body += `<div class="au-msg info" data-au-offline style="display:flex;align-items:center;gap:10px"><span style="flex:1">${esc(s.error)}</span><button class="au-btn" data-au="retry">重试</button></div>`;
+      foot = '<button class="au-btn" data-au="close">好的</button>';
+    } else if (s.phase === 'error' && s.errorKind === 'slow') {
+      // R44：在公司网络但内源太慢——一句话说明，「重试」就放在这句话旁边；底部不再重复一个高亮的「重试」。
+      const manualS = manualDownload();
+      body += `<div class="au-msg info" data-au-slow style="display:flex;align-items:center;gap:10px"><span style="flex:1">${esc(s.error)}</span><button class="au-btn" data-au="retry">重试</button></div>${fullPackageLine()}`;
+      foot = `${manualS ? `<button class="au-btn" data-au="manual">${esc(manualS.label)}</button>` : ''}<button class="au-btn" data-au="close">关闭</button>`;
     } else if (s.phase === 'error') {
       // 5.5.24：命中已知问题（如安装包校验失败、被公司网络拦截）直接给解法和一键按钮；悬停这条出现「问问 Agent」「一键反馈」。
       const card = window.HubErrorCard;
@@ -241,7 +250,8 @@
       body += `<div class="au-msg bad">${card ? card.assistHtml(ctx) : ''}${esc(error)}</div>${card ? card.knownHtml(ctx) : ''}`;
       if (plan && plan.portable) body += installHint(plan);
       body += fullPackageLine();
-      body += sourceLine();
+      // R44：红框已写明原因，「公司内源」那一行不再把同一句话重复一遍；只有下载过程（attempts）另有内容时才列。
+      if ((s.attempts || []).some(a => !(a.reason && error.includes(a.reason)))) body += sourceLine();
       foot = `${manual ? `<button class="au-btn" data-au="manual">${esc(manual.label)}</button>` : ''}<button class="au-btn" data-au="close">关闭</button><button class="au-btn primary" data-au="retry">重试</button>`;
     } else {
       body += '<div class="au-msg info">点「检查更新」查询最新版本。</div>';
@@ -313,7 +323,8 @@
   const readKey = key => { try { return localStorage.getItem(key) || ''; } catch { return ''; } };
   const writeKey = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
   function pendingVersion() {
-    return state && state.latest && state.plan && state.plan.kind !== 'none'
+    // 固定版本时不提醒新版；回退包（latest.rollback）不算新版本（R42 审查 P1-1）。
+    return state && !state.pinned && state.latest && !state.latest.rollback && state.plan && state.plan.kind !== 'none'
       && ['available', 'downloading', 'ready'].includes(state.phase) ? String(state.latest.version) : '';
   }
   // 只改末位的小更新（latest.notify === false）不主动提醒：弹窗、红点、左上角标签都按「没有新版本」处理，
@@ -383,7 +394,7 @@
     const wait = state && state.restartWait;
     // 静默送达的小版本在后台下载、关闭时替换，标题栏不提示；用户自己从设置打开更新窗口时照常能看到。
     // 已就绪改由底栏一行提示（K），标题栏只在下载中 / 等待重启时提示。
-    const show = wait || (state && !state.quiet && state.phase === 'downloading' && state.latest && state.plan?.kind !== 'none');
+    const show = wait || (state && !state.quiet && state.phase === 'downloading' && state.latest && !state.latest.rollback && state.plan?.kind !== 'none');
     if (!show) { pill?.remove(); return; }
     if (!pill) {
       pill = document.createElement('button');
@@ -400,7 +411,7 @@
   // 底栏一行（K）：「新版本 vX 已就绪，重启生效」，点它打开更新窗；放在左侧会话栏底部，没有会话栏时贴左下角。
   function renderReadyLine() {
     let line = document.getElementById('hub-update-ready');
-    const show = state && !state.restartWait && state.phase === 'ready' && state.latest && state.plan?.kind !== 'none';
+    const show = state && !state.pinned && !state.restartWait && state.phase === 'ready' && state.latest && !state.latest.rollback && state.plan?.kind !== 'none';
     if (!show) { line?.remove(); return; }
     if (!line) {
       line = document.createElement('div');

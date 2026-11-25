@@ -15,7 +15,7 @@ function registerStaticDownloadPoints({ fetchImpl } = {}) {
   // 会议室组件：room-runtime-download.js ensure()，release room-runtime-<baseline 版本>，文件 baseline.exe.file。签名清单在本地，不联网。
   points.register('room-runtime', async () => {
     const { baseline } = require('../core/company-assistant/room-component').bundledRuntime();
-    return { items: [{ file: baseline.exe.file, release: `room-runtime-${baseline.version}`, version: baseline.version }], timeoutMs: 6000 };
+    return { items: [{ file: baseline.exe.file, release: `room-runtime-${baseline.version}`, version: baseline.version }] };
   });
   // 会议本地转写包：meeting-asr.js installPack()，release meeting-asr-<包版本>，每个分片单独查。
   points.register('meeting-asr', async () => {
@@ -24,7 +24,7 @@ function registerStaticDownloadPoints({ fetchImpl } = {}) {
     for (const f of pack.files || []) for (const part of (f.parts && f.parts.length ? f.parts : [{ file: f.name }])) {
       items.push({ file: part.file, release: `meeting-asr-${pack.version}`, version: pack.version });
     }
-    return { items, timeoutMs: 6000 };
+    return { items };
   });
   // PPT Doctor 完整包：ppt-doctor-install.js perform()，release ppt-doctor-<完整包版本>，文件 = 清单里完整包地址的文件名。
   // 内源生效时和安装时一样只用程序自带的清单快照，不去外网读清单（R29/R35）；内源不生效（测试）时读给定清单地址。
@@ -34,7 +34,7 @@ function registerStaticDownloadPoints({ fetchImpl } = {}) {
     const spec = (manifest, base) => {
       const meta = fullArchive(manifest, base);
       const file = require('node:path').posix.basename(new URL(meta.url).pathname);
-      return { items: [{ file, release: `ppt-doctor-${meta.version}`, version: meta.version }], timeoutMs: 6000 };
+      return { items: [{ file, release: `ppt-doctor-${meta.version}`, version: meta.version }] };
     };
     if (require('../core/app-update/openx-source').active(process.env)) {
       const snap = bundledDoctorManifest();
@@ -62,7 +62,7 @@ function registerStaticDownloadPoints({ fetchImpl } = {}) {
   points.register('ppt-materials', async () => {
     const { teamPackManifest } = require('../core/company-assistant/ppt-materials');
     const { manifest } = await teamPackManifest({});
-    return { items: [{ file: `pptutor-materials-${manifest.version}.zip`, release: `ppt-materials-${manifest.version}`, version: manifest.version }], timeoutMs: 6000 };
+    return { items: [{ file: `pptutor-materials-${manifest.version}.zip`, release: `ppt-materials-${manifest.version}`, version: manifest.version }] };
   });
 }
 

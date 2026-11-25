@@ -26,6 +26,12 @@ const CACHE_TTL_MS = 2 * 60 * 1000;
 const POLL_MS = 2 * 60 * 1000;
 const VERSION_RECHECK_MS = 10 * 60 * 1000;
 const MAX_VERIFY = 6;
+// 每次查都会变、不影响结论的字段：只有它们变了时定时复查不重写 state.json。
+const VOLATILE_KEYS = new Set(['checkedAt', 'durationMs', 'verifyMs', 'verifiedAt', 'reasonTrigger', 'at', 'ms']);
+// 定时复查沿用上次试跑结论的最长时间：超过就真跑一次 --version。
+const REUSE_VERIFY_MS = 60 * 60 * 1000;
+// 低开销模式开着时定时轮询、复查放慢 4 倍（core/optional-features.js slowedMs）；单测和脚本里没登记模式，按原节奏。
+const slowed = ms => { try { return require('../optional-features').slowedMs(ms); } catch { return ms; } };
 
 function isFile(fsImpl, f) { try { return fsImpl.statSync(f).isFile(); } catch { return false; } }
 function keyOf(p, platform, fsImpl) {
@@ -87,15 +93,20 @@ class HarnessLocator {
     } catch { /* 第一次用 */ }
     for (const [id, r] of Object.entries(this.state.results)) if (r && IDS.includes(id)) this.cache.set(id, { ...r, fromDisk: true });
   }
-  saveState() {
+  // onlyIfChanged（定时复查用，2026-11-25 R40b）：和上次写盘的相比只差查找时刻、用时这类每次都变的字段时不写，
+  // 原来每轮复查每个 CLI 各整份重写一次（一轮 6–9 次）。手动路径、Node 选择等用户操作照常立即写。
+  saveState({ onlyIfChanged = false } = {}) {
     const file = this.stateFile();
     if (!file) return;
     const results = {};
     for (const [id, r] of this.cache) { const { fromDisk, ...rest } = r; results[id] = rest; }
     this.state.results = results;
+    const stable = JSON.stringify(this.state, (key, value) => (VOLATILE_KEYS.has(key) ? undefined : value));
+    if (onlyIfChanged && stable === this.savedStable) return;
     try {
       this.fs.mkdirSync(path.dirname(file), { recursive: true });
       require('../atomic-write').writeFileAtomic(this.fs, file, JSON.stringify(this.state, null, 2));
+      this.savedStable = stable;
     } catch (error) { console.warn('[harness-locator] 保存失败：' + error.message); }
   }
   // CodeAgent 原来的手动路径（tool-discovery.json 的 choices.codeagent）迁过来，不丢；原文件不动，旧的版本选择器照常可用。
@@ -109,19 +120,29 @@ class HarnessLocator {
   }
 
   // ---------- 读注册表（起隐藏的 PowerShell）：结果缓存，轮询不读 ----------
+  // 同一时刻只读一次（2026-11-25 R40b）：一轮复查里几个 CLI 同时要注册表，原来各起一个 PowerShell（一轮 6–9 个），
+  // 现在搭同一趟；正在读的那趟本身就是刚发起的，force 也直接用它。
   async refreshRegistry({ force = false } = {}) {
     if (this.platform !== 'win32') { this.registry = { dirs: [], at: this.now() }; return []; }
     if (!force && this.registry.dirs && this.now() - this.registry.at < CACHE_TTL_MS) return this.registry.dirs;
-    try { this.registry = { dirs: (await this.readRegistryPath()) || [], at: this.now() }; }
-    catch { this.registry = { dirs: this.registry.dirs || [], at: this.now() }; }
-    return this.registry.dirs;
+    if (this.registryPending) return this.registryPending;
+    this.registryPending = (async () => {
+      try { this.registry = { dirs: (await this.readRegistryPath()) || [], at: this.now() }; }
+      catch { this.registry = { dirs: this.registry.dirs || [], at: this.now() }; }
+      return this.registry.dirs;
+    })().finally(() => { this.registryPending = null; });
+    return this.registryPending;
   }
   async refreshCodeagent({ force = false } = {}) {
     if (this.platform !== 'win32') return [];
     if (!force && this.codeagent.dirs && this.now() - this.codeagent.at < VERSION_RECHECK_MS) return this.codeagent.dirs;
-    try { this.codeagent = { dirs: (await this.readCodeagentInstalls()) || [], at: this.now() }; }
-    catch { this.codeagent = { dirs: this.codeagent.dirs || [], at: this.now() }; }
-    return this.codeagent.dirs;
+    if (this.codeagentPending) return this.codeagentPending;
+    this.codeagentPending = (async () => {
+      try { this.codeagent = { dirs: (await this.readCodeagentInstalls()) || [], at: this.now() }; }
+      catch { this.codeagent = { dirs: this.codeagent.dirs || [], at: this.now() }; }
+      return this.codeagent.dirs;
+    })().finally(() => { this.codeagentPending = null; });
+    return this.codeagentPending;
   }
 
   ctx(spec, overrides = {}) {
@@ -285,7 +306,22 @@ class HarnessLocator {
   }
 
   // ---------- 试跑一个候选 ----------
-  async verify(spec, cand, ctx) {
+  // 文件指纹（大小 + 修改时刻）：原地升级会重写入口文件，指纹就变了。
+  fileSig(file) { try { const st = this.fs.statSync(file); return `${st.size}|${st.mtimeMs}`; } catch { return ''; } }
+  candSig(cand) {
+    const form = cand.form || {};
+    return [cand.path, form.script || form.exe || form.file || cand.path].map(f => this.fileSig(f)).join(';');
+  }
+  reusable(cand, prev) {
+    if (!prev || !Array.isArray(prev.candidates)) return null;
+    const old = prev.candidates.find(c => c && c.path === cand.path && c.verdict === 'ok' && c.fileSig && c.verifiedAt);
+    if (!old || this.now() - old.verifiedAt >= REUSE_VERIFY_MS || old.fileSig !== this.candSig(cand)) return null;
+    if (old.runtime && old.runtime.node && this.fileSig(old.runtime.node) !== old.nodeSig) return null;
+    return { ...old, order: cand.order };
+  }
+  async verify(spec, cand, ctx, reusePrev = null) {
+    const again = this.reusable(cand, reusePrev);
+    if (again) return again;
     const t0 = this.now();
     const form = cand.form;
     let node = null;
@@ -315,7 +351,12 @@ class HarnessLocator {
         }
       }
     } else verdict = classify({ spec, form, node, trial: null });
-    return this.decorate(spec, cand, { ...verdict, node, launch, verifyMs: this.now() - t0 });
+    const out = this.decorate(spec, cand, { ...verdict, node, launch, verifyMs: this.now() - t0 });
+    if (out.verdict === 'ok') {
+      out.fileSig = this.candSig(cand); out.verifiedAt = this.now();
+      if (out.runtime && out.runtime.node) out.nodeSig = this.fileSig(out.runtime.node);
+    }
+    return out;
   }
   decorate(spec, cand, v) {
     const form = cand.form;
@@ -364,7 +405,9 @@ class HarnessLocator {
     const ctx = this.ctx(spec, manualOverride !== undefined ? { manual: manualOverride } : {});
     const { candidates, checked } = this.discover(spec, ctx);
     const prev = this.cache.get(spec.id) || null;
-    const verified = await Promise.all(candidates.slice(0, MAX_VERIFY).map(c => this.verify(spec, c, ctx)));
+    // 定时复查：上次试跑能用、文件和所用 Node 都没动过的候选直接沿用上次结论，不再起 --version（每满 1 小时仍真跑一次）。
+    const reuse = reason === 'poll' && manualOverride === undefined ? prev : null;
+    const verified = await Promise.all(candidates.slice(0, MAX_VERIFY).map(c => this.verify(spec, c, ctx, reuse)));
     for (const c of candidates.slice(MAX_VERIFY)) verified.push(this.decorate(spec, c, { verdict: 'unavailable', reasonCode: null, reason: `排在第 ${c.order + 1} 位，前面已有 ${MAX_VERIFY} 份，这次没有试跑` }));
     const chosen = this.choose(spec, verified, prev);
     const result = this.compose(spec, { chosen, candidates: verified, checked, prev, reason, t0, ctx });
@@ -405,7 +448,7 @@ class HarnessLocator {
   commit(id, result) {
     const prev = this.cache.get(id);
     this.cache.set(id, result);
-    this.saveState();
+    this.saveState({ onlyIfChanged: true });
     const sig = r => r ? JSON.stringify([r.verdict, r.reasonCode, r.chosen && r.chosen.path, r.chosen && r.chosen.version, r.chosen && r.chosen.runtime && r.chosen.runtime.node, (r.candidates || []).length]) : '';
     if (sig(prev) !== sig(result)) for (const fn of this.listeners) { try { fn(id, result); } catch { /* 监听方出错不影响定位 */ } }
     return result;
@@ -541,12 +584,20 @@ class HarnessLocator {
   }
 
   // ---------- 刷新节奏 ----------
+  // 轮询、复查按到点判断（2026-11-25 R40b）：低开销模式开着时放慢 4 倍（轮询 8 分钟、复查 40 分钟），模式切换后下一拍就按新节奏；
+  // 上一轮还没跑完时这一拍跳过，不叠加。
   start({ startupDelayMs = 1500 } = {}) {
     if (this.timers.length) return this;
     const t = (fn, ms, repeat) => { const h = repeat ? setInterval(fn, ms) : setTimeout(fn, ms); h.unref && h.unref(); this.timers.push(h); };
     t(() => { void this.locateAll({ fresh: true, reason: 'startup' }).catch(() => {}); }, startupDelayMs, false);
-    t(() => { void this.poll().catch(() => {}); }, POLL_MS, true);
-    t(() => { void this.recheckAll().catch(() => {}); }, VERSION_RECHECK_MS, true);
+    const last = { poll: this.now(), recheck: this.now() }, running = { poll: false, recheck: false };
+    const every = (name, base, fn) => () => {
+      if (running[name] || this.now() - last[name] < slowed(base) - 1000) return;
+      last[name] = this.now(); running[name] = true;
+      Promise.resolve().then(fn).catch(() => {}).finally(() => { running[name] = false; });
+    };
+    t(every('poll', POLL_MS, () => this.poll()), POLL_MS, true);
+    t(every('recheck', VERSION_RECHECK_MS, () => this.recheckAll()), VERSION_RECHECK_MS, true);
     return this;
   }
   stop() { for (const h of this.timers) { clearTimeout(h); clearInterval(h); } this.timers = []; }

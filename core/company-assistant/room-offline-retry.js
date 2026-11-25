@@ -44,7 +44,7 @@ class RoomOfflineRetry {
     const delay = Math.min(PROBE_MS, ...waiting.map(t => Math.max(1000, PROBE_MS - (now - t.lastProbe))));
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.rooms.tick().catch(e => { this.rooms.error = e.message; this.rooms.a.changed(); }).finally(() => this.schedule());
+      void this.rooms.tick().catch(e => { this.rooms.error = e.message; this.rooms.lastView = ''; this.rooms.a.changed(); }).finally(() => this.schedule());
     }, delay);
     this.timer.unref?.();
   }

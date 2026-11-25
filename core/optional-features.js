@@ -62,6 +62,9 @@ function hasHubHistory(dataDir) {
   return false;
 }
 function backgroundOn(id) { return active ? active.get(id) : true; }
+function lowOverheadOn() { try { return !!(active && active.lowOverhead && active.lowOverhead()); } catch { return false; } }
+// 常驻巡检的间隔：低开销模式开着时放慢 4 倍（和 core/low-overhead-policy.js 的 L6 同一倍数）。
+function slowedMs(baseMs) { return lowOverheadOn() ? baseMs * require('./low-overhead-policy').BACKGROUND_SLOWDOWN : baseMs; }
 
 // defaults 只给隔离测试用（main.js 在用环境变量强开助理/论坛的隔离实例里传 true，老的端到端测试照旧能直接用）。
 // detectFreshInstall：判定新装还是升级（main.js 在正式实例里开）。新装＝数据目录里没有本文件、也没有任何用过的痕迹（hasHubHistory）
@@ -182,4 +185,4 @@ async function switchLowOverhead({ features, list, apply, on }) {
   return { handled: targets.length, failed, partial: failed.length > 0, message };
 }
 
-module.exports = { switchLowOverhead, CATALOG, FILE, BACKGROUND_IDS, RESTORE_ON_STANDARD, LOW_OVERHEAD_VERSION, createOptionalFeatures, registerActive, backgroundOn, hasHubHistory };
+module.exports = { switchLowOverhead, CATALOG, FILE, BACKGROUND_IDS, RESTORE_ON_STANDARD, LOW_OVERHEAD_VERSION, createOptionalFeatures, registerActive, backgroundOn, lowOverheadOn, slowedMs, hasHubHistory };

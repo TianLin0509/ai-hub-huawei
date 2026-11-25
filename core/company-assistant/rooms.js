@@ -9,6 +9,7 @@ const S = require('./room-schedule');
 const { RoomOfflineRetry } = require('./room-offline-retry');
 
 const SOON_MS = 10 * 60000;   // 订到的会开始前 10 分钟，桌宠提醒一次
+const SEEN_KEEP = 200;        // 抢订结果去重表保留的条数
 const RULES = ['主题', '开始时间', '时长小时', '时长分钟', '优先会议室', '抢订日', '抢订设置', '会后动作', '系统', '高级', '地域'];
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
@@ -200,12 +201,23 @@ class RoomBooking {
   }
   wakeTimer() {
     if (this.off || this.deps.noTimer || this.timer || !this.needsTimer()) return;
-    this.timer = setInterval(() => { void this.tick().catch(e => { this.error = e.message; this.a.changed(); }); }, 15000);
+    // 报错时作废上次广播的页面签名：恢复正常的那一拍一定广播，页面上的报错能及时清掉（R40b 审查）。
+    this.timer = setInterval(() => { void this.tick().catch(e => { this.error = e.message; this.lastView = ''; this.a.changed(); }); }, 15000);
   }
   stopTimer() { clearInterval(this.timer); this.timer = null; }
   // 关 Hub 时只停 Hub 自己的定时器，不结束会议室组件进程：组件是常驻的抢订守护，Hub 退出后照样按放号时刻抢，
   // 结束它会让已经安排好的抢订落空。真正要停组件走 shutdown()（「可选功能」里关掉会议室时，按进程号核对后结束）。
   close() { this.stopTimer(); this.offlineRetry.close(); }
+  // 抢订历史和每条的去重编号：文件大小和修改时刻都没变就沿用上一拍的（2026-11-25 R40b），变了才重读、每条只算一遍 SHA-256。
+  historyWithIds() {
+    let key = '';
+    try { const st = fs.statSync(this.file('booking_history.json')); key = `${this.file('booking_history.json')}|${st.size}|${st.mtimeMs}`; } catch { key = ''; }
+    if (key && this.historyCache?.key === key) return this.historyCache;
+    const history = this.readHistory();
+    const ids = history.map(r => createHash('sha256').update(JSON.stringify(r)).digest('hex'));
+    this.historyCache = key ? { key, history, ids } : null;
+    return { history, ids };
+  }
   readHistory() {
     const history = readJson(this.file('booking_history.json'), []);
     if (!Array.isArray(history)) throw new Error('秘书历史格式不正确，已保留之前的结果');
@@ -399,20 +411,25 @@ class RoomBooking {
         this.lastStart = now; await this.command('start');
       }
       await this.upgradeIdleHelper(live, minute, win, now);
-      const history = this.readHistory();
-      const idOf = r => createHash('sha256').update(JSON.stringify(r)).digest('hex');
+      const { history, ids } = this.historyWithIds();
       const stored = this.a.state(), prior = stored.roomSeen;
-      const ids = history.map(idOf), seen = new Set(prior || ids);
+      const seen = new Set(prior || ids);
       let events = stored.roomEvents || [];
       const added = [];
-      if (prior) for (const record of history) {
-        const id = idOf(record);
-        if (seen.has(id)) continue;
+      // 去重表只留最近 200 条：历史超过 200 条时更早的记录不在表里，原来每一拍都把它们当新结果重报（并整份重写、广播），只比最近 200 条。
+      const from = Math.max(0, history.length - SEEN_KEEP);
+      if (prior) history.forEach((record, i) => {
+        const id = ids[i];
+        if (i < from || seen.has(id)) return;
         seen.add(id);
         added.push({ id, record });
         events = [{ id, at: now, record, phoneSent: false }, ...events].slice(0, 30);
-      }
-      this.a.saveState({ roomSeen: [...new Set([...(prior || []), ...ids])].slice(-200), roomEvents: events });
+      });
+      // 没有新结果、去重表也没变时不重写 state.json（2026-11-25 R40b：原来每 15 秒整份重写一次，一天 5760 次）。
+      // 最近的记录排在表尾（原来旧表在前、整份历史接在后面，历史超过 200 条时截出来的是更早的记录，表每拍都在变）。
+      const recent = ids.slice(from), recentSet = new Set(recent);
+      const nextSeen = [...new Set([...(prior || []).filter(id => !recentSet.has(id)), ...recent])].slice(-SEEN_KEEP);
+      if (added.length || !prior || nextSeen.length !== prior.length || nextSeen.some((id, i) => id !== prior[i])) this.a.saveState({ roomSeen: nextSeen, roomEvents: events });
       await this.offlineRetry.tick(history, live, now);
       this.tellPet(added, history, live, now);
       for (const event of events.filter(e => !e.phoneSent).slice(0, 3)) {
@@ -424,8 +441,16 @@ class RoomBooking {
           this.a.saveState({ roomEvents: latest.map(e => e.id === event.id ? { ...e, phoneSent: true } : e) });
         } else break;
       }
-      this.error = ''; this.a.changed();
+      this.error = '';
+      // 页面能看到的状态（连接、守护、登录、结果、补抢……）和上一拍一样就不广播（原来每 15 秒无条件广播，助理页开着时每次整页重载）。
+      // 会议室页开着时自己每 3 秒读一次，不依赖这里。
+      const view = this.viewSignature();
+      if (added.length || view !== this.lastView) { this.lastView = view; this.a.changed(); }
     } finally { this.ticking = false; }
+  }
+  viewSignature() {
+    try { return JSON.stringify(this.status()) + '|' + JSON.stringify(this.offlineRetry.tasks()); }
+    catch (error) { return 'error:' + error.message + ':' + this.a.now(); }
   }
 }
 // 记录里的开始时刻（本地时间毫秒）；字段不全返回 null。

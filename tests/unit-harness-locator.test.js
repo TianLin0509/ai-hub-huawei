@@ -1152,3 +1152,23 @@ test('安装版试跑 DSH：--require 的补丁指向 app.asar.unpacked，不指
   assert.equal(boot.args[0], '--require');
   assert.equal(boot.args[1], path.join(resources, 'app.asar.unpacked', 'core', 'dsh-windows-link-retry.cjs'));
 });
+
+test('定时复查（R40b）：程序文件没动就沿用上次试跑结论，不起 --version；改了文件或过了 1 小时就真跑', async t => {
+  const sb = sandbox(t);
+  const exe = sb.native(path.join(sb.home, '.local', 'bin', 'claude.exe'), '2.1.322 (Claude Code)');
+  let clock = Date.now();
+  const loc = sb.locator({ now: () => clock });
+  assert.equal((await loc.locate('claude', { fresh: true })).verdict, 'ok');
+  const probes = () => sb.calls.filter(c => c.command.toLowerCase() === exe.toLowerCase()).length;
+  const first = probes();
+  assert.ok(first >= 1);
+  clock += 10 * 60000; await loc.recheckAll();
+  assert.equal(probes(), first, '文件没动：复查不起子进程');
+  assert.equal(loc.cache.get('claude').verdict, 'ok', '沿用的结论仍是能用');
+  const later = new Date(Date.now() + 60000);
+  fs.utimesSync(exe, later, later);
+  clock += 10 * 60000; await loc.recheckAll();
+  assert.equal(probes(), first + 1, '原地升级（修改时刻变了）：复查真跑一次');
+  clock += 61 * 60000; await loc.recheckAll();
+  assert.equal(probes(), first + 2, '超过 1 小时：即使文件没动也真跑一次');
+});

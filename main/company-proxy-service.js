@@ -11,6 +11,9 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const POLL_MS = 5_000;
+// 定时读状态时，反代回的状态和显示文字都没变就不广播，但最多隔这么久仍广播一次（2026-11-25 R40b：原来每 5 秒无条件广播一次）。
+// Even when nothing changed, the polled status is re-broadcast at least this often.
+const POLL_REPUBLISH_MS = 60_000;
 const READY_TIMEOUT_MS = 15_000;
 const READY_WAIT_MS = 90_000; // 新建会话时最多等上游准备 90 秒（首次签名初始化实测约 11 秒）
 const DRAIN_POLL_MS = 2_000;
@@ -116,6 +119,16 @@ class CompanyProxyService {
     let enabled = false;
     try { enabled = !!this.isEnabled(); } catch { enabled = false; }
     return enabled ? this.restart() : this.status();
+  }
+
+  // 定时读到的状态：和上次广播时的原始状态、显示状态都一样，就只更新内存里的值，不重算界面状态、不广播。
+  publishPolled(state, message, raw) {
+    let sig;
+    try { sig = `${state}\n${message}\n${JSON.stringify(raw)}`; } catch { sig = null; }
+    const now = Date.now();
+    if (sig && sig === this.polledSig && this.state === state && this.message === message && now - this.polledAt < POLL_REPUBLISH_MS) return;
+    this.polledSig = sig; this.polledAt = now;
+    this.setState(state, message);
   }
 
   setState(state, message = '') {
@@ -307,8 +320,8 @@ class CompanyProxyService {
     catch { return; }
     this.lastStatus = status;
     if (this.draining) { /* keep the draining message */ }
-    else if (!status.ready) this.setState('not-ready', status.message || '公司模型反代已启动，但公司上游还没准备好');
-    else this.setState('running', status.mock ? '公司模型反代运行中（模拟上游，仅用于测试）' : '公司模型反代运行中');
+    else if (!status.ready) this.publishPolled('not-ready', status.message || '公司模型反代已启动，但公司上游还没准备好', status);
+    else this.publishPolled('running', status.mock ? '公司模型反代运行中（模拟上游，仅用于测试）' : '公司模型反代运行中', status);
     this.noteUsage(status.router?.accounts);
     for (const event of status.router?.events || []) {
       const id = `${event.at}:${event.type}:${event.account || event.to || ''}:${event.session || ''}`;

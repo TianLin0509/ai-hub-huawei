@@ -132,3 +132,15 @@ test('下载：内源版本名 boot-splash-<版本>，按目录核对后装上�
   assert.ok(item.installed && item.src, '下载后可以播');
   assert.ok(seen.some(u => u.endsWith(file)));
 });
+
+test('只走内源：客户端不内置阿里云、GitHub 地址；内源开着时检查目录读随包快照、不联网（HUB-H 铁律 11-25）', async () => {
+  const { SOURCES } = require('../core/boot-splash');
+  assert.deepStrictEqual([...SOURCES], [], '默认下载源只剩内源，代码里不写外网地址');
+  // 内源地址来自 openx-config，本文件不应出现任何网址
+  assert.doesNotMatch(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'core', 'boot-splash.js'), 'utf8'), /https?:\/\//);
+  const fetched = [];
+  const store = createBootSplashStore({ dataDir: tmp(), env: { AI_HUB_OPENX: '1' }, fetchImpl: async url => { fetched.push(url); throw new Error('不该联网'); } });
+  const snap = await store.check();
+  assert.notStrictEqual(snap.state.phase, 'error', JSON.stringify(snap.state));
+  assert.deepStrictEqual(fetched, []);
+});

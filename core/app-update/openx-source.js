@@ -2,7 +2,6 @@
 // 公司内源优先（r21，2026-11-16）：在公司电脑上，各组件的大文件先试公司内源（openx 社区上本产品的项目）
 // （黄区实测约 24 MB/s，阿里云约 1.2 MB/s）。版本清单照旧从 GitHub / 阿里云取，这里只换「字节从哪儿来」：
 // 按文件名在内源的发布版本里找同名附件，下载后仍按清单的大小和 sha256 核对（downloader.js 的 downloadOne）。
-// 公司外（在家、外网）连不上内源：3 秒内没回就记下「连不上」，5 分钟内不再试，所以外网用户每 5 分钟最多多等一次 3 秒。
 // 找不到、校验不对、连不上都静默回到原来的下载源，不报错。
 //
 // 内源地址与开关在 openx-config.js。成员版组件（11-18）和成员版程序包（r56，11-19）也先走内源；
@@ -27,8 +26,14 @@ const REACH_TIMEOUT_MS = 3000;
 // 列表都取不到才算「连不上」；一次慢响应不该让内源停用太久（r44 审查）：5 分钟后再试。
 const UNREACHABLE_TTL_MS = 5 * 60 * 1000;
 const LIST_TTL_MS = 10 * 60 * 1000;
-// r24：组件包发一次能用很久，期间 Hub 每版都会新增内源版本；列表多取一些，组件版本靠版本名直接命中（只查 1 次详情）。
-const LIST_PAGE_SIZE = 100;
+// 版本列表分页取（R44，2026-11-25）：公司电脑实测一页 100 条要 2.6–3.5 秒（11-18 还约 1 秒，版本越发越多）、一页 20 条约 0.6 秒，
+// 而且列表已有 104 条，原来只取 1 页 100 条会漏掉最老的几版（组件版本可能就在里面）。改为：
+//   第 1 页 20 条单独缓存（state.head）——查清单、探测、程序更新包在这一页里就能命中；
+//   要完整列表时（组件版本、找完整安装包、版本回退）先拿第 1 页知道总数，其余各页（每页 20 条）小并发一起取，拼成全量。
+const LIST_PAGE_SIZE = 20;
+const LIST_MAX_PAGES = 30;
+const LIST_CONCURRENCY = 6;
+const LIST_TIMEOUT_MS = 8000;
 const MAX_DETAIL_QUERIES = 8;
 // 状态未知（还没探测过，或上次探测已过 10 分钟）时，下载最多等内源这么久；没结果就先走原源，探测在后台继续，供下一次下载用。
 // 2026-11-18 公司电脑实测：内源版本列表一次约 0.9–1.05 秒、详情约 0.12 秒。原来只等 0.5 秒，在公司里几乎总是等不到，
@@ -38,7 +43,8 @@ const UNKNOWN_BUDGET_MS = REACH_TIMEOUT_MS;
 
 let state = freshState();
 function freshState() {
-  return { unreachableUntil: 0, list: null, listAt: 0, listing: null, projectName: '', details: new Map(), bad: new Set(), lastReason: '' };
+  return { unreachableUntil: 0, list: null, listAt: 0, listing: null, head: null, headTotal: 0, headAt: 0, heading: null, okAt: 0, listPartialReason: '',
+    projectName: '', details: new Map(), bad: new Set(), lastReason: '' };
 }
 
 // 2026-11-18 用户定：成员版下载组件也优先走内源（只下载、按 sha256 核对，不上传任何东西）。
@@ -61,9 +67,9 @@ function userReason(reason, { file = '' } = {}) {
   const raw = String(reason || '').trim();
   if (/已取消/.test(raw)) return '已取消';
   // 清单读到了但签名缺失 / 不对 / 版本对不上：内源是连着的，不提示查网络（R29 审查 #3）。
-  if (/没有签名|签名不对|附带的清单|主版本跳得太多/.test(raw)) return `公司内源上的版本清单还在同步签名或没通过校验（${raw}），请稍后再试，或点下方「下载完整安装包」；一直如此请点「一键反馈」`;
+  if (/没有签名|签名不对|没有通过签名校验|附带的清单|主版本跳得太多/.test(raw)) return `公司内源上的版本清单还在同步签名或没通过校验（${raw}），请稍后再试，或点下方「下载完整安装包」；一直如此请点「一键反馈」`;
   if (/未启用|已关闭/.test(raw)) return '公司内源已关闭（排查开关 AI_HUB_OPENX=0），去掉这个开关后重启 Hub 再试';
-  if (/没有这个文件|没有该版本|HTTP 404|还没有附带版本清单|没找到|没有比当前更新/.test(raw)) return `公司内源上暂时没有${file ? `「${file}」` : '这个包'}，可能还在同步，请过几分钟再试；一直没有请点「一键反馈」告诉维护人`;
+  if (/没有这个文件|没有该版本|HTTP 404|还没有附带版本清单|还没有程序版本|没找到|没有比当前更新/.test(raw)) return `公司内源上暂时没有${file ? `「${file}」` : '这个包'}，可能还在同步，请过几分钟再试；一直没有请点「一键反馈」告诉维护人`;
   if (/校验/.test(raw)) return `从公司内源下载的${file ? `「${file}」` : '文件'}校验没通过，已丢弃，请重试；反复出现请点「一键反馈」`;
   if (/连不上|超时|没响应|HTTP|ENOTFOUND|ECONN|net::ERR_|网络|DNS|fetch failed|证书|代理|秒内/.test(raw) || !raw) return `连不上公司内源${raw ? `（${raw.replace(/^内源连不上[：:]?/, '').replace(/（5 分钟内自动重试）$/, '')}）` : ''}。${NETWORK_HINT}`;
   return `从公司内源下载没有完成（${raw}）。${NETWORK_HINT}`;
@@ -99,8 +105,11 @@ function safeUrl(u) {
 }
 
 // 在 openx 上按文件名找附件。找到返回 { url, releaseId, releaseVersion }，否则返回 null（原因记在 lastReason）。
+// timeoutMs 不传时：列表 8 秒（LIST_TIMEOUT_MS）、单个详情 3 秒；传了（单测、排查）就都按传的来。
 async function find({ file, version, release, strict = false, fetchImpl, signal, api = DEFAULT_API, projectId = PROJECT_ID,
-  timeoutMs = REACH_TIMEOUT_MS, env = process.env, now = Date.now } = {}) {
+  timeoutMs: givenTimeoutMs, env = process.env, now = Date.now } = {}) {
+  const timeoutMs = givenTimeoutMs || REACH_TIMEOUT_MS;
+  const listTimeoutMs = givenTimeoutMs || LIST_TIMEOUT_MS;
   const miss = reason => { state.lastReason = reason; return null; };
   if (!enabled(env)) return miss('未启用');
   if (!api || !projectId) return miss('未配置内源');
@@ -113,7 +122,8 @@ async function find({ file, version, release, strict = false, fetchImpl, signal,
     markDown(error, now);
     return miss(`内源连不上：${errText(error)}`);
   };
-  try { await loadList({ fetchImpl, api, projectId, timeoutMs, now }); } catch (error) { return unreachable(error); }
+  let records;
+  try { records = await loadHead({ fetchImpl, api, projectId, timeoutMs: listTimeoutMs, now }); } catch (error) { return unreachable(error); }
 
   // 版本名对得上的先查，其余按发布时间从新到旧；最多再查 MAX_DETAIL_QUERIES 个没缓存过的版本。
   // release（r24）：组件在内源上的专属版本名（如 room-runtime-2.1.0，见 releaseName），优先于组件自身的版本号；
@@ -123,7 +133,21 @@ async function find({ file, version, release, strict = false, fetchImpl, signal,
   const time = r => Date.parse(r.releaseTime || '') || 0;
   // 成员版程序包（r56，2026-11-19）：内源上以 member-v<版本> 单独成版（文件名与公开版相同、内容不同），
   // strict 时只查这一个版本，不往别的版本里找；不带 strict 的查找（公开版程序包、各组件）永远跳过 member-* 版本。
-  const ordered = [...state.list].filter(r => strict ? same(r) : !isMemberRelease(r.version))
+  // R44：先只看第 1 页（最近 20 个版本）；里面没有版本名对得上的（组件的老版本等），再取完整列表。
+  if (state.list && now() - state.listAt <= LIST_TTL_MS) records = state.list;
+  else if (!records.some(r => same(r) && (strict || !isMemberRelease(r.version)))) {
+    try { records = await loadList({ fetchImpl, api, projectId, timeoutMs: listTimeoutMs, now }); }
+    catch (error) {
+      if (signal && signal.aborted) return miss('已取消');
+      // 第 1 页刚取到，说明内源是通的：其余页没取到只放弃这一次查找，不标成连不上。
+      return miss(`内源版本列表没取全：${errText(error)}`);
+    }
+    // 有几页没取到、取到的部分里又没有这个版本：如实说「没取全」，不去盲查无关版本、也不报「内源上没有这个文件」（R44 审查 P1-2）。
+    if (state.listPartialReason && !records.some(r => same(r) && (strict || !isMemberRelease(r.version)))) {
+      return miss(`内源版本列表没取全：${state.listPartialReason}`);
+    }
+  }
+  const ordered = [...records].filter(r => strict ? same(r) : !isMemberRelease(r.version))
     .sort((a, b) => same(b) - same(a) || time(b) - time(a));
   let queries = 0;
   const deadline = now() + timeoutMs * 2;   // 逐个查版本详情的总预算（约 6 秒），不让找不到的文件拖太久
@@ -182,17 +206,66 @@ async function find({ file, version, release, strict = false, fetchImpl, signal,
   return miss('内源上没有这个文件');
 }
 
-// 版本列表：同一时刻只发一次请求（预热和下载共用），成功后 10 分钟内复用。
+// 版本列表的一页（接口按发布时间从新到旧）。返回 { records, total }。
+async function listPage({ fetchImpl, api, projectId, page, timeoutMs, signal = null }) {
+  const data = await getJson(fetchImpl, `${api}by_project_id?projectId=${projectId}&currentPage=${page}&pageSize=${LIST_PAGE_SIZE}`, signal, timeoutMs);
+  if (!Array.isArray(data.records)) throw new Error('openx 版本列表格式不对');
+  if (typeof data.name === 'string' && data.name.trim()) state.projectName = data.name.trim();
+  return { records: data.records.filter(r => r && r.id != null), total: Number(data.total) || 0 };
+}
+function keepHead(page, now) {
+  state.head = page.records; state.headTotal = page.total; state.headAt = now(); state.okAt = now();
+  return state.head;
+}
+// 第 1 页（最近 20 个版本）：同一时刻只发一次请求，成功后 10 分钟内复用；完整列表还新鲜时直接用完整列表。
+async function loadHead({ fetchImpl, api, projectId, timeoutMs, now }) {
+  if (state.list && now() - state.listAt <= LIST_TTL_MS) return state.list;
+  if (state.head && now() - state.headAt <= LIST_TTL_MS) return state.head;
+  if (!state.heading) {
+    state.heading = listPage({ fetchImpl, api, projectId, page: 1, timeoutMs }).then(p => keepHead(p, now))
+      .finally(() => { state.heading = null; });
+  }
+  return state.heading;
+}
+// 第 1 页之后可能还有：有总数按总数判断；接口没给总数时，第 1 页满一页就当可能还有。
+const moreAfterHead = head => (state.headTotal ? state.headTotal > head.length : head.length >= LIST_PAGE_SIZE);
+// 完整版本列表：第 1 页拿到总数后，其余各页小并发一起取（R44）；同一时刻只发一次，取齐后 10 分钟内复用（预热、下载、回退共用）。
+// 接口没给总数（data.total）时逐页往后翻，直到某页不满 LIST_PAGE_SIZE 条。
+// 某几页没取到（R44 审查 P1-2）：这一次照样返回已取到的部分，原因记在 state.listPartialReason 给调用方判断；不写进共享缓存，下次重取。
 async function loadList({ fetchImpl, api, projectId, timeoutMs, now }) {
   if (state.list && now() - state.listAt <= LIST_TTL_MS) return state.list;
   if (!state.listing) {
     state.listing = (async () => {
-      const data = await getJson(fetchImpl, `${api}by_project_id?projectId=${projectId}&currentPage=1&pageSize=${LIST_PAGE_SIZE}`, null, timeoutMs);
-      if (!Array.isArray(data.records)) throw new Error('openx 版本列表格式不对');
-      if (typeof data.name === 'string' && data.name.trim()) state.projectName = data.name.trim();
-      state.list = data.records.filter(r => r && r.id != null);
-      state.listAt = now();
-      return state.list;
+      const first = state.head && now() - state.headAt <= LIST_TTL_MS ? state.head
+        : keepHead(await listPage({ fetchImpl, api, projectId, page: 1, timeoutMs }), now);
+      const got = new Map();
+      let partial = '';
+      if (state.headTotal) {
+        const pages = Math.min(LIST_MAX_PAGES, Math.ceil(state.headTotal / LIST_PAGE_SIZE));
+        const queue = Array.from({ length: Math.max(0, pages - 1) }, (_, i) => i + 2);
+        await Promise.all(Array.from({ length: Math.min(LIST_CONCURRENCY, queue.length) }, async () => {
+          while (queue.length) {
+            const n = queue.shift();
+            try { got.set(n, (await listPage({ fetchImpl, api, projectId, page: n, timeoutMs })).records); }
+            catch (error) { partial = partial || `第 ${n} 页：${errText(error)}`; }
+          }
+        }));
+      } else if (first.length >= LIST_PAGE_SIZE) {
+        for (let n = 2; n <= LIST_MAX_PAGES; n++) {
+          let records;
+          try { records = (await listPage({ fetchImpl, api, projectId, page: n, timeoutMs })).records; }
+          catch (error) { partial = `第 ${n} 页：${errText(error)}`; break; }
+          got.set(n, records);
+          if (records.length < LIST_PAGE_SIZE) break;
+        }
+      }
+      const seen = new Set();
+      const all = [first, ...[...got.keys()].sort((a, b) => a - b).map(n => got.get(n))].flat()
+        .filter(r => !seen.has(String(r.id)) && seen.add(String(r.id)));
+      state.listPartialReason = partial;
+      state.okAt = now();
+      if (!partial) { state.list = all; state.listAt = now(); }
+      return all;
     })().finally(() => { state.listing = null; });
   }
   return state.listing;
@@ -205,9 +278,26 @@ function errText(error) {
   if (error && (error.name === 'TimeoutError' || /timeout|aborted due to timeout/i.test(msg))) return `超时没响应${code}`;
   return msg + code;
 }
+// R44（2026-11-25）：明显不在公司网络的失败——域名解析不到、连接立刻被拒 / 被关 / 被重置、代理建不起隧道、本机断网。
+// 这类失败界面用灰色说明「不在公司网络」，不当成故障；超时、HTTP 错误、证书问题不算（可能是在公司但内源慢或出错）。
+const OFFLINE_RE = /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ENETUNREACH|EHOSTUNREACH|ERR_NAME_NOT_RESOLVED|ERR_NAME_RESOLUTION_FAILED|ERR_CONNECTION_(CLOSED|REFUSED|RESET|FAILED)|ERR_INTERNET_DISCONNECTED|ERR_ADDRESS_UNREACHABLE|ERR_PROXY_CONNECTION_FAILED|ERR_TUNNEL_CONNECTION_FAILED|ERR_NETWORK_CHANGED/;
+// 代理类（本机代理连不上、代理不给建隧道、连接被拒）：同样按「不在公司网络」显示，但提示里补一句可能是本机代理没放行公司内网。
+const PROXY_RE = /ERR_PROXY_|ERR_TUNNEL_|ECONNREFUSED/;
+function errCodes(error) {
+  const code = error.code || (error.cause && error.cause.code) || '';
+  return `${code} ${error.message || ''} ${error.cause && error.cause.message ? error.cause.message : ''}`;
+}
+const TIMEOUT_RE = /ERR_TIMED_OUT|ERR_CONNECTION_TIMED_OUT|ETIMEDOUT|TimeoutError/;
+function isTimeoutError(error) { return !!error && (error.name === 'TimeoutError' || TIMEOUT_RE.test(errCodes(error))); }
+function isProxyError(error) { return !!error && PROXY_RE.test(errCodes(error)); }
+function isOfflineError(error) {
+  if (!error) return false;
+  const code = error.code || (error.cause && error.cause.code) || '';
+  return OFFLINE_RE.test(`${code} ${error.message || ''} ${error.cause && error.cause.message ? error.cause.message : ''}`);
+}
 function markDown(error, now = Date.now) {
   state.unreachableUntil = now() + UNREACHABLE_TTL_MS;
-  state.down = { reason: errText(error), at: now() };
+  state.down = { reason: errText(error), at: now(), offline: isOfflineError(error), proxy: isProxyError(error) };
 }
 function downText() {
   return state.down && state.down.reason ? `内源连不上：${state.down.reason}（5 分钟内自动重试）` : '内源连不上（稍后再试）';
@@ -215,23 +305,23 @@ function downText() {
 // 排错信息（给界面「复制排错信息」用）：状态、最近一次失败原因和时间。不含地址与凭据。
 function diagnostics({ now = Date.now } = {}) {
   return { reachability: reachability({ now }), down: state.down || null,
-    listAgeSec: state.list ? Math.round((now() - state.listAt) / 1000) : null, lastReason: state.lastReason || '' };
+    listAgeSec: state.okAt ? Math.round((now() - state.okAt) / 1000) : null, lastReason: state.lastReason || '' };
 }
 // 用户点「重测」：清掉「5 分钟内不再试」和「这个文件上次校验没过」的标记，马上真的去连一次。
 // 2026-11-25：用户手动「检查更新」时同时作废版本列表缓存（原先要等 10 分钟，补传清单后仍查不到新版）。
-function clearDown() { state.unreachableUntil = 0; state.bad.clear(); state.listAt = 0; }
+function clearDown() { state.unreachableUntil = 0; state.bad.clear(); state.listAt = 0; state.headAt = 0; state.okAt = 0; }
 
 // 内源现在的状态：up（10 分钟内连上过）/ down（5 分钟内连不上过）/ unknown（还没探测）。
 function reachability({ now = Date.now } = {}) {
   if (now() < state.unreachableUntil) return 'down';
-  if (state.list && now() - state.listAt <= LIST_TTL_MS) return 'up';
+  if (state.okAt && now() - state.okAt <= LIST_TTL_MS) return 'up';
   return 'unknown';
 }
 
 // 预热：查版本清单时顺手在后台探测内源（不等结果、不报错），真正下载时状态已知，公司外不用再等。
-function prewarm({ fetchImpl, api = DEFAULT_API, projectId = PROJECT_ID, timeoutMs = REACH_TIMEOUT_MS, env = process.env, now = Date.now } = {}) {
+function prewarm({ fetchImpl, api = DEFAULT_API, projectId = PROJECT_ID, timeoutMs = LIST_TIMEOUT_MS, env = process.env, now = Date.now } = {}) {
   if (!enabled(env) || !api || !projectId || typeof fetchImpl !== 'function' || reachability({ now }) !== 'unknown') return null;
-  return loadList({ fetchImpl, api, projectId, timeoutMs, now }).catch(error => {
+  return loadHead({ fetchImpl, api, projectId, timeoutMs, now }).catch(error => {
     markDown(error, now);
     state.lastReason = `内源连不上：${errText(error)}`;
     return null;
@@ -260,22 +350,22 @@ async function headSize(hit, { fetchImpl, signal, timeoutMs = REACH_TIMEOUT_MS }
 // 下载或校验没过：本进程内这个文件不再走内源（避免重试时重复下一遍坏文件）。
 function markBad(file) { if (file) state.bad.add(String(file).toLowerCase()); }
 function lastReason() { return state.lastReason; }
-// 更新窗和环境体检共用的只读探测：复用下载器的列表/详情缓存，整体最多等 3 秒。
+// 更新窗和环境体检共用的只读探测：复用下载器的列表/详情缓存，整体最多等 8 秒（R44：原 3 秒，公司里光列表常常就要 3 秒）。
 // 只查目标版本，避免「没有该版本」时逐个查询无关组件的版本详情。
 // strict（r56）：成员版只看 member-v<版本>（release 给了就只认这个版本名）；非 strict 的版本名必须以数字开头，member-* 自然排除。
 async function probe({ version, file, release, strict = false, fetchImpl, env = process.env, api = DEFAULT_API, projectId = PROJECT_ID,
-  timeoutMs = REACH_TIMEOUT_MS, now = Date.now } = {}) {
+  timeoutMs = LIST_TIMEOUT_MS, now = Date.now } = {}) {
   const row = { id: 'openx', name: '内源（公司内网）', informational: true, ok: false, version: version || null };
   const fail = reason => ({ ...row, status: 'failed', reason });
   if (!enabled(env)) return { ...row, status: 'off', reason: '内源已关闭' };
   if (!api || !projectId || typeof fetchImpl !== 'function') return fail('未配置内源或网络');
   if (reachability({ now }) === 'down') return fail(state.lastReason.replace(/^内源连不上[：]?/, '') || '稍后再试');
-  const budget = Math.min(timeoutMs, REACH_TIMEOUT_MS);
+  const budget = Math.min(timeoutMs, LIST_TIMEOUT_MS);
   const deadline = now() + budget;
   let timer;
   const pending = (async () => {
     let list;
-    try { list = await loadList({ fetchImpl, api, projectId, timeoutMs: budget, now }); }
+    try { list = await loadHead({ fetchImpl, api, projectId, timeoutMs: budget, now }); }
     catch (error) {
       markDown(error, now);
       state.lastReason = `内源连不上：${errText(error)}`;
@@ -284,10 +374,18 @@ async function probe({ version, file, release, strict = false, fetchImpl, env = 
     const want = normVersion(version);
     const pattern = strict ? /^member-v(\d+\.\d+\.\d+)(?:\s|$)/i : /^(\d+\.\d+\.\d+)(?:\s|$)/;
     const wantRelease = release ? normVersion(release).toLowerCase() : '';
-    const candidates = list.map(r => ({ ...r, appVersion: pattern.exec(normVersion(r.version))?.[1] }))
+    const pickFrom = records => records.map(r => ({ ...r, appVersion: pattern.exec(normVersion(r.version))?.[1] }))
       .filter(r => r.appVersion && (!want || r.appVersion === want))
       .filter(r => !strict || !wantRelease || (n => n === wantRelease || n.startsWith(wantRelease + ' '))(normVersion(r.version).toLowerCase()))
       .sort((a, b) => require('./manifest').compareVersions(b.appVersion, a.appVersion));
+    let candidates = pickFrom(list);
+    // 第 1 页里没有（要看的是较老的版本）再取完整列表（R44）。
+    if (!candidates.length && list !== state.list && moreAfterHead(list)) {
+      // 共享的完整列表按正常的 8 秒取（外层另有整体预算兜底），不按剩下的几百毫秒取，免得取出残缺列表（R44 审查 P1-2）。
+      try { candidates = pickFrom(await loadList({ fetchImpl, api, projectId, timeoutMs: LIST_TIMEOUT_MS, now })); }
+      catch (error) { return fail(`版本列表没取全：${errText(error)}`); }
+      if (!candidates.length && state.listPartialReason) return fail(`版本列表没取全：${state.listPartialReason}`);
+    }
     if (!candidates.length) return { ...row, status: 'missing' };
     if (!file) return { ...row, status: 'ok', ok: true, version: candidates[0].appVersion };
     for (const rec of candidates.slice(0, MAX_DETAIL_QUERIES)) {
@@ -314,18 +412,26 @@ async function probe({ version, file, release, strict = false, fetchImpl, env = 
 // 和它的离线签名 latest.json.sig，外网清单全部失败时从这里读：取内源上版本号最高、带 latest.json 的程序版本。采信条件（缺一条都当内源没有清单）：
 //   1. 签名用 Hub 内置公钥验过（manifest-signing.js）——内源谁都能传文件，不验签等于把升级交给任何能上传的人；
 //   2. 清单里的版本号和内源版本名一致；3. 版本不低于当前版本（防回退），主版本最多比当前高 1（防一次跳到离谱版本）。
-// 整个过程（列表、详情、清单、签名）总共不超过 8 秒；内源 5 分钟内刚连不上过就直接跳过。之后照常按清单的大小和 sha256 核对下载的文件。
+// 整个过程（列表、详情、清单、签名）后台检查不超过 8 秒、用户手动检查不超过 20 秒（R44）；内源 5 分钟内刚连不上过就直接跳过。之后照常按清单的大小和 sha256 核对下载的文件。
 // member-* 版本不看（与程序包下载同一口径）。
 const MANIFEST_FILE = 'latest.json';
 const MANIFEST_BUDGET_MS = 8000;
+// R44（2026-11-25）：用户手动「检查更新」给 20 秒（与 R42 回退页同一预算）；后台定时检查仍是 8 秒。
+const MANUAL_MANIFEST_BUDGET_MS = 20000;
+// 查清单只需要最近几个程序版本：只取列表第 1 页（接口按发布时间从新到旧），并留作第 1 页缓存给探测和下载复用。
+// 给用户看的两种平静说明（R44）：不在公司网络 / 在公司但内源慢。
+const OFFLINE_TEXT = '现在不在公司网络，查不了更新。连上公司内网或 VPN 后 Hub 会自动再查，不用操作';
+const OFFLINE_PROXY_TEXT = '现在不在公司网络（或本机代理没放行公司内网），查不了更新。连上公司内网或 VPN 后 Hub 会自动再查，不用操作';
+const slowText = sec => `公司内源响应太慢，${sec} 秒内没查完版本信息（内源可能正忙），稍后点旁边的「重试」再查一次`;
 async function fetchManifest({ fetchImpl, validate, signal, currentVersion, publicKey, api = DEFAULT_API, projectId = PROJECT_ID, env = process.env,
   timeoutMs = MANIFEST_BUDGET_MS, now = Date.now } = {}) {
   const startedAt = now();
   const result = (ok, extra) => ({ id: 'openx-manifest', name: '公司内源 · 版本清单', ok, ms: now() - startedAt, ...extra });
   if (!enabled(env)) return result(false, { reason: '内源已关闭' });
   if (!api || !projectId || typeof fetchImpl !== 'function' || typeof validate !== 'function') return result(false, { reason: '未配置内源' });
-  if (reachability({ now }) === 'down') return result(false, { reason: downText() });
-  const budget = Math.max(0, Math.min(Number(timeoutMs) || 0, MANIFEST_BUDGET_MS));
+  if (reachability({ now }) === 'down') return result(false, { reason: downText(), offline: !!(state.down && state.down.offline), proxy: !!(state.down && state.down.proxy) });
+  const budget = Math.max(0, Math.min(Number(timeoutMs) || 0, MANUAL_MANIFEST_BUDGET_MS));
+  const slow = () => result(false, { reason: `${budget / 1000} 秒内没读完内源版本清单`, slow: true });
   if (budget <= 0) return result(false, { reason: '没有剩余时间读内源版本清单' });
   const { compareVersions } = require('./manifest');
   const deadline = startedAt + budget;
@@ -345,11 +451,20 @@ async function fetchManifest({ fetchImpl, validate, signal, currentVersion, publ
   };
   const work = (async () => {
     let list;
-    try { list = await loadList({ fetchImpl, api, projectId, timeoutMs: left(), now }); }
+    try {
+      // 单次请求的超时比总预算多 1 秒：到点由总预算统一中断，结果归为「内源慢」，不会被当成连不上。
+      // 10 分钟内的完整列表或第 1 页缓存能用就用；否则只取第 1 页。
+      if (state.list && now() - state.listAt <= LIST_TTL_MS) list = state.list;
+      else if (state.head && now() - state.headAt <= LIST_TTL_MS) list = state.head;
+      else list = keepHead(await listPage({ fetchImpl, api, projectId, page: 1, timeoutMs: left() + 1000, signal: ac.signal }), now);
+    }
     catch (error) {
-      if (ac.signal.aborted && !(signal && signal.aborted)) return result(false, { reason: `${budget / 1000} 秒内没读完内源版本清单` });
+      // 外部取消（用户点取消、体检到点）不算连不上，不标 down（R44 审查 P1-3）。
+      if (signal && signal.aborted) return result(false, { reason: '已取消' });
+      // 网络栈自己报的超时（Chromium net::ERR_TIMED_OUT 等，可能比总预算早一点到）也归为「内源慢」，不标连不上。
+      if (ac.signal.aborted || isTimeoutError(error)) return slow();
       markDown(error, now); state.lastReason = `内源连不上：${errText(error)}`;
-      return result(false, { reason: `内源连不上：${errText(error)}` });
+      return result(false, { reason: `内源连不上：${errText(error)}`, offline: isOfflineError(error), proxy: isProxyError(error) });
     }
     const releases = list.map(r => ({ ...r, appVersion: /^(\d+\.\d+\.\d+)(?:\s|$)/.exec(normVersion(r.version))?.[1] }))
       .filter(r => r.appVersion)
@@ -383,22 +498,125 @@ async function fetchManifest({ fetchImpl, validate, signal, currentVersion, publ
       }
       return result(true, { manifest, releaseVersion: String(rec.version || '') });
     }
-    if (ac.signal.aborted) return result(false, { reason: signal && signal.aborted ? '已取消' : `${budget / 1000} 秒内没读完内源版本清单` });
+    if (ac.signal.aborted) return signal && signal.aborted ? result(false, { reason: '已取消' }) : slow();
     // pending：内源连得上，只是新版的清单还没上来——不是用户能处理的故障，界面按「暂无可装的新版本」平静显示。
     return result(false, skipped ? { reason: skipped } : { reason: '内源上的程序版本还没有附带版本清单', pending: true });
   })().catch(error => {
     if (signal && signal.aborted) return result(false, { reason: '已取消' });
-    if (ac.signal.aborted) return result(false, { reason: `${budget / 1000} 秒内没读完内源版本清单` });
+    if (ac.signal.aborted) return slow();
     return result(false, { reason: `内源版本清单没读到：${error && error.message ? error.message : error}` });
   });
   try {
     const first = await Promise.race([work, overBudget]);
     if (first === 'cancel') return result(false, { reason: '已取消' });
-    return first === 'timeout' ? result(false, { reason: `${budget / 1000} 秒内没读完内源版本清单` }) : first;
+    return first === 'timeout' ? slow() : first;
   } finally {
     clearTimeout(timer);
     if (signal) signal.removeEventListener('abort', onAbort);
   }
+}
+
+// 可回退的历史版本（R42，2026-11-25 用户定「版本与回退只走内源」）：内源上每个程序版本（v<版本>，发版同步 openx_sync.py 每版一个）
+// 都附带那一版自己的 latest.json 和离线签名 latest.json.sig。逐版读出来、用 Hub 内置公钥验签，签名对、版本名与清单一致、
+// 同一版本里确实有清单写的完整更新包，才列为可回退版本；完整更新包的大小与 sha256 就取自这份签过名的清单，下载后照常核对。
+// 没签名的早期版本（R29 之前发的）、签名不对、缺包的版本不列，原因记进 skipped 给界面一行说明。
+// 已验过的版本按内源版本 id 缓存（发出去的版本内容不变），再次打开只查新增的版本。member-* 不看。
+const RELEASES_BUDGET_MS = 20000;
+const RELEASES_MAX = 20;
+const verifiedReleases = new Map();
+async function listAppReleases({ fetchImpl, validate, publicKey, signal, env = process.env, api = DEFAULT_API, projectId = PROJECT_ID,
+  max = RELEASES_MAX, timeoutMs = RELEASES_BUDGET_MS, concurrency = 4, now = Date.now } = {}) {
+  const fail = reason => ({ ok: false, reason, versions: [], skipped: [] });
+  if (!enabled(env)) return fail('内源已关闭');
+  if (!api || !projectId || typeof fetchImpl !== 'function' || typeof validate !== 'function') return fail('未配置内源');
+  const { compareVersions } = require('./manifest');
+  const deadline = now() + Math.max(1, Number(timeoutMs) || RELEASES_BUDGET_MS);
+  const left = () => Math.max(1, Math.min(REACH_TIMEOUT_MS * 2, deadline - now()));
+  let list;
+  try { list = await loadList({ fetchImpl, api, projectId, timeoutMs: Math.min(LIST_TIMEOUT_MS, Math.max(1, deadline - now())), now }); }
+  catch (error) {
+    if (signal && signal.aborted) return fail('已取消');
+    markDown(error, now); state.lastReason = `内源连不上：${errText(error)}`;
+    return fail(`内源连不上：${errText(error)}`);
+  }
+  const seen = new Set();
+  const releases = list.filter(r => !isMemberRelease(r.version))
+    .map(r => ({ ...r, appVersion: /^(\d+\.\d+\.\d+)(?:\s|$)/.exec(normVersion(r.version))?.[1] }))
+    .filter(r => r.appVersion)
+    .sort((a, b) => compareVersions(b.appVersion, a.appVersion) || (Date.parse(b.releaseTime || '') || 0) - (Date.parse(a.releaseTime || '') || 0))
+    .filter(r => (seen.has(r.appVersion) ? false : (seen.add(r.appVersion), true)))
+    .slice(0, Math.max(1, max));
+  const getBuf = async url => {
+    const ac = new AbortController();
+    const onAbort = () => ac.abort();
+    if (signal) { if (signal.aborted) ac.abort(); else signal.addEventListener('abort', onAbort, { once: true }); }
+    const timer = setTimeout(() => ac.abort(), left());
+    try {
+      const res = await fetchImpl(url, { signal: ac.signal, cache: 'no-store', redirect: 'error' });
+      if (res && res.status >= 300 && res.status < 400) throw new Error(`内源要求跳转（HTTP ${res.status}），不跟随`);
+      if (!res || !res.ok) throw new Error(`内源返回 HTTP ${res && res.status}`);
+      return typeof res.arrayBuffer === 'function' ? Buffer.from(await res.arrayBuffer()) : Buffer.from(String(await res.text()), 'utf8');
+    } finally { clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); }
+  };
+  const one = async rec => {
+    const cacheKey = `${rec.id}:${rec.appVersion}`;
+    if (verifiedReleases.has(cacheKey)) return verifiedReleases.get(cacheKey);
+    let packages = state.details.get(rec.id);
+    if (!packages) {
+      const data = await getJson(fetchImpl, `${api}by_id?id=${encodeURIComponent(rec.id)}`, signal, left());
+      packages = Array.isArray(data.binaryPackages) ? data.binaryPackages : [];
+      state.details.set(rec.id, packages);
+    }
+    const pick = name => packages.find(p => p && String(p.originalFileName || '').toLowerCase() === String(name).toLowerCase() && safeUrl(p.url));
+    const hit = pick(MANIFEST_FILE);
+    if (!hit) return { skip: '没有附带版本清单' };
+    const sigHit = pick(MANIFEST_FILE + signing.SIG_FILE_SUFFIX);
+    if (!sigHit) return { skip: '版本清单没有签名' };
+    const [raw, sig] = await Promise.all([getBuf(safeUrl(hit.url)), getBuf(safeUrl(sigHit.url))]);
+    if (!signing.verifyManifest(raw, sig.toString('utf8'), publicKey)) return { skip: '版本清单签名不对' };
+    const manifest = await validate(JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, '')));
+    if (normVersion(manifest.version) !== rec.appVersion) return { skip: `附带的清单写的是 v${manifest.version}` };
+    if (!manifest.incremental) return { skip: '这一版没有完整更新包' };
+    const file = manifest.incremental.file;
+    if (!pick(file) && !pick(`${file}.000`)) return { skip: `内源上缺完整更新包 ${file}` };
+    const entry = { version: rec.appVersion, publishedAt: manifest.publishedAt || String(rec.releaseTime || ''), runtime: manifest.runtime,
+      incremental: { ...manifest.incremental }, notes: manifest.notes || [], releaseVersion: String(rec.version || ''), releaseId: rec.id };
+    const out = { entry };
+    verifiedReleases.set(cacheKey, out);
+    return out;
+  };
+  const versions = [], skipped = [];
+  let timedOut = false;
+  // 小并发逐版核验：每版一次详情 + 两个小文件；到总预算就停，已核验的照常列出，界面说明「还有更早的版本没读完」。
+  const queue = releases.slice();
+  const worker = async () => {
+    while (queue.length) {
+      if (signal && signal.aborted) return;
+      if (now() >= deadline) { timedOut = true; return; }
+      const rec = queue.shift();
+      try {
+        const r = await one(rec);
+        if (r.entry) versions.push(r.entry);
+        // 没通过的版本可能是发版同步到一半：丢掉它的详情缓存，下次重查附件列表（R42 审查 P2-4）。
+        else { state.details.delete(rec.id); skipped.push({ version: rec.appVersion, why: r.skip }); }
+      } catch (error) {
+        if (signal && signal.aborted) return;
+        state.details.delete(rec.id);
+        skipped.push({ version: rec.appVersion, why: `没读到：${error && error.message ? error.message : error}` });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, releases.length || 1)) }, worker));
+  // 最后几版在预算到点时被中断（队列已空、错误记进 skipped）也算没读完（R42 审查 P2-3）。
+  if (now() >= deadline) timedOut = true;
+  if (signal && signal.aborted) return fail('已取消');
+  versions.sort((a, b) => compareVersions(b.version, a.version));
+  skipped.sort((a, b) => compareVersions(b.version, a.version));
+  if (!versions.length) {
+    if (!releases.length) return { ...fail(state.listPartialReason ? `版本列表没取全：${state.listPartialReason}` : '内源上还没有程序版本'), skipped };
+    return { ...fail(timedOut ? `${Math.round((Number(timeoutMs) || RELEASES_BUDGET_MS) / 1000)} 秒内没读完内源上的版本清单` : '内源上的版本都没有通过签名校验的清单'), skipped };
+  }
+  return { ok: true, versions, skipped, partial: timedOut || queue.length > 0 || !!state.listPartialReason };
 }
 
 // 内源上最近的完整安装包（r27，2026-11-24）：不依赖版本清单，直接在内源的程序版本里找 <名>-Setup-<版本>.exe
@@ -408,16 +626,17 @@ async function fetchManifest({ fetchImpl, validate, signal, currentVersion, publ
 const FULL_PACKAGE_RE = /^.+-Setup-(\d+\.\d+\.\d+)\.exe$/i;
 const PORTABLE_PACKAGE_RE = /^.+-(\d+\.\d+\.\d+)-win-x64\.zip$/i;
 async function findLatestFull({ fetchImpl, portable = false, currentVersion = '', env = process.env, api = DEFAULT_API, projectId = PROJECT_ID,
-  timeoutMs = REACH_TIMEOUT_MS, now = Date.now } = {}) {
+  timeoutMs: givenTimeoutMs, now = Date.now } = {}) {
+  const timeoutMs = givenTimeoutMs || REACH_TIMEOUT_MS;
   const miss = reason => ({ ok: false, reason });
   if (!enabled(env)) return miss('内源已关闭');
   if (!api || !projectId || typeof fetchImpl !== 'function') return miss('未配置内源');
   if (reachability({ now }) === 'down') return miss(downText());
   const { compareVersions } = require('./manifest');
-  const deadline = now() + timeoutMs * 2;
   let list;
-  try { list = await loadList({ fetchImpl, api, projectId, timeoutMs, now }); }
+  try { list = await loadList({ fetchImpl, api, projectId, timeoutMs: givenTimeoutMs || LIST_TIMEOUT_MS, now }); }
   catch (error) { markDown(error, now); state.lastReason = `内源连不上：${errText(error)}`; return miss(`内源连不上：${errText(error)}`); }
+  const deadline = now() + timeoutMs * 2;   // 逐个查详情的预算从列表取到之后算起（R44）
   const cur = normVersion(currentVersion);
   const releases = list.filter(r => !isMemberRelease(r.version))
     .map(r => ({ ...r, appVersion: /^(\d+\.\d+\.\d+)(?:\s|$)/.exec(normVersion(r.version))?.[1] }))
@@ -463,14 +682,14 @@ function downloadPageUrl(name = state.projectName) {
   if (!slug || !CONFIG || !CONFIG.fileSite) return '';
   try { return safeUrl(new URL(`${encodeURIComponent(slug)}/download`, CONFIG.fileSite).href); } catch (_) { return ''; }
 }
-async function resolveDownloadPageUrl({ fetchImpl, api = DEFAULT_API, projectId = PROJECT_ID, timeoutMs = REACH_TIMEOUT_MS, env = process.env, now = Date.now } = {}) {
+async function resolveDownloadPageUrl({ fetchImpl, api = DEFAULT_API, projectId = PROJECT_ID, timeoutMs = LIST_TIMEOUT_MS, env = process.env, now = Date.now } = {}) {
   const existing = downloadPageUrl(state.projectName);
   if (existing) return existing;
   if (!enabled(env) || !api || !projectId || typeof fetchImpl !== 'function') return '';
-  try { await loadList({ fetchImpl, api, projectId, timeoutMs, now }); } catch (_) { return ''; }
+  try { await loadHead({ fetchImpl, api, projectId, timeoutMs, now }); } catch (_) { return ''; }
   return downloadPageUrl(state.projectName);
 }
 
-function _reset() { state = freshState(); }
+function _reset() { state = freshState(); verifiedReleases.clear(); }
 
-module.exports = { active, userReason, NETWORK_HINT, findLatestFull, fetchManifest, MANIFEST_BUDGET_MS, diagnostics, clearDown, EDITION_ON, releaseName, memberReleaseName, isMemberRelease, find, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, projectName, downloadPageUrl, resolveDownloadPageUrl, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };
+module.exports = { active, userReason, NETWORK_HINT, findLatestFull, listAppReleases, RELEASES_MAX, fetchManifest, MANIFEST_BUDGET_MS, MANUAL_MANIFEST_BUDGET_MS, OFFLINE_TEXT, OFFLINE_PROXY_TEXT, slowText, isOfflineError, isProxyError, diagnostics, clearDown, EDITION_ON, releaseName, memberReleaseName, isMemberRelease, find, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, projectName, downloadPageUrl, resolveDownloadPageUrl, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS, LIST_TIMEOUT_MS, LIST_PAGE_SIZE };

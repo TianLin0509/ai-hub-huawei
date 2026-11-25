@@ -78,6 +78,7 @@
    "renderer/hub-restart-controller.js",
    "renderer/troubleshoot-feedback.js",
    "renderer/turn-error-help.js",
+   "renderer/version-picker.js",
    "renderer/whats-new.js"
   ],
   "session": [

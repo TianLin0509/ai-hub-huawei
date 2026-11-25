@@ -7,13 +7,20 @@ const PUBLIC_KEY = crypto.createPublicKey({ key: Buffer.from('302a300506032b6570
 const ordered = value => Array.isArray(value) ? value.map(ordered) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(k => [k, ordered(value[k])])) : value;
 const version = v => String(v).split('.').map(Number).reduce((n, v) => n * 1000 + v, 0);
+// 验签结果按清单原文记住（2026-11-25 R40b）：同一份字节验签结果必然相同，15 秒巡检和会议室页每 3 秒的状态读取不再每次都做 Ed25519。
+// 文件内容一变（升级、被改）就按新原文重新验签；只记验过的，失败的不记。
+const verifiedManifests = new Map();
 function manifest(file) {
-  const m = JSON.parse(fs.readFileSync(file, 'utf8')), { signature, ...body } = m;
+  const raw = fs.readFileSync(file, 'utf8');
+  const hit = verifiedManifests.get(file);
+  if (hit && hit.raw === raw) return JSON.parse(raw);
+  const m = JSON.parse(raw), { signature, ...body } = m;
   if (m.app !== 'mishu-terminator' || !/^\d+\.\d+\.\d+$/.test(m.version)
       || !crypto.verify(null, Buffer.from(JSON.stringify(ordered(body)), 'utf8'), PUBLIC_KEY, Buffer.from(signature || '', 'hex'))) throw new Error('秘书组件签名不正确，未安装');
   for (const a of [m.code, m.exe].filter(Boolean)) {
     if (!/^[A-Za-z0-9_.-]+$/.test(a.file) || !Number.isSafeInteger(a.size) || a.size < 1 || !/^[a-f0-9]{64}$/.test(a.sha256)) throw new Error('秘书组件清单格式不正确');
   }
+  verifiedManifests.set(file, { raw });
   return m;
 }
 function verified(file, asset) {

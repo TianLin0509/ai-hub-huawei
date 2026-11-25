@@ -170,12 +170,15 @@ function makeController(fetchImpl, { pinned = false } = {}) {
     env: { ...ENV, AI_HUB_UPDATE_RESOURCES: os.tmpdir(), AI_HUB_UPDATE_FORCE_APPLY: '1' } });
 }
 
-test('老配置迁移（R35）：外网更新源、发布页、抢先版、版本固定都不再使用；状态里没有这些字段', async () => {
+test('老配置迁移（R35；R42 恢复内源回退后）：外网更新源、发布页、抢先版不再使用；外网时代留下的固定版本照旧清掉', async () => {
   const net = appNet();
   const c = makeController(net.fetchImpl, { pinned: true });
   const s = c.getState();
-  for (const k of ['sources', 'releasePage', 'openxOnly', 'previewSupported', 'previewEnabled', 'pinned']) assert.equal(k in s, false, k);
-  for (const k of ['setPreviewEnabled', 'listVersions', 'rollbackTo', 'returnToLatest', 'pinCurrent', 'restoreBackup']) assert.equal(typeof c[k], 'undefined', k);
+  for (const k of ['sources', 'releasePage', 'openxOnly', 'previewSupported', 'previewEnabled']) assert.equal(k in s, false, k);
+  assert.equal(typeof c.setPreviewEnabled, 'undefined');
+  // R42：版本与回退恢复（只走内源）；R35 之前留下的固定（不带 channel:'openx'）启动时清掉，回到跟随最新版。
+  assert.equal(s.pinned, null);
+  for (const k of ['listVersions', 'rollbackTo', 'returnToLatest', 'pinCurrent', 'restoreBackup']) assert.equal(typeof c[k], 'function', k);
   assert.doesNotMatch(JSON.stringify(s), /阿里云|GitHub|github\.com|example\.invalid/);
   await c.check({ silent: true, quietAllowed: false });
   assert.equal(c.getState().phase, 'available', '以前固定过版本的，后台检查照常查到新版');
@@ -215,12 +218,14 @@ test('下载更新包：只走内源；内源没有这个包时报原因，不�
   assert.ok(!net.urls.some(u => EXTERNAL.test(u)));
 });
 
-test('IPC（R35）：版本选择 / 回退 / 抢先版的通道已删，界面脚本也不在了', () => {
+test('IPC（R35 / R42）：抢先版通道与脚本已删；版本与回退（只走内源）的通道和界面恢复', () => {
   const handles = [];
   require('../main/app-update-controller').registerAppUpdateIpc({ handle: name => handles.push(name) }, {});
-  for (const name of ['app-update:list-versions', 'app-update:rollback', 'app-update:return-latest', 'app-update:pin-current', 'app-update:restore-backup', 'app-update:set-preview']) assert.ok(!handles.includes(name), name);
-  for (const f of ['renderer/version-picker.js', 'core/app-update/version-catalog.js', 'core/app-update/canary.js']) assert.equal(fs.existsSync(path.join(ROOT, f)), false, f);
-  assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'renderer/index.html'), 'utf8'), /version-picker\.js/);
+  assert.ok(!handles.includes('app-update:set-preview'));
+  assert.equal(fs.existsSync(path.join(ROOT, 'core/app-update/canary.js')), false);
+  for (const name of ['app-update:list-versions', 'app-update:rollback', 'app-update:return-latest', 'app-update:pin-current', 'app-update:restore-backup']) assert.ok(handles.includes(name), name);
+  for (const f of ['renderer/version-picker.js', 'core/app-update/version-catalog.js']) assert.equal(fs.existsSync(path.join(ROOT, f)), true, f);
+  assert.match(fs.readFileSync(path.join(ROOT, 'renderer/index.html'), 'utf8'), /version-picker\.js/);
 });
 
 test('PPT Doctor（R35）：浏览器下载入口（镜像 / GitHub）整条删除，只留一键安装', () => {
@@ -276,8 +281,9 @@ test('静态扫描：英文词典里与下载相关的「Alibaba Cloud / GitHub�
   assert.deepEqual(hits, []);
 });
 
-// R35：界面与英文词典里不再出现已废弃的下载源说法（多源、源顺序、备用源、放行下载服务器、抢先版、版本回退、只能更新到最新版）。
-const DEAD_SOURCE_WORDS = /更新源|下载源|备用源|多个源|按顺序尝试|源顺序|放行下载服务器|下载服务器放行|抢先版|版本与回退|回退到|只能更新到最新版|内源优先|发布页|外部源/;
+// R35：界面与英文词典里不再出现已废弃的下载源说法（多源、源顺序、备用源、放行下载服务器、抢先版、只能更新到最新版）。
+// R42（2026-11-25 用户定）：「版本与回退」恢复、只走内源，不再算废弃说法；回退页不得提镜像或外网（见 unit-r42-rollback-openx.test.js）。
+const DEAD_SOURCE_WORDS = /更新源|下载源|备用源|多个源|按顺序尝试|源顺序|放行下载服务器|下载服务器放行|抢先版|只能更新到最新版|内源优先|发布页|外部源/;
 test('静态扫描（R35）：界面代码和英文词典里不再出现已废弃下载源的说法', () => {
   const hits = [];
   for (const file of renderFiles()) {

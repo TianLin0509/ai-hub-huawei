@@ -27,11 +27,9 @@ const FALLBACK_ID = 'galaxy-constellation';
 const DEFAULT_PREFERENCES = Object.freeze({ selected: DEFAULT_ID, frequency: 'daily' });
 // 2026-11-22 2.0.0 起目录里有 mp4 视频包，v5.6.79 及更早版本的校验会整份拒收 → 新目录改名 catalog-v2.json，旧 catalog.json 留给老版本。
 // 2026-11-24 3.0.0 加了 Gemini（旧版本不认这个角色，同样会整份拒收）→ 再改名 catalog-v3.json，catalog-v2.json 原样留给旧版本。
-const SOURCES = Object.freeze([
-  { id: 'aliyun-fast', name: '阿里云高速', manifest: 'https://dl.lt-stockpartner.tech/hub-update/boot-splash/catalog-v3.json', files: 'https://dl.lt-stockpartner.tech/hub-update/boot-splash/' },
-  { id: 'github', name: 'GitHub', manifest: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/boot-splash-v1/catalog-v3.json', files: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/boot-splash-v1/' },
-  { id: 'aliyun', name: '阿里云', manifest: 'https://me.lt-stockpartner.tech/hub-update/boot-splash/catalog-v3.json', files: 'https://me.lt-stockpartner.tech/hub-update/boot-splash/' },
-]);
+// 2026-11-25 HUB-H 铁律：只从公司内源取（目录读随包快照，下载走内源 boot-splash-<包版本>），客户端不再写阿里云、GitHub 地址。
+// 只在内源关闭（AI_HUB_OPENX=0）的测试里，由调用方注入本地夹具源（AI_HUB_BOOT_SPLASH_SOURCES 或 sources 参数）。
+const SOURCES = Object.freeze([]);
 
 function isWebp(buf) {
   return Buffer.isBuffer(buf) && buf.length >= 16 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';

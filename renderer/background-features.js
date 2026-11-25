@@ -1,7 +1,7 @@
 'use strict';
 // 设置「资源与后台」页（2026-11-23 低开销模式）：低开销模式总开关 + 每项后台功能的开关与当前占用，一屏放下。
 // 开关状态来自主进程 optional-features:list（renderer/optional-features.js 的 window.__optionalFeatures 缓存），
-// 模式总开关走 low-overhead:set；占用走 resource-usage:snapshot，只在本页显示着时每 10 秒取一次，离开就停。
+// 模式总开关走 low-overhead:set；占用走 resource-usage:snapshot，只在本页显示着时每 20 秒取一次，离开就停。
 // 说明文字（用途、开销）收进每行名称旁的 ⓘ，不常驻占版面。
 // 另管两处入口：底栏「网速 关 / GPU 关」点一下到这页；老用户升级后右下角提示一次「可以开启低开销模式」。
 
@@ -98,9 +98,10 @@ function mountBackgroundFeatures({ document, window, ipcRenderer, openConfigModa
       <div class="bg-err" data-bg="err"${lastError ? '' : ' hidden'}>${esc(lastError)}</div>`;
   }
 
-  async function refreshUsage() {
+  // force：要最新采样（首屏补读、开关切换后、点刷新）；定时刷新不传，可复用 1 秒内的采样。
+  async function refreshUsage(force = false) {
     try {
-      const r = await ipcRenderer.invoke('resource-usage:snapshot');
+      const r = await ipcRenderer.invoke('resource-usage:snapshot', { force: force === true });
       if (r && r.ok) { usage = r; usageError = ''; } else usageError = (r && r.error) || '没读到';
     } catch (error) { usageError = error.message; }
     render();
@@ -111,7 +112,8 @@ function mountBackgroundFeatures({ document, window, ipcRenderer, openConfigModa
   const visible = () => !!section && section.offsetParent !== null && !document.hidden;
   function startPolling() {
     if (timer) return;
-    timer = window.setInterval(() => { if (visible()) void refreshUsage(); else stopPolling(); }, 10000);
+    // 页面开着时每 20 秒刷新一次占用（2026-11-25 R40b：原 10 秒；每次要枚举全机进程）。
+    timer = window.setInterval(() => { if (visible()) void refreshUsage(); else stopPolling(); }, 20000);
   }
   function stopPolling() { if (timer) window.clearInterval(timer); timer = null; }
   async function onShown() {
@@ -119,7 +121,7 @@ function mountBackgroundFeatures({ document, window, ipcRenderer, openConfigModa
     render();
     // 第一次读只有一份采样、算不出 CPU：1.5 秒后再读一次补上。
     await refreshUsage();
-    window.setTimeout(() => { if (visible()) void refreshUsage(); }, 1500);
+    window.setTimeout(() => { if (visible()) void refreshUsage(true); }, 1500);
     startPolling();
   }
 
@@ -157,9 +159,9 @@ function mountBackgroundFeatures({ document, window, ipcRenderer, openConfigModa
         }
       } catch (error) { lastError = error.message; }
       busy = false; render();
-      window.setTimeout(() => { if (visible()) void refreshUsage(); }, 1200);
+      window.setTimeout(() => { if (visible()) void refreshUsage(true); }, 1200);
     });
-    section.addEventListener('click', event => { if (event.target.closest('[data-bg="refresh"]')) void refreshUsage(); });
+    section.addEventListener('click', event => { if (event.target.closest('[data-bg="refresh"]')) void refreshUsage(true); });
     // 切到本页签、或弹窗打开时正停在本页签：开始读占用。
     new window.MutationObserver(() => { if (visible()) { if (!timer) void onShown(); } else stopPolling(); })
       .observe(section, { attributes: true, attributeFilter: ['class', 'hidden', 'style'] });

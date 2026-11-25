@@ -13,12 +13,15 @@ const launchGuard = require('../core/app-update/launch-guard');
 
 const STARTUP_CHECK_DELAY_MS = 20000;
 const PERIODIC_CHECK_MS = 6 * 60 * 60 * 1000;
+// R44：不在公司网络或内源太慢而没查成时，30 分钟后在后台静默再查一次（不弹窗、不标红）；连上公司网络后自然查到。
+const OFFLINE_RECHECK_MS = 30 * 60 * 1000;
 // 小版本静默送达：只改末位的版本不打扰用户（不弹窗、不挂红点），但也要真的送到。后台下载校验，用户下次关闭 Hub 时隐藏替换、不重开，
 // 下次打开就是新版，并由更新日志告诉用户多了什么。装在受保护目录（要管理员授权）的不静默，仍走设置菜单。用户可以在更新窗口里关掉。
 const QUIET_OFF_FILE = 'quiet-updates-off.flag';
 // 上一轮升级留下的进度与标记，多久没动过算残留（r43）。
 const STALE_UPGRADE_MS = 10 * 60 * 1000;
 const openxSource = require('../core/app-update/openx-source');
+const catalogLib = require('../core/app-update/version-catalog');
 const { createOpenxDownloadRecorder } = require('./openx-download-recorder');
 
 function resolveFetch(fetchImpl) {
@@ -84,7 +87,12 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   const probeInternalSource = async (version, file, timeoutMs) => openxSource.probe({ version, file, fetchImpl: resolveFetch(fetchImpl), env, timeoutMs,
     ...(openxSource.EDITION_ON ? {} : { strict: true, release: version ? openxSource.memberReleaseName(version) : undefined }) });
   let state = { phase: 'idle', current: currentVersion, sourceEdition, internalSource: initialInternalSource(), canApply: isPackaged || env.AI_HUB_UPDATE_FORCE_APPLY === '1' };
-  let manifest = null, plan = null, abort = null, checkAbort = null, staged = null, checking = null, lastResult = null, timer = null;
+  let manifest = null, plan = null, abort = null, checkAbort = null, staged = null, checking = null, checkingSilent = false, lastResult = null, timer = null, recheckTimer = null;
+  const scheduleRecheck = () => {
+    if (recheckTimer) return;
+    recheckTimer = setTimeout(() => { recheckTimer = null; void check({ silent: true }); }, Number(env.AI_HUB_UPDATE_RECHECK_MS) || OFFLINE_RECHECK_MS);
+    recheckTimer.unref?.();
+  };
   const quietTried = new Set();
   let skipQuitApply = false;
   const quietOffFile = () => path.join(stagingPaths(dataDir).root, QUIET_OFF_FILE);
@@ -173,17 +181,23 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     try { return !require('../core/portable-desktop-shortcut').isInstalledCopy(process.execPath); } catch (_) { return false; }
   };
   state.portable = isPortable();
-  // R35：版本回退与「固定在当前版本」已随外网版本列表一起删掉；以前固定过版本的，清掉固定，恢复跟随最新版。
-  try { fs.rmSync(path.join(dataDir, 'app-update', 'pinned-version.json'), { force: true }); } catch (_) {}
+  // 固定版本（回退后，R42 恢复）：自动更新与更新提醒暂停；回退没换上就清掉固定并告诉用户（version-catalog.js）。
+  // R35 之前外网时代留下的固定（不带 channel:'openx'）在 settlePin 里清掉，本版起新写的固定保留。
+  let pinned = null, versionList = null;
+  try { const settled = catalogLib.settlePin(dataDir, currentVersion, lastResult); pinned = settled.pin; if (settled.failed) state.rollbackFailed = { version: settled.failed.version }; }
+  catch (error) { logger.warn?.('[app-update] 读取固定版本失败：', error.message); }
+  state.pinned = pinned;
+  try { const rr = catalogLib.readRestoreResult(dataDir); if (rr && Date.now() - Date.parse(rr.at) < 24 * 3600 * 1000) state.restoreResult = rr; } catch (_) {}
 
   // 界面看到的 = 控制器状态 + 等待重启的状态（读不到就当没在等）。
   const view = () => { let wait = null; try { wait = restartWait() || null; } catch (_) {} return { ...state, restartWait: wait }; };
-  const emit = patch => { state = { ...state, ...(patch && 'phase' in patch ? { pending: false } : {}), ...patch }; if (needsFullPackage(state)) lookupFullPackage(); try { sendToRenderer('app-update:state', view()); } catch (_) {} return state; };
+  const emit = patch => { state = { ...state, ...(patch && 'phase' in patch ? { pending: false, errorKind: null } : {}), ...patch }; if (needsFullPackage(state)) lookupFullPackage(); try { sendToRenderer('app-update:state', view()); } catch (_) {} return state; };
   // r27（2026-11-24，WeLink 2 人：老版本找不到更新途径）：检查或下载失败、上次升级没成时（读到了版本清单、只是要完整包的，原有按钮已能下），
   // 在后台从内源找最近一个比当前新的完整安装包（不依赖版本清单，openx-source.js findLatestFull），找到就放进 state.fullPackage，
   // 更新窗和失败提示据此给「下载完整安装包」按钮。没找到不报错，1 分钟内不重找。
   let fullLookup = null, fullTriedAt = 0;
-  function needsFullPackage(s) { return !s.fullPackage && (s.phase === 'error' || (s.phase === 'none' && !!s.pending) || !!(s.lastResult && !s.lastResult.ok)); }
+  // 不在公司网络（errorKind offline）时内源根本连不上，不白找、也不占掉 1 分钟的重找冷却（R44 审查 P2-6）。
+  function needsFullPackage(s) { return !s.fullPackage && ((s.phase === 'error' && s.errorKind !== 'offline') || (s.phase === 'none' && !!s.pending) || !!(s.lastResult && !s.lastResult.ok)); }
   function lookupFullPackage() {
     if (fullLookup || Date.now() - fullTriedAt < 60 * 1000) return;
     fullTriedAt = Date.now();
@@ -211,7 +225,18 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   if (needsFullPackage(state)) lookupFullPackage();
 
   async function check({ silent = false, quietAllowed = silent } = {}) {
+    // R44 审查 P1-1：后台静默检查（8 秒）还在跑时用户点了「检查更新 / 重试」：中断静默的那次，按手动重查（显示「正在查询」、给 20 秒）。
+    if (checking && checkingSilent && !silent) {
+      const prev = checking;
+      if (checkAbort) checkAbort.abort();
+      await prev.catch(() => {});
+      if (checking === prev) { checking = null; checkAbort = null; }
+    }
     if (checking) return checking;
+    // 固定在旧版时：后台不查、不提醒、不静默下载；用户在版本页点「回到最新版」才恢复。
+    if (pinned && silent) return state;
+    // 马上要真的查一次，30 分钟后的静默再查就不用了（失败会重新排）。
+    if (recheckTimer) { clearTimeout(recheckTimer); recheckTimer = null; }
     if (state.phase === 'ready' && state.quiet && silent) {
       let discarded = false;
       checking = revalidateQuiet().then(result => { discarded = result; return state; }).finally(() => { checking = null; checkAbort = null; });
@@ -220,23 +245,42 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     }
     // 正在应用（已点「立即重启」）时不另查：否则会把界面改成「有新版本」，盖掉替换进度（r43）。
     if (['downloading', 'ready', 'applying'].includes(state.phase)) return state;
-    checking = (async () => {
-      if (!silent) emit({ phase: 'checking', error: null });
+    // 被手动检查接管的静默检查：中断后什么都不改，界面交给手动那次。
+    const myAbort = new AbortController();
+    const quit = () => (silent ? state : emit({ phase: 'idle', error: null }));
+    const run = (async () => {
+      if (!silent) emit({ phase: 'checking', error: null, errorKind: null });
       const fetchFn = resolveFetch(fetchImpl);
-      checkAbort = new AbortController();
+      const checkAbort = myAbort;
       // 直接读内源上的签名清单；用户点「检查更新」要真的再连一次内源。
       if (only()) openxSource.clearDown();
       let results = only() ? [] : await checkManifests({ sources, fetchImpl: fetchFn, validate: validateManifest, signal: checkAbort.signal });
-      if (checkAbort.signal.aborted) return emit({ phase: 'idle', error: null });
-      results = await withInternalManifest(results, checkAbort.signal);
-      if (checkAbort.signal.aborted) return emit({ phase: 'idle', error: null });
+      if (checkAbort.signal.aborted) return quit();
+      // R44：用户手动检查给内源 20 秒；后台检查仍按 8 秒。
+      results = await withInternalManifest(results, checkAbort.signal, silent ? undefined : openxSource.MANUAL_MANIFEST_BUDGET_MS);
+      if (checkAbort.signal.aborted) return quit();
       const checks = results.map(r => ({ id: r.id, name: r.name, ok: r.ok, version: r.ok ? r.manifest.version : null, reason: r.reason || null }));
       const best = results.filter(r => r.ok).sort((a, b) => compareVersions(b.manifest.version, a.manifest.version))[0];
-      const internalSource = await probeInternalSource(best?.manifest.version, best && [best.manifest.incremental?.file, best.manifest.incrementalDelta?.file, best.manifest.installer?.file].filter(Boolean));
-      if (checkAbort.signal.aborted) return emit({ phase: 'idle', error: null });
-      checks.unshift(internalSource);
       // R29 审查 #4：内源上最新的有效清单比本机还旧（本机装了更新的包）——就是已是最新，不报错。
       const olderRow = !best ? results.find(r => r && r.id === 'openx-manifest' && r.older) : null;
+      const pendingRow = !best && only() ? results.find(r => r && r.id === 'openx-manifest' && r.pending) : null;
+      // 清单都没查成时不再另探一次内源（R44）：结果一样是连不上，只会让用户多等 3 秒、界面再重复一遍同一句话。
+      if (!best && !olderRow && !pendingRow) {
+        const row = results.find(r => r && r.id === 'openx-manifest');
+        // R44：不在公司网络（快判）→ 平静说明、不催重试；在公司但内源慢 → 一句话 + 旁边一个「重试」；两种都在 30 分钟后静默再查。
+        const errorKind = !only() ? 'error' : row && row.offline ? 'offline' : row && row.slow ? 'slow' : 'error';
+        if (errorKind !== 'error') scheduleRecheck();
+        // 后台静默检查失败时，用户正看着的错误说明不刷回「点检查更新」（R44 审查 P1-1）。
+        if (silent && state.phase === 'error') return state;
+        const error = errorKind === 'offline' ? (row && row.proxy ? openxSource.OFFLINE_PROXY_TEXT : openxSource.OFFLINE_TEXT)
+          : errorKind === 'slow' ? openxSource.slowText(Math.round((silent ? openxSource.MANIFEST_BUDGET_MS : openxSource.MANUAL_MANIFEST_BUDGET_MS) / 1000))
+            : only() ? noManifestError(results) : '所有更新源都连不上，暂时查不到新版本';
+        return emit({ phase: silent ? 'idle' : 'error', checks, internalSource: row ? { id: 'openx', name: '内源（公司内网）', informational: true, ok: false, status: 'failed', reason: row.reason } : state.internalSource,
+          checkedAt: new Date().toISOString(), error, errorKind, silentFailure: silent });
+      }
+      const internalSource = await probeInternalSource(best?.manifest.version, best && [best.manifest.incremental?.file, best.manifest.incrementalDelta?.file, best.manifest.installer?.file].filter(Boolean));
+      if (checkAbort.signal.aborted) return quit();
+      checks.unshift(internalSource);
       if (olderRow) {
         manifest = null; plan = null;
         const row = checks.find(c => c.id === 'openx-manifest');
@@ -245,13 +289,10 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       }
       // 2026-11-25：内源连得上、只是新版清单还没上来——用户什么也做不了，不报红色错误，按「暂无可装的新版本」显示，
       // 后台照常定时再查；内源上若有更新的完整安装包，仍给下载按钮（needsFullPackage）。
-      const pendingRow = !best && only() ? results.find(r => r && r.id === 'openx-manifest' && r.pending) : null;
       if (pendingRow) {
         manifest = null; plan = null;
         return emit({ phase: 'none', pending: true, checks, internalSource, checkedAt: new Date().toISOString(), error: null, latest: null, plan: null });
       }
-      if (!best) return emit({ phase: silent ? 'idle' : 'error', checks, internalSource, checkedAt: new Date().toISOString(),
-        error: only() ? noManifestError(results) : '所有更新源都连不上，暂时查不到新版本', silentFailure: silent });
       manifest = best.manifest;
       // 能核对本机文件时才走小包（开发运行、没打包又没指定 resources 时无从核对）。
       const resDir = isPackaged || env.AI_HUB_UPDATE_RESOURCES ? (env.AI_HUB_UPDATE_RESOURCES || resourcesPath) : null;
@@ -293,9 +334,10 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       emit({ quietPending: willQuiet });
       if (quietAllowed && willQuiet) void quietDownload();
       return checked;
-    })().catch(error => emit({ phase: silent ? 'idle' : 'error', error: `检查更新失败：${error.message}` }))
-      .finally(() => { checking = null; checkAbort = null; });
-    return checking;
+    })().catch(error => (myAbort.signal.aborted && silent ? state : emit({ phase: silent ? 'idle' : 'error', error: `检查更新失败：${error.message}` })))
+      .finally(() => { if (checking === run) { checking = null; checkAbort = null; checkingSilent = false; } });
+    checking = run; checkAbort = myAbort; checkingSilent = !!silent;
+    return run;
   }
 
   // 完整安装包静默参数（electron-builder NSIS）：/S 不出向导；--updated 按升级处理、沿用原安装目录；
@@ -311,7 +353,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
 
   // 只有后台自动查到的、只改末位、走增量、能直接写安装目录的才静默；同一版本失败一次就不再试，等下一版。
   function shouldQuietDownload(resDir) {
-    if (!quietEnabled() || state.phase !== 'available' || !manifest || manifest.quiet === false || !plan) return false;
+    // 固定版本时不静默下载（R42 审查 P1-2）。
+    if (pinned || !quietEnabled() || state.phase !== 'available' || !manifest || manifest.quiet === false || !plan) return false;
     // 完整安装包（原生组件或运行时变了）也静默：下好后退出时静默安装，不再弹安装向导（2026-11-15）。
     if (plan.kind === 'full') return !!(plan.silent && plan.asset && !isNotableUpdate(currentVersion, manifest.version) && !quietTried.has(manifest.version));
     if (!state.canApply || plan.kind !== 'incremental') return false;
@@ -324,6 +367,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     emit({ quiet: true });
     try {
       const result = await download();
+      // 下载途中用户固定了版本：下好的静默包直接丢弃，不留到退出时替换。
+      if (pinned) { staged = null; return void emit({ phase: 'idle', quiet: false, error: null }); }
       if (result.phase !== 'ready') { logger.warn?.('[app-update] 静默下载没有完成：', result.error || result.phase); emit({ phase: 'available', quiet: false, quietPending: false, error: null }); }
     } catch (error) {
       logger.warn?.('[app-update] 静默下载出错：', error.message);
@@ -351,7 +396,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   // 以前后者在关 Hub 时被丢掉，下次打开这一版已提醒过、红点也已消掉，就再也不提醒（群友：叉掉小窗后不再自动升）。
   // 不重开程序、不弹任何东西；失败时脚本自己回滚，下次打开时设置挂点提醒。受保护目录（要管理员授权）不在退出时换。
   function applyOnQuit() {
-    if (skipQuitApply || state.phase !== 'ready' || !quietEnabled() || !staged || staged.needsAdmin) return false;
+    if (pinned || skipQuitApply || state.phase !== 'ready' || !quietEnabled() || !staged || staged.needsAdmin) return false;
     if (!state.quiet && staged.installer) return false;
     // 远程总开关（清单 quiet:false，Codex 审查 P1）：退出时一律不自动换；用户点「立即重启」不受影响。
     if (manifest && manifest.quiet === false) return false;
@@ -421,7 +466,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     const result = await runDownload();
     abort = null;
     // 查到新版后又发了一版、旧版附件被删：回 404。重新查一次清单，换到新版本再下一次（只重试一次）。
-    if (!result.ok && !result.cancelled && !_afterRecheck && (result.attempts || []).length && result.attempts.every(a => /HTTP 404|没有这个文件|没有该版本/.test(a.raw || a.reason || ''))) {
+    if (!result.ok && !result.cancelled && !_afterRecheck && !manifest.rollback && (result.attempts || []).length && result.attempts.every(a => /HTTP 404|没有这个文件|没有该版本/.test(a.raw || a.reason || ''))) {
       const triedFile = asset.file;
       emit({ phase: 'available' });
       await check({ silent: true, quietAllowed: false });
@@ -488,6 +533,92 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       reason, bytes: plan.asset.bytes, file: plan.asset.file } });
     // The complete variant cannot recurse back into the delta fallback.
     return download(true);
+  }
+
+  // —— 版本选择与回退（2026-11-16；R42 只走公司内源）——
+  // 本机运行时；开发运行没有解包目录可读，原生依赖按参照版本算，免得全部被过滤掉。
+  function localRuntime(refNative) {
+    const resDir = isPackaged || env.AI_HUB_UPDATE_RESOURCES ? (env.AI_HUB_UPDATE_RESOURCES || resourcesPath) : null;
+    let rt; try { rt = currentRuntime({ resourcesPath: resDir }); } catch (_) { rt = { electron: process.versions.electron, native: {} }; }
+    return !resDir && refNative ? { ...rt, native: { ...refNative } } : rt;
+  }
+  // 版本列表：只从公司内源读（每版附带的签名清单逐版验签，openx-source.js listAppReleases）；只列与本机运行时一致的版本。
+  // 内源连不上或一版都没验过时，返回 ok:false 和人话原因，界面一行说明，不改去外网。
+  let listing = null;
+  async function listVersions() {
+    if (listing) return listing;
+    listing = (async () => {
+      const backups = () => catalogLib.listBackups(dataDir).slice(0, 5);
+      if (!openxSource.enabled(env)) return { ok: false, current: currentVersion, pinned, items: [], hidden: [], skipped: [], backups: backups(),
+        error: '版本回退只从公司内源取旧版本，这个 Hub 没有启用公司内源（排查开关 AI_HUB_OPENX=0 或开发运行）' };
+      openxSource.clearDown();
+      const r = await openxSource.listAppReleases({ fetchImpl: resolveFetch(fetchImpl), validate: validateManifest, publicKey: manifestPublicKey, env });
+      if (!r.ok) {
+        return { ok: false, current: currentVersion, pinned, items: [], hidden: [], skipped: r.skipped || [], backups: backups(),
+          error: '读不到可回退的版本：' + openxSource.userReason(r.reason, { file: '版本清单' }) };
+      }
+      let history = [];
+      try { history = require('../core/app-update/release-history').loadHistory(); } catch (_) {}
+      versionList = r.versions;
+      const catalog = catalogLib.buildCatalog(r.versions, { current: currentVersion, runtime: localRuntime(r.versions[0].runtime.native), history });
+      return { ok: true, current: currentVersion, source: '公司内源', ...catalog, skipped: r.skipped || [], partial: !!r.partial, pinned, backups: backups() };
+    })().finally(() => { listing = null; });
+    return listing;
+  }
+  // 回退：先备份小文件，再从公司内源下载目标版的完整更新包（不走差量），按签名清单的大小和 sha256 核对；下载好后由用户点「立即重启」换上。
+  async function rollbackTo(version) {
+    if (checking || ['downloading', 'ready', 'applying'].includes(state.phase)) throw new Error('正在检查或下载别的版本，先完成或取消再回退');
+    if (!versionList || !versionList.some(v => v.version === version)) await listVersions();
+    const entry = (versionList || []).find(v => v.version === version);
+    if (!entry) throw new Error(`公司内源上找不到 v${version} 的签名清单`);
+    const target = catalogLib.targetManifest(entry);
+    const next = planUpdate(target, { version: currentVersion, runtime: localRuntime(entry.runtime.native), allowDowngrade: true });
+    if (next.kind !== 'incremental' || !next.downgrade) throw new Error(next.reason || `不能回退到 v${version}`);
+    // 另一个 Hub 开着同一份数据时不回退：备份拿不到一致快照、换程序时它也还在写。
+    catalogLib.assertNoOtherHub(dataDir);
+    const backup = catalogLib.backupForRollback(dataDir, { from: currentVersion, to: version });
+    manifest = target;
+    plan = { ...next, variant: 'complete', asset: entry.incremental, silent: false };
+    pinned = catalogLib.writePin(dataDir, { version, from: currentVersion, at: new Date().toISOString(), pending: true, backup: backup.dir,
+      supportsPin: catalogLib.supportsPin(version) });
+    emit({ pinned, rollback: { version, backup: { dir: backup.dir, files: backup.files, bytes: backup.bytes } },
+      latest: { version, notes: entry.notes, publishedAt: entry.publishedAt, notify: false, rollback: true },
+      plan: { kind: plan.kind, variant: plan.variant, reason: plan.reason, silent: false, bytes: plan.asset.bytes, file: plan.asset.file, downgrade: true } });
+    const result = await download();
+    // 回退取消或失败：清掉固定，界面状态也一并回到「没有待装的包」，失败时保留原因（R42 审查 P1-2）。
+    if (result.phase !== 'ready') {
+      catalogLib.clearPin(dataDir); pinned = null; manifest = null; plan = null; staged = null;
+      emit({ pinned: null, rollback: null, latest: null, plan: null, progress: null, phase: result.phase === 'error' ? 'error' : 'idle', ...(result.phase === 'error' ? {} : { error: null }) });
+    }
+    return view();
+  }
+  // 回到最新版：清掉固定，照常检查并下载最新版；下载好后用户点「立即重启」。
+  async function returnToLatest() {
+    if (['downloading', 'applying'].includes(state.phase)) throw new Error('正在下载，先完成或取消');
+    if (state.phase === 'ready') staged = null;
+    catalogLib.clearPin(dataDir); pinned = null;
+    manifest = null; plan = null;
+    emit({ pinned: null, rollback: null, latest: null, plan: null, phase: 'idle', error: null });
+    const checked = await check({ silent: false, quietAllowed: false });
+    if (checked.phase === 'available' && plan && ['incremental', 'full'].includes(plan.kind)) await download();
+    return view();
+  }
+  // 关掉「跟随最新版」但不回退：固定在当前版本，自动更新与提醒暂停。
+  // 后台静默下载在途就取消、已暂存的静默包丢弃；用户自己点的下载不动。
+  function pinCurrent() {
+    pinned = catalogLib.writePin(dataDir, { version: currentVersion, from: currentVersion, at: new Date().toISOString(), manual: true, supportsPin: true });
+    if (state.quiet && state.phase === 'downloading' && abort) abort.abort();
+    if (state.quiet && state.phase === 'ready') { staged = null; return emit({ pinned, phase: 'idle', quiet: false, error: null }); }
+    return emit({ pinned });
+  }
+  // 一键还原：数据库可能正开着，登记后重启，下次启动在打开任何数据库前还原。
+  function restoreBackup(dir) {
+    catalogLib.assertNoOtherHub(dataDir);
+    const res = catalogLib.scheduleRestore(dataDir, dir);
+    // 还原要重启：这次退出不顺手替换，免得替换脚本和重启后的新进程撞在一起。
+    skipQuitApply = true;
+    setTimeout(() => { try { app.relaunch(); app.quit(); } catch (error) { logger.warn?.('[app-update] 还原后重启失败：', error.message); } }, 300);
+    return res;
   }
 
   function cancel() { if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); return state; }
@@ -600,13 +731,16 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     if (only()) openxSource.clearDown();
     const external = only() ? [] : await checkManifests({ sources, fetchImpl: resolveFetch(fetchImpl), validate: validateManifest, timeoutMs });
     // 内源清单只用体检剩下的时间，到点就中断，体检总时长不因内源变长（rsi-e 返工）。
+    // fetchManifest 自带整体预算（到点归为「内源慢」）；不再另起一个同毫秒到点的取消计时器，免得到点被当成「已取消」（R44 审查 P1-3）。
     const remaining = timeoutMs - (Date.now() - started);
-    const probeAbort = new AbortController();
-    const probeTimer = setTimeout(() => probeAbort.abort(), Math.max(1, remaining));
-    let results;
-    try { results = remaining > 0 ? await withInternalManifest(external, probeAbort.signal, remaining) : external; }
-    finally { clearTimeout(probeTimer); }
+    const results = remaining > 0 ? await withInternalManifest(external, null, remaining) : external;
     const best = results.filter(r => r.ok).sort((a, b) => compareVersions(b.manifest.version, a.manifest.version))[0];
+    // 只走内源、清单没查成（也不是「比本机旧」）时，不再用剩下的一点时间另探内源——结果一样，徒增等待（同 check）。
+    const manifestRow = results.find(r => r && r.id === 'openx-manifest');
+    if (only() && !best && manifestRow && !manifestRow.older) {
+      return { current: currentVersion, sources: [{ id: 'openx', name: '内源（公司内网）', informational: true, ok: false, status: 'failed', reason: manifestRow.reason },
+        ...results.map(r => ({ id: r.id, name: r.name, ok: false, version: null, reason: r.reason || null, blocked: !!r.blocked }))] };
+    }
     const internalSource = await probeInternalSource(best?.manifest.version, best && [best.manifest.incremental?.file, best.manifest.incrementalDelta?.file, best.manifest.installer?.file].filter(Boolean), Math.max(1, timeoutMs - (Date.now() - started)));
     // 只走内源时内源清单比本机旧 = 已是最新，算连得上（R29 审查 #4）。
     const olderOk = r => !r.ok && r.older;
@@ -635,9 +769,16 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       if (!manifest || !manifest.installer) return null;
       return spec(manifest.version, isPortable() ? portableZipName(manifest.installer.file, manifest.version) : manifest.installer.file);
     });
+    // 「app-version:<版本>」：回退到该版本要下的完整更新包（R42，只在内源上找）。
+    pts.register('app-version:', async point => {
+      const version = String(point).slice('app-version:'.length);
+      if (!versionList) { try { await listVersions(); } catch (_) {} }
+      const entry = (versionList || []).find(v => v.version === version);
+      return entry && entry.incremental ? spec(version, entry.incremental.file) : null;
+    });
   }
-  return { check, probeSources, download, cancel, apply, applyCancelled, applyOnQuit, setQuietEnabled, setOpenxRecordEnabled, recordManualDownload, openxRecordDiagnostics, openxRecorder: recorder, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
-    dispose: () => { clearTimeout(timer); clearInterval(applyWatch); if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); recorder.dispose?.(); } };
+  return { check, probeSources, listVersions, rollbackTo, returnToLatest, restoreBackup, pinCurrent, download, cancel, apply, applyCancelled, applyOnQuit, setQuietEnabled, setOpenxRecordEnabled, recordManualDownload, openxRecordDiagnostics, openxRecorder: recorder, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
+    dispose: () => { clearTimeout(timer); clearTimeout(recheckTimer); clearInterval(applyWatch); if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); recorder.dispose?.(); } };
 }
 
 // { mode:'auto' } 有在途问题时回 needsConfirm；'wait' 答完再重启；'now' 立即重启（在途的记下、重启后接着做）；'cancel' 取消等待。
@@ -655,6 +796,11 @@ function registerAppUpdateIpc(ipcMain, controller, { gate = null } = {}) {
   });
   ipcMain.handle('app-update:dismiss-result', () => controller.dismissLastResult());
   ipcMain.handle('app-update:set-quiet', (_e, on) => controller.setQuietEnabled(on !== false));
+  ipcMain.handle('app-update:list-versions', () => controller.listVersions());
+  ipcMain.handle('app-update:rollback', (_e, version) => controller.rollbackTo(String(version || '')));
+  ipcMain.handle('app-update:return-latest', () => controller.returnToLatest());
+  ipcMain.handle('app-update:pin-current', () => controller.pinCurrent());
+  ipcMain.handle('app-update:restore-backup', (_e, dir) => controller.restoreBackup(String(dir || '')));
   ipcMain.handle('app-update:set-openx-record', (_e, on) => controller.setOpenxRecordEnabled(on !== false));
   ipcMain.handle('app-update:record-manual', (_e, meta) => controller.recordManualDownload(meta));
   ipcMain.handle('app-update:openx-record-diagnostics', () => controller.openxRecordDiagnostics());

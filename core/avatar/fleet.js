@@ -21,6 +21,7 @@ const OPEN = new Set(['new', 'drafting', 'ready', 'remind']), INBOX = new Set(['
 const TEXT_FILE = /\.(?:md|txt|csv|json|log)$/i;
 const short = (s, n) => { s = String(s ?? ''); return s.length > n ? s.slice(0, n) + '…' : s; };
 const sleepTurn = () => new Promise(resolve => setImmediate(resolve));
+const slowed = ms => { try { return require('../optional-features').slowedMs(ms); } catch { return ms; } };
 
 class FleetService {
   constructor(deps) {
@@ -30,13 +31,26 @@ class FleetService {
     this.timer = null; this.ticking = false; this.running = new Set(); this.sending = new Set(); this.live = new Map(); this.hotAt = 0; this.prep = null; this.readError = ''; this.lastError = ''; this.recovered = new Set();
   }
   assistant() { return this.legacy.assistant(); }
-  owner() { return this.legacy.owner(); }
+  // 和 legacy.owner() 同一规则（快照里的登录号优先，其次档案），但快照走下面带缓存的 snapshot()：原来每拍为取一个工号整份解析一次当天快照。
+  owner() {
+    const snap = this.snapshot();
+    if (snap?.login?.ok && snap.login.uid) return String(snap.login.uid);
+    try { return this.assistant()?.archive?.owner?.() || null; } catch { return null; }
+  }
   need() { const o = this.owner(); if (!o) throw new Error('还没确认 WeLink 登录，请先在助理页登录'); return o; }
   changed() { try { this.d.onChanged?.(); } catch { /* 页面没开 */ } }
   // 30 秒巡检（2026-11-23 开销优化）：一个分身都没有时巡检自己停下，不再每 30 秒读一遍配置；
   // 新建分身（任何写回 fleet.json 的操作）时由 saveFleet 重新拉起。没有分身本来就不列最近会话、不读群。
   start() { this.started = true; this.armTimer(); }
-  armTimer() { if (this.d.noTimer || this.timer || !this.started) return; this.timer = setInterval(() => { void this.tick().catch(e => { this.lastError = e.message; }); }, TICK_MS); this.timer.unref?.(); }
+  armTimer() { if (this.d.noTimer || this.timer || !this.started) return; this.timer = setInterval(() => this.timerTick(), TICK_MS); this.timer.unref?.(); }
+  // 定时巡检受低开销模式管（2026-11-25 R40b）：开着时 30 秒一拍放慢到 2 分钟（盯指定群、看最近会话同比放慢）；
+  // 用户在页面上的操作（新建、改配置、重新检查登录）照旧立即跑一拍。
+  timerTick() {
+    const now = this.now();
+    if (now - (this.timerAt || 0) < slowed(TICK_MS) - 1000) return;
+    this.timerAt = now;
+    void this.tick().catch(e => { this.lastError = e.message; });
+  }
   idleStop() { clearInterval(this.timer); this.timer = null; }
   close() { this.started = false; this.idleStop(); }
   pickAccount(model) {
@@ -52,9 +66,17 @@ class FleetService {
     const saved = this.legacy.read(owner, 'fleet.json', null);
     return saved ? { version: 1, paused: false, avatars: [], ...saved } : this.migrate(owner);
   }
-  saveFleet(owner, fleet) { this.legacy.write(owner, 'fleet.json', fleet); if (fleet?.avatars?.length) this.armTimer(); }
-  state(owner, id) { return { cursor: {}, items: {}, log: [], stats: {}, session: null, memoryAt: 0, memoryLines: 0, ...this.legacy.read(owner, path.join('agents', id, 'state.json'), {}) }; }
-  saveState(owner, id, st) { this.legacy.write(owner, path.join('agents', id, 'state.json'), st); }
+  saveFleet(owner, fleet) { this.legacy.write(owner, 'fleet.json', fleet); this.saves = (this.saves || 0) + 1; if (fleet?.avatars?.length) this.armTimer(); }
+  // memo：巡检里同步处理各分身的那一段（不跨 await）同一个分身的状态只读一次盘（2026-11-25 R40b）。原来查「这件事在不在别的分身手上」
+  // 时每条候选都把其他分身的 state.json 各读一遍（N 个分身 O(N²) 次读盘 + 解析）；写回时同步更新这份。
+  state(owner, id) {
+    const key = owner + '|' + id;
+    if (this.memo?.has(key)) return this.memo.get(key);
+    const st = { cursor: {}, items: {}, log: [], stats: {}, session: null, memoryAt: 0, memoryLines: 0, ...this.legacy.read(owner, path.join('agents', id, 'state.json'), {}) };
+    this.memo?.set(key, st);
+    return st;
+  }
+  saveState(owner, id, st) { this.legacy.write(owner, path.join('agents', id, 'state.json'), st); this.memo?.set(owner + '|' + id, st); this.saves = (this.saves || 0) + 1; }
   // 读最新、改、写回都在同一拍里完成：跨 await 不能拿着旧的整份数据写回，否则会盖掉期间别的操作。
   mutate(owner, id, fn) { const st = this.state(owner, id), out = fn(st); this.saveState(owner, id, st); return out; }
   mutateFleet(owner, fn) { const fleet = this.fleet(owner), out = fn(fleet); this.saveFleet(owner, fleet); return out; }
@@ -87,7 +109,21 @@ class FleetService {
   }
 
   // ---- 读消息 ----
-  snapshot() { try { return this.assistant()?.snapshot?.() || null; } catch { return null; } }
+  // 当天消息快照（raw-日期.json，可达几 MB）：文件大小和修改时刻都没变就用上次解析好的（2026-11-25 R40b），原来每 30 秒整份重读重解析。
+  snapshot() {
+    try {
+      const a = this.assistant();
+      if (!a?.snapshot) return null;
+      if (typeof a.file !== 'function') return a.snapshot() || null;
+      const file = a.file(`raw-${D.dayKey(typeof a.now === 'function' ? a.now() : this.now())}.json`);
+      let key = '';
+      try { const st = fs.statSync(file); key = `${file}|${st.size}|${st.mtimeMs}`; } catch { key = ''; }
+      if (key && this.snapCache?.key === key) return this.snapCache.snap;
+      const snap = a.snapshot() || null;
+      this.snapCache = key && snap ? { key, snap } : null;
+      return snap;
+    } catch { return null; }
+  }
   conversationsOf(snap, fleet) {
     const map = new Map((snap?.conversations || []).map(c => [c.id, c]));
     for (const av of fleet.avatars) for (const t of av.targets || []) if (!map.has(t.id)) map.set(t.id, { id: t.id, name: t.name, group: t.type === 'group' });
@@ -141,7 +177,7 @@ class FleetService {
     const kinds = this.wideKinds(fleet), a = this.assistant();
     if (!kinds.size || !a?.welink) return;
     const now = this.now();
-    if (now - (this.wideAt || 0) < WIDE_MS || now < (this.readBackoffUntil || 0) || a.refreshing) return;
+    if (now - (this.wideAt || 0) < slowed(WIDE_MS) || now < (this.readBackoffUntil || 0) || a.refreshing) return;
     this.wideAt = now;
     let list;
     try {
@@ -204,19 +240,27 @@ class FleetService {
     try {
       const owner = this.owner(); if (!owner) return;
       let fleet = this.fleet(owner); if (!fleet.avatars.length) { this.idleStop(); return; }
+      // 从 closeIdle 之前开始数写盘：收空闲会话时写的事项状态也要通知页面（R40b 审查）。
+      const savesBefore = this.saves || 0, errorBefore = this.readError;
       await this.closeIdle(owner, fleet);
       fleet = this.fleet(owner); if (fleet.paused) return;
       const snap = this.snapshot();
-      for (const [id, list] of Object.entries(snap?.messages || {})) this.merge(id, list);
+      // 快照没换（同一份解析结果）就不再逐条并入：并入是幂等的，重做只是白费。
+      if (snap !== this.mergedSnap) { for (const [id, list] of Object.entries(snap?.messages || {})) this.merge(id, list); this.mergedSnap = snap; }
       await this.readHot(owner, fleet, this.conversationsOf(snap, fleet));
       if (this.wideKinds(fleet).size) await this.readWide(owner, fleet, this.hotIds(fleet));
       fleet = this.fleet(owner); if (fleet.paused) return; // 读消息期间可能暂停或改了配置
       const roster = this.legacy.roster(owner), convs = this.conversationsOf(snap, fleet);
-      for (const av of fleet.avatars.filter(v => v.enabled)) { this.recover(owner, av.id); this.absorb(owner, fleet, av, convs, roster); }
-      this.pump(owner, fleet);
-      const accounts = fleet.avatars.flatMap(v => Object.values(this.state(owner, v.id).items).filter(i => OPEN.has(i.state)).map(i => i.account));
+      let accounts;
+      this.memo = new Map();
+      try {
+        for (const av of fleet.avatars.filter(v => v.enabled)) { this.recover(owner, av.id); this.absorb(owner, fleet, av, convs, roster); }
+        this.pump(owner, fleet);
+        accounts = fleet.avatars.flatMap(v => Object.values(this.state(owner, v.id).items).filter(i => OPEN.has(i.state)).map(i => i.account));
+      } finally { this.memo = null; }
       void this.legacy.lookupTitles(owner, accounts).then(found => { if (found) this.changed(); }).catch(() => {});
-      this.changed();
+      // 这一拍写过事项、配置，或读消息的出错状态变了才通知页面（原来每 30 秒无条件广播，页面开着时每次整页重读）。
+      if ((this.saves || 0) !== savesBefore || this.readError !== errorBefore) this.changed();
     } finally { this.ticking = false; }
   }
   // Hub 重启前没处理完的事项重新排队。
