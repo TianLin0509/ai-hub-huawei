@@ -249,10 +249,23 @@ function applyCodexEnv(env, { dataDir, sessionId, model, projectDir, account, ga
 // 关掉服务后建智能体失败（「failed to create agent … tool-plugin-manager: waiting for pluginManager」），DSH 直接退出。
 const DSH_DISABLED = ['deepseek-account', 'llm-deepseek', 'llm-deepseek-account', 'web-search-deepseek', 'web-deepseek-api',
   'web-fetch-http', 'tool-web', 'otel', 'session-telemetry-otel', 'session-log-deepseek', 'plugin-package-inventory-deepseek', 'tool-plugin-manager'];
+// DSH 走公司模型时的上下文上限（2026-11-25，WeLink：Hub 给 DSH 一律 128K，模型实际约 400K）：以公司模型目录里该模型的
+// 输入上限为准，不另外封顶。取输入上限（input）而不是总窗口（context）：总窗口含输出额度，按它算提示可能超过上游能收的输入，
+// 被上游拒掉（例：DeepSeek V4.1 Flash 总窗口 409600 = 输入 344064 + 输出 65536）。
+// 只认输入上限：目录解析会把非法输入值变成 null，这时再拿总窗口会把输出额度也算进来，所以一律回退。
+// 只放大不缩小：输入上限读不到、不是整数或小于 128000 时仍用 128000（和以前一样）。DSH 固定输出 16384、
+// 压缩余量 65536，窗口太小会让自动压缩的预算变成负数而失效，小窗口模型要另配这两个值，这里不处理。
+const DSH_CONTEXT_FALLBACK = 128000;
+function dshContextOf(models, id) {
+  const m = (models || []).find(x => x && x.id === id);
+  const value = m ? m.input : 0;
+  return Number.isInteger(value) && value > DSH_CONTEXT_FALLBACK ? value : DSH_CONTEXT_FALLBACK;
+}
 function dshRoute({ dataDir, sessionId, model, account, gateway = false, midStreamRetry = false }) {
   const endpoint = requireEndpoint(dataDir, { gateway });
   const ids = gateway ? gatewayModelIds(dataDir) : companyModelIds(dataDir);
-  const contextOf = id => (gateway ? gatewayConfig().contextOf(dataDir, id) : 128000);
+  const known = gateway ? null : companyModels(dataDir);
+  const contextOf = id => (gateway ? gatewayConfig().contextOf(dataDir, id) : dshContextOf(known, id));
   return {
     providerId: PROVIDER_ID, keyEnv: KEY_ENV, key: sessionKey(endpoint, sessionId, account, { gateway }), baseURL: origin(endpoint) + '/v1',
     model: launchModel(model, { gateway, dataDir }),
@@ -347,7 +360,7 @@ module.exports = {
   ZONE_CHOICES, upstreamFile, readUpstreamConfig, setUpstreamZone, chosenZone,
   companyModels, companyModelIds, companyDefaultModel, DEFAULT_PORT, KEY_ENV, PROVIDER_ID, LABEL, GATEWAY_LABEL, GATEWAY_SUFFIX, usesGateway, gatewayModelIds, CODEX_WINDOWS_SANDBOX_DEFAULT, codexWindowsSandbox,
   proxyDir, endpointFile, readEndpoint, noteLiveEndpoint, ensureEndpoint, setEndpointPort, sessionTag, sessionKey, normalizePin, normalizeModel, launchModel,
-  applyNoProxy, applyEndpointNoProxy, usesProxy, applyClaudeEnv, codexCatalog, codexHome, ensureCodexHome, applyCodexEnv, dshRoute, dshOwnRoute, findNodeOnPath,
+  applyNoProxy, applyEndpointNoProxy, usesProxy, applyClaudeEnv, codexCatalog, codexHome, ensureCodexHome, applyCodexEnv, dshRoute, dshContextOf, dshOwnRoute, findNodeOnPath,
 };
 // 现取的清单（旧代码按常量读，名字保留）。
 Object.defineProperty(module.exports, 'MODELS', { enumerable: true, get: () => companyModels() });
