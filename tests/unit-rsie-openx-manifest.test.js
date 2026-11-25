@@ -83,12 +83,13 @@ test('内源附带的清单版本号和版本名对不上：不采用，照旧�
   assert.match(s.checks.find(r => r.id === 'openx-manifest').reason, /不采用/);
 });
 
-test('内源还没附带清单（发版脚本没传）：报「查不到新版本」并写清原因', async () => {
+test('内源还没附带清单（发版脚本没传）：不报红色错误，显示「暂无可安装的新版本」（2026-11-25）', async () => {
   const ox = openxFetch({ withLatest: false });
   const c = make(async url => ox(String(url)) || blocked());
   await c.check({ silent: false, quietAllowed: false });
-  assert.equal(c.getState().phase, 'error');
-  assert.match(c.getState().error, /查不到新版本/);
+  assert.equal(c.getState().phase, 'none');
+  assert.equal(c.getState().pending, true);
+  assert.equal(c.getState().error, null);
 });
 
 test('内源清单兜底后点下载：更新包先从内源取（外网被拦也能下）', async () => {
@@ -160,7 +161,8 @@ test('内源清单比当前版本旧（签名有效）：不采用、不会回�
 
 test('清单附件地址不在内源域名白名单：当作没有清单', async () => {
   const { s, row } = await checkState(openxFetch({ latestUrl: 'https://evil.example.invalid/latest.json' }));
-  assert.equal(s.phase, 'error');
+  assert.equal(s.phase, 'none');
+  assert.equal(s.pending, true);
   assert.match(row.reason, /还没有附带版本清单/);
 });
 
@@ -257,4 +259,9 @@ test('发版签名：私钥不存在只跳过并警告、不抛错、不留旧 .
   assert.equal(r2.signed, false);
   assert.match(r2.reason, /不配对/);
   assert.ok(!fs.existsSync(file + '.sig'));
+});
+
+test('最新几版漏传清单时往前多看几版（2026-11-25：104–107 漏传）', async () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'core', 'app-update', 'openx-source.js'), 'utf8');
+  assert.match(src, /releases\.slice\(0, 6\)/);
 });

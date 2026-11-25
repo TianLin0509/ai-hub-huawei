@@ -708,6 +708,8 @@
   "已固定版本": "Version pinned",
   "已是最新 {0}": "Up to date {0}",
   "已是最新": "Up to date",
+  "暂无可装的新版本": "No new version to install yet",
+  "暂时没有可安装的新版本，Hub 会自动定时再查，不用操作。": "No new version to install yet. Hub checks again automatically; nothing to do.",
   "当前 {0}": "Current {0}",
   "认不出是哪个会话，请点顶栏右侧的「后台」": "Cannot tell which session this is. Click \"Console\" on the right of the top bar",
   "没切过去，请点顶栏右侧的「后台」": "Could not switch. Click \"Console\" on the right of the top bar",

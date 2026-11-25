@@ -113,10 +113,12 @@ async function teamPackFromOpenx(fetch, manifest, opts = {}) {
     if (sha256(archive) === manifest.archive.hash) {
       try {
         require('../app-update/downloader').notifyOpenxDownloadSuccess({
+          projectId: hit.projectId != null ? hit.projectId : null,
           releaseId: hit.releaseId != null ? hit.releaseId : null,
           releaseVersion: hit.releaseVersion || `ppt-materials-${manifest.version}`,
           packageId: hit.packageId != null ? hit.packageId : null,
           packageTag: hit.packageTag || '',
+          urlSource: hit.urlSource != null ? hit.urlSource : null,
           projectName: hit.projectName || '',
           file,
           version: manifest.version || '',

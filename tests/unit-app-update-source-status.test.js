@@ -164,3 +164,11 @@ test('更新窗真实渲染（R35）：只有一行「公司内源」状态，�
   assert.match(internalLine({ status: 'missing', version }), /缺包.*请过几分钟再试/);
   assert.match(internalLine({ status: 'down', reason: '内源连不上：DNS 无法解析' }), /连不上公司内源.*公司网络/);
 });
+
+test('内源新版清单还没上来（pending）：一行平静提示，不红、不叫重试和反馈（2026-11-25）', async () => {
+  const row = { id: 'openx-manifest', name: '公司内源 · 版本清单', ok: false, reason: '内源上的程序版本还没有附带版本清单' };
+  const html = await render({ phase: 'none', pending: true, current: version, latest: null, plan: null, internalSource: row, checks: [row], attempts: [] }, true);
+  assert.match(html, /data-au-pending/);
+  assert.match(html, /暂时没有可安装的新版本/);
+  assert.doesNotMatch(html, /au-msg bad|一键反馈|data-au="retry"|已是最新版本|版本清单/);
+});

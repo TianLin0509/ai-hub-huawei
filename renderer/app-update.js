@@ -195,6 +195,11 @@
     if (s.phase === 'checking') {
       body += '<div class="au-msg info">正在向公司内源查询最新版本…</div>';
       foot = '<button class="au-btn" data-au="close">关闭</button>';
+    } else if (s.phase === 'none' && s.pending) {
+      // 2026-11-25：内源连得上、新版还在准备——平静一行，不让用户重试或反馈；有更新的完整安装包时给下载按钮。
+      const manualP = manualDownload();
+      body += `<div class="au-msg info" data-au-pending>暂时没有可安装的新版本，Hub 会自动定时再查，不用操作。</div>${fullPackageLine()}`;
+      foot = `${manualP ? `<button class="au-btn" data-au="manual">${esc(manualP.label)}</button>` : ''}<button class="au-btn" data-au="close">好的</button>`;
     } else if (s.phase === 'none') {
       body += `<div class="au-msg ok">已是最新版本 v${esc(s.current)}。</div>${sourceLine()}`;
       foot = '<button class="au-btn" data-au="close">好的</button>';

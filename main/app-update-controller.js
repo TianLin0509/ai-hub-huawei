@@ -178,12 +178,12 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
 
   // 界面看到的 = 控制器状态 + 等待重启的状态（读不到就当没在等）。
   const view = () => { let wait = null; try { wait = restartWait() || null; } catch (_) {} return { ...state, restartWait: wait }; };
-  const emit = patch => { state = { ...state, ...patch }; if (needsFullPackage(state)) lookupFullPackage(); try { sendToRenderer('app-update:state', view()); } catch (_) {} return state; };
+  const emit = patch => { state = { ...state, ...(patch && 'phase' in patch ? { pending: false } : {}), ...patch }; if (needsFullPackage(state)) lookupFullPackage(); try { sendToRenderer('app-update:state', view()); } catch (_) {} return state; };
   // r27（2026-11-24，WeLink 2 人：老版本找不到更新途径）：检查或下载失败、上次升级没成时（读到了版本清单、只是要完整包的，原有按钮已能下），
   // 在后台从内源找最近一个比当前新的完整安装包（不依赖版本清单，openx-source.js findLatestFull），找到就放进 state.fullPackage，
   // 更新窗和失败提示据此给「下载完整安装包」按钮。没找到不报错，1 分钟内不重找。
   let fullLookup = null, fullTriedAt = 0;
-  function needsFullPackage(s) { return !s.fullPackage && (s.phase === 'error' || !!(s.lastResult && !s.lastResult.ok)); }
+  function needsFullPackage(s) { return !s.fullPackage && (s.phase === 'error' || (s.phase === 'none' && !!s.pending) || !!(s.lastResult && !s.lastResult.ok)); }
   function lookupFullPackage() {
     if (fullLookup || Date.now() - fullTriedAt < 60 * 1000) return;
     fullTriedAt = Date.now();
@@ -193,10 +193,12 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
           fullPackageMeta = {
             version: r.version,
             file: r.file,
+            projectId: r.projectId != null ? r.projectId : null,
             releaseId: r.releaseId,
             releaseVersion: r.releaseVersion || '',
             packageId: r.packageId != null ? r.packageId : null,
             packageTag: r.packageTag || '',
+            urlSource: r.urlSource != null ? r.urlSource : null,
             projectName: r.projectName || '',
           };
           emit({ fullPackage: { url: r.url, file: r.file, version: r.version, releaseId: r.releaseId } });
@@ -240,6 +242,13 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
         const row = checks.find(c => c.id === 'openx-manifest');
         if (row) Object.assign(row, { ok: true, version: olderRow.version || null, reason: null });
         return emit({ phase: 'none', checks, internalSource, checkedAt: new Date().toISOString(), error: null, latest: null, plan: null });
+      }
+      // 2026-11-25：内源连得上、只是新版清单还没上来——用户什么也做不了，不报红色错误，按「暂无可装的新版本」显示，
+      // 后台照常定时再查；内源上若有更新的完整安装包，仍给下载按钮（needsFullPackage）。
+      const pendingRow = !best && only() ? results.find(r => r && r.id === 'openx-manifest' && r.pending) : null;
+      if (pendingRow) {
+        manifest = null; plan = null;
+        return emit({ phase: 'none', pending: true, checks, internalSource, checkedAt: new Date().toISOString(), error: null, latest: null, plan: null });
       }
       if (!best) return emit({ phase: silent ? 'idle' : 'error', checks, internalSource, checkedAt: new Date().toISOString(),
         error: only() ? noManifestError(results) : '所有更新源都连不上，暂时查不到新版本', silentFailure: silent });
@@ -458,10 +467,12 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       const ox = result.openx || {};
       void Promise.resolve(recorder.record({
         version: manifest.version,
+        projectId: ox.projectId != null ? ox.projectId : null,
         releaseId: ox.releaseId != null ? ox.releaseId : null,
         releaseVersion: ox.releaseVersion || `v${openxSource.normVersion(manifest.version)}`,
         packageId: ox.packageId != null ? ox.packageId : null,
         packageTag: ox.packageTag || '',
+        urlSource: ox.urlSource != null ? ox.urlSource : null,
         projectName: ox.projectName || openxSource.projectName() || '',
         file: ox.file || asset.file,
         kind: state.quiet ? 'quiet-update' : 'manual-update',

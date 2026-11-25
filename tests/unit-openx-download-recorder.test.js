@@ -21,6 +21,7 @@ const { createAppUpdateController, registerAppUpdateIpc } = require('../main/app
 const { registerDownloadSourceIpc } = require('../main/download-source-ipc.js');
 const {
   createOpenxDownloadRecorder,
+  buildApiRecordScript,
   buildLocateScript,
   sanitizeApiPath,
   isDownloadLikeUrl,
@@ -347,19 +348,57 @@ test('download-source-ipc 诊断信息包含脱敏后的内源下载记录统计
   recorder.dispose();
 });
 
-test('工具函数与定位脚本：语法合法、路径脱敏、下载链接识别准确', () => {
+test('工具函数与脚本：同源 API 记录脚本与 DOM 定位兜底脚本均无语法错误、排除复制链接按钮、路径脱敏准确', () => {
+  const apiDl1 = buildApiRecordScript({ projectId: 7938, releaseId: 12569, releaseVersion: 'v5.6.107', packageId: 33876, urlSource: 1 });
+  const apiLog1 = buildApiRecordScript({ projectId: 7938, releaseId: 12569, releaseVersion: 'v5.6.107', packageId: 33876, urlSource: 0 });
+  assert.doesNotThrow(() => new vm.Script(apiDl1), 'download1 API 记录脚本必须无语法错误');
+  assert.doesNotThrow(() => new vm.Script(apiLog1), 'log1 API 记录脚本必须无语法错误');
+  assert.match(apiDl1, /\/openxApi\/project\/release_id\/download1/);
+  assert.match(apiDl1, /redirect:\s*'manual'/);
+  assert.match(apiLog1, /\/openxApi\/report\/project_version_download\/log1/);
+
   const script = buildLocateScript({
     releaseVersion: 'v5.6.104 完整安装包',
     version: '5.6.104',
     packageTag: '安装版（推荐）：双击安装，也可直接覆盖安装旧版',
     file: 'DemoHub-Setup-5.6.104.exe',
-  });
+  }, { clickDirect: true });
   assert.doesNotThrow(() => new vm.Script(script), '注入页面的定位脚本必须无语法错误');
+  assert.match(script, /copy-link/, '定位兜底脚本必须排除复制链接按钮');
   assert.equal(sanitizeApiPath(`https://${SITE}/openxApi/project/version/12536/download?token=secret`), '/openxApi/project/version/:id/download');
   assert.equal(sanitizeApiPath('https://example.invalid/other'), '');
   assert.equal(isDownloadLikeUrl(`https://file.${SITE}/openx-file/a.gz`, 'a.gz'), true);
   assert.equal(isDownloadLikeUrl(`https://${SITE}/openxApi/visitOpenXRecord/saveRecord?visitUrl=x`, 'a.gz'), false);
-  assert.equal(isDownloadLikeUrl(`https://${SITE}/openxApi/project/version/downloadRecord`, 'a.gz'), true);
+  assert.equal(isDownloadLikeUrl(`https://${SITE}/openxApi/project/release_id/download1?releaseId=1&packageId=2`, 'a.gz'), true);
+});
+
+test('openx-source 分片大组件包（.000/.001）也透传 projectId / releaseId / packageId / urlSource', async () => {
+  const fetchImpl = async u => {
+    u = String(u);
+    if (u.startsWith(API + 'by_project_id')) {
+      return jsonResp({ code: '0', data: { name: 'Demo-Hub-Project', records: [{ id: 501, version: 'ppt-doctor-2.1.18', releaseTime: '2026-11-25 18:00:00' }] } });
+    }
+    if (u.startsWith(API + 'by_id')) {
+      return jsonResp({
+        code: '0',
+        data: {
+          binaryPackages: [
+            { id: 9001, originalFileName: 'PPT-Doctor-2.1.18.zip.000', tag: '分片 0', urlSource: 1, url: FILE_HOST + 'PPT-Doctor-2.1.18.zip.000' },
+            { id: 9002, originalFileName: 'PPT-Doctor-2.1.18.zip.001', tag: '分片 1', urlSource: 1, url: FILE_HOST + 'PPT-Doctor-2.1.18.zip.001' },
+          ],
+        },
+      });
+    }
+    return new Response('404', { status: 404 });
+  };
+  const hit = await openxSource.find({ file: 'PPT-Doctor-2.1.18.zip', release: 'ppt-doctor-2.1.18', fetchImpl, env: ENV });
+  assert.ok(hit);
+  assert.equal(hit.urls.length, 2);
+  assert.equal(hit.projectId, openxSource.PROJECT_ID);
+  assert.equal(hit.releaseId, 501);
+  assert.equal(hit.packageId, 9001);
+  assert.equal(hit.packageTag, '分片 0');
+  assert.equal(hit.urlSource, 1);
 });
 
 test('界面渲染源码守卫：仅 recorded 显示感谢文案，失败静默，不破坏原有完整安装包直链逻辑', () => {

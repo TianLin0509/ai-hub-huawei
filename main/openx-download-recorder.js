@@ -3,9 +3,12 @@
 // 背景：Hub 自动更新直连对象存储文件，速度快且稳定，但匿名直连不会计入内源社区的实名下载统计。
 // 做法（双轨无感）：
 //   1. 主轨下载与 SHA-256 校验完全不变，零额外等待；
-//   2. 真正下载并校验通过后（大版本与小版本/静默更新均触发；「检查更新」永不触发），在后台拉起无头 Edge，
-//      借本机 Edge 登录态打开内源项目下载页，等单点登录就绪后定位对应版本与附件并触发一次真实下载动作，
-//      确认下载/接口请求已发出后立即取消大文件传输并回收临时目录，不弹窗、不抢焦点、不写盘残留；
+//   2. 真正下载并校验通过后（大版本与小版本/静默更新及各组件均触发；「检查更新」永不触发），在后台拉起无头 Edge，
+//      借本机 Edge 登录态完成内源单点登录：
+//      - 优先走轻量同源接口（GET /openxApi/project/release_id/download1?releaseId=...&packageId=...，redirect:'manual' 零大文件流量；
+//        外链包走 POST /openxApi/report/project_version_download/log1），耗时最短且不受分页/遮罩影响；
+//      - 若缺少附件标识或接口未确认，则在同一无头会话里自动回落到下载页真实点击（等待加载遮罩消失、排除复制链接按钮、直调点击），
+//        确认下载请求后立即取消大文件传输并回收临时目录，不弹窗、不抢焦点、不写盘残留；
 //   3. 任意一步失败静默降级，绝不影响正常更新流程；同时持久化待补记任务，若用户点「立即重启」打断了
 //      后台记录，新版启动后延迟补记一次，避免「全回退」。
 const fs = require('fs');
@@ -142,7 +145,7 @@ function isDownloadLikeUrl(rawUrl, targetFile = '') {
   }
 }
 
-// 页面状态与实名登录就绪探针：必须确认已实名登录（token 或退出入口或 admin/info code=0）才点击下载。
+// 页面状态与实名登录就绪探针：必须确认已实名登录（token、退出入口、admin/info 或 is_login_w3）才触发记录。
 const AUTH_PAGE_STATE_SCRIPT = `(async () => {
   const t = document.body ? document.body.innerText : '';
   const head = t.slice(0, 3000);
@@ -154,6 +157,10 @@ const AUTH_PAGE_STATE_SCRIPT = `(async () => {
   try { hasToken = !!(localStorage.getItem('token') || sessionStorage.getItem('token')); } catch (_) {}
   const hasLogout = /(?:^|\\s|，|,)退出(?:\\s|$)/.test(head.slice(0, 500));
   const hasReleases = t.includes('二进制下载') || t.includes('发布时间');
+  const maskVisible = Array.from(document.querySelectorAll('.el-loading-mask')).some(el => {
+    const st = getComputedStyle(el);
+    return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) > 0.05;
+  });
   let authOk = false;
   if (!errorPage && document.readyState === 'complete') {
     if (hasToken || hasLogout) {
@@ -166,6 +173,15 @@ const AUTH_PAGE_STATE_SCRIPT = `(async () => {
           if (body && (String(body.code) === '0' || body.code === 200) && body.data) authOk = true;
         }
       } catch (_) {}
+      if (!authOk) {
+        try {
+          const res = await fetch('/openxApi/common/is_login_w3', { credentials: 'include', cache: 'no-store' });
+          if (res && res.ok) {
+            const body = await res.json().catch(() => null);
+            if (body && (String(body.code) === '0' || body.code === 200) && body.data !== false) authOk = true;
+          }
+        } catch (_) {}
+      }
     }
   }
   return {
@@ -181,8 +197,106 @@ const AUTH_PAGE_STATE_SCRIPT = `(async () => {
     hasLogout,
     authOk,
     hasReleases,
+    maskVisible,
   };
 })()`;
+
+// 轻量同源接口记录（2026-11-25 公司真机实测验证）：
+// 复用内源下载页同一套前端接口——标准托管包走 GET /openxApi/project/release_id/download1（redirect:'manual' 停在 302，零大文件流量），
+// 外链包（urlSource=0）走 POST /openxApi/report/project_version_download/log1。调用前用 is_login_w3 二次确认已实名登录。
+function buildApiRecordScript(target = {}) {
+  const payload = JSON.stringify({
+    projectId: target.projectId != null ? Number(target.projectId) : null,
+    releaseId: target.releaseId != null ? String(target.releaseId) : '',
+    releaseVersion: String(target.releaseVersion || '').trim(),
+    packageId: target.packageId != null ? String(target.packageId) : '',
+    urlSource: target.urlSource != null ? Number(target.urlSource) : null,
+  });
+  return `(async () => {
+    const cfg = ${payload};
+    if (!cfg.releaseId || !cfg.packageId) return { ok: false, reason: 'missing-ids' };
+    try {
+      const authRes = await fetch('/openxApi/common/is_login_w3', { credentials: 'include', cache: 'no-store' });
+      if (authRes && (authRes.status === 401 || authRes.status === 403)) {
+        return { ok: false, needsLogin: true, reason: 'is_login_w3-http-' + authRes.status };
+      }
+      if (authRes && authRes.ok) {
+        const ab = await authRes.json().catch(() => null);
+        if (ab && (String(ab.code) === '401' || ab.data === false)) {
+          return { ok: false, needsLogin: true, reason: 'is_login_w3-unauth' };
+        }
+      }
+    } catch (_) {}
+    if (cfg.urlSource === 0 && cfg.projectId) {
+      try {
+        const r = await fetch('/openxApi/report/project_version_download/log1', {
+          method: 'POST',
+          credentials: 'include',
+          cache: 'no-store',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            version: cfg.releaseVersion,
+            releaseId: Number(cfg.releaseId),
+            packageId: Number(cfg.packageId),
+            projectId: Number(cfg.projectId),
+          }),
+        });
+        const j = await r.json().catch(() => null);
+        if (r.ok && j && (String(j.code) === '0' || j.code === 200)) {
+          return {
+            ok: true,
+            method: 'api-log1',
+            apiPath: '/openxApi/report/project_version_download/log1',
+            apiReq: 'POST /openxApi/report/project_version_download/log1',
+          };
+        }
+        return { ok: false, reason: 'api-log1-failed-' + (r ? r.status : 0) };
+      } catch (e) {
+        return { ok: false, reason: 'api-log1-err' };
+      }
+    }
+    const ac = new AbortController();
+    const url = '/openxApi/project/release_id/download1?releaseId='
+      + encodeURIComponent(cfg.releaseId)
+      + '&packageId='
+      + encodeURIComponent(cfg.packageId);
+    try {
+      const r = await fetch(url, { credentials: 'include', redirect: 'manual', cache: 'no-store', signal: ac.signal });
+      const info = {
+        status: r.status,
+        type: r.type,
+        apiPath: '/openxApi/project/release_id/download1',
+        apiReq: 'GET /openxApi/project/release_id/download1',
+      };
+      if (r.type === 'opaqueredirect') {
+        ac.abort();
+        return { ok: true, method: 'api-download1', ...info };
+      }
+      if (r.ok) {
+        const ct = String(r.headers.get('content-type') || '').toLowerCase();
+        const disp = String(r.headers.get('content-disposition') || '').toLowerCase();
+        if (disp.includes('attachment') || (!ct.includes('json') && !ct.includes('text/html'))) {
+          ac.abort();
+          return { ok: true, method: 'api-download1', ...info };
+        }
+        if (ct.includes('json')) {
+          const body = await r.json().catch(() => null);
+          if (body && (String(body.code) === '0' || body.code === 200)) {
+            return { ok: true, method: 'api-download1', ...info };
+          }
+          return { ok: false, reason: 'api-download1-code-' + (body ? body.code : 'invalid') };
+        }
+        ac.abort();
+        return { ok: false, reason: 'api-download1-html' };
+      }
+      ac.abort();
+      if (r.status === 401 || r.status === 403) return { ok: false, needsLogin: true, reason: 'api-download1-http-' + r.status };
+      return { ok: false, reason: 'api-download1-http-' + r.status };
+    } catch (e) {
+      return { ok: false, reason: 'api-download1-err' };
+    }
+  })()`;
+}
 
 // 若下载页允许匿名浏览且未自动跳转单点登录，尝试点一次顶栏「登录」触发单点登录。
 const CLICK_LOGIN_SCRIPT = `(() => {
@@ -199,17 +313,24 @@ const CLICK_LOGIN_SCRIPT = `(() => {
   return false;
 })()`;
 
-// 在真实内源下载页 DOM 里定位目标版本卡片和目标附件的可点击坐标（支持按 packageTag、文件名、文件类型逐级兜底）。
-function buildLocateScript(target = {}) {
+// 在真实内源下载页 DOM 里定位目标版本卡片和目标附件的可点击节点（兜底路径，支持按 packageTag、文件名、文件类型逐级兜底）。
+function buildLocateScript(target = {}, { clickDirect = false } = {}) {
   const payload = JSON.stringify({
     releaseVersion: String(target.releaseVersion || '').trim(),
     version: normVersion(target.version || ''),
     packageTag: String(target.packageTag || '').trim(),
     file: String(target.file || '').trim(),
+    clickDirect: Boolean(clickDirect),
   });
   return `(() => {
     const cfg = ${payload};
     const norm = s => String(s || '').replace(/\\s+/g, ' ').trim();
+    const isCopyControl = el => {
+      if (!el || el.nodeType !== 1) return false;
+      if (el.closest && el.closest('.copy-link, [class*="copy-link"]')) return true;
+      const t = norm(el.innerText || el.textContent);
+      return t === '复制链接' || t === '复制';
+    };
     const visible = el => {
       if (!el || el.nodeType !== 1) return false;
       const st = getComputedStyle(el);
@@ -221,6 +342,14 @@ function buildLocateScript(target = {}) {
       el.scrollIntoView({ block: 'center', inline: 'nearest' });
       const r = el.getBoundingClientRect();
       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    };
+    const safeClickPointOf = el => {
+      el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      const r = el.getBoundingClientRect();
+      const maxX = Math.max(8, (window.innerWidth || 800) - 8);
+      const x = Math.min(maxX, Math.round(r.left + Math.min(28, Math.max(4, r.width / 2))));
+      const y = Math.round(r.top + r.height / 2);
+      return { x, y };
     };
     const findNextBtn = () => {
       const sels = ['.btn-next', '[aria-label*="next" i]', '[title*="下一页"]', '.el-pagination .btn-next', '.ant-pagination-next'];
@@ -293,13 +422,14 @@ function buildLocateScript(target = {}) {
     const isPortable = /-win-x64\\.zip$/i.test(wantFile);
 
     const scoreItem = el => {
+      if (isCopyControl(el)) return 0;
       const t = norm(el.innerText || el.textContent);
       if (!t || t.length > 260) return 0;
       const tl = t.toLowerCase();
       const title = norm(el.getAttribute('title') || '').toLowerCase();
       const href = String(el.getAttribute('href') || '').toLowerCase();
       const dl = String(el.getAttribute('download') || '').toLowerCase();
-      if (t === '二进制下载' || t === '修改' || t === '删除') return 0;
+      if (t === '二进制下载' || t === '修改' || t === '删除' || t === '复制链接') return 0;
       if (wantTagLower && (tl === wantTagLower || title === wantTagLower)) return 100;
       if (wantTagLower && wantTagLower.length >= 6 && tl.includes(wantTagLower) && t.length <= wantTag.length + 40) return 90;
       if (wantFileLower && (tl.includes(wantFileLower) || title.includes(wantFileLower) || href.includes(wantFileLower) || dl.includes(wantFileLower))) return 80;
@@ -312,12 +442,13 @@ function buildLocateScript(target = {}) {
 
     const items = [];
     for (const el of card.querySelectorAll('a, button, span, div, li, p')) {
-      if (!visible(el)) continue;
+      if (!visible(el) || isCopyControl(el)) continue;
       const sc = scoreItem(el);
       if (!sc) continue;
       const childHasSame = Array.from(el.children || []).some(ch => visible(ch) && scoreItem(ch) >= sc);
       if (childHasSame) continue;
-      const interactive = el.matches('a, button, [role="button"]') ? 1 : 0;
+      const dlLink = el.closest && el.closest('li.download-file a.el-link--info');
+      const interactive = dlLink ? 2 : (el.matches('a, button, [role="button"]') ? 1 : 0);
       items.push({ el, score: sc, interactive, len: norm(el.innerText || el.textContent).length });
     }
 
@@ -326,7 +457,7 @@ function buildLocateScript(target = {}) {
       const binHeader = Array.from(card.querySelectorAll('span, div, p, button, a, h4, h5'))
         .find(el => visible(el) && norm(el.innerText || el.textContent) === '二进制下载');
       for (const el of card.querySelectorAll('a, button, li, span, div')) {
-        if (!visible(el) || el === binHeader) continue;
+        if (!visible(el) || el === binHeader || isCopyControl(el)) continue;
         const t = norm(el.innerText || el.textContent);
         const href = String(el.getAttribute('href') || '');
         if (!t || t.length > 220) continue;
@@ -347,16 +478,20 @@ function buildLocateScript(target = {}) {
 
     items.sort((a, b) => b.score - a.score || b.interactive - a.interactive || a.len - b.len);
     const chosen = items[0];
-    const primaryEl = chosen.el.closest('a, button, [role="button"]') || chosen.el;
-    const primaryPoint = centerOf(primaryEl);
+    const primaryEl = chosen.el.closest('li.download-file a.el-link--info') || chosen.el.closest('a, button, [role="button"]') || chosen.el;
+    const primaryPoint = safeClickPointOf(primaryEl);
+    let domClicked = false;
+    if (cfg.clickDirect && primaryEl && typeof primaryEl.click === 'function') {
+      try { primaryEl.click(); domClicked = true; } catch (_) {}
+    }
     const altPoints = [];
     const seenPt = new Set([primaryPoint.x + ',' + primaryPoint.y]);
     let row = chosen.el.closest('li, tr, [class*="item"], [class*="row"], [class*="file"], [class*="binary"], [class*="package"]') || chosen.el.parentElement;
     const collectAlts = container => {
       if (!container || container === card) return;
       for (const cand of container.querySelectorAll('a, button, [role="button"], svg, i, [class*="download"], [class*="icon"]')) {
-        if (!visible(cand) || cand === primaryEl) continue;
-        const pt = centerOf(cand);
+        if (!visible(cand) || cand === primaryEl || isCopyControl(cand)) continue;
+        const pt = safeClickPointOf(cand);
         const key = pt.x + ',' + pt.y;
         if (seenPt.has(key)) continue;
         if (Math.hypot(pt.x - primaryPoint.x, pt.y - primaryPoint.y) < 8) continue;
@@ -373,6 +508,7 @@ function buildLocateScript(target = {}) {
       found: true,
       score: chosen.score,
       matchedText: norm(chosen.el.innerText || chosen.el.textContent).slice(0, 100),
+      domClicked,
       point: primaryPoint,
       altPoints,
     };
@@ -444,9 +580,12 @@ async function defaultRunSession(target, {
       if (clickAt) postClickDownloadHit = true;
       return;
     }
-    if (msg.method === 'Target.targetCreated') {
-      const u = p.targetInfo?.url || '';
-      if (clickAt && isDownloadLikeUrl(u, target.file)) postClickDownloadHit = true;
+    if (msg.method === 'Target.targetCreated' || msg.method === 'Target.targetInfoChanged') {
+      const info = p.targetInfo || {};
+      const u = info.url || '';
+      if (clickAt && (isDownloadLikeUrl(u, target.file) || (msg.method === 'Target.targetCreated' && info.type === 'page' && info.openerId))) {
+        postClickDownloadHit = true;
+      }
       return;
     }
     if (msg.method === 'Network.requestWillBeSent') {
@@ -519,8 +658,11 @@ async function defaultRunSession(target, {
     let renav = 0;
     let ready = false;
     let failReason = '';
+    const canTryApi = target.releaseId != null && target.packageId != null;
+    let apiTried = false;
 
-    // 1. 等单点登录与下载页渲染就绪。
+    // 1. 等单点登录就绪；拿到实名登录态后优先走同源轻量接口（零大文件流量、不受分页与加载遮罩影响），
+    //    若缺少附件标识或接口未确认，再等下载页列表就绪且加载遮罩消失后走 DOM 点击兜底。
     while (Date.now() < deadline && !ready) {
       await delay(pollMs);
       if (signal?.aborted) { failReason = '已取消'; break; }
@@ -564,13 +706,45 @@ async function defaultRunSession(target, {
         }
         continue;
       }
-      // 已实名登录且在目标主机，但若登录回调落回项目首页而非 /download，主动跳去下载页。
+
+      // 优先通路（项目 2）：同源轻量接口直调（无需等列表渲染、无需翻页、不产生大文件下载流量）。
+      if (canTryApi && !apiTried) {
+        apiTried = true;
+        clickAt = Date.now();
+        const apiEval = await cdp.send('Runtime.evaluate', { expression: buildApiRecordScript(target), returnByValue: true, awaitPromise: true });
+        const apiRes = apiEval?.result?.result?.value || null;
+        if (apiRes && apiRes.ok) {
+          if (apiRes.apiPath) observedApi.add(apiRes.apiPath);
+          if (apiRes.apiReq) observedReq.add(apiRes.apiReq);
+          return {
+            ok: true,
+            method: apiRes.method || 'api-download1',
+            matchedText: target.packageTag || target.file || '',
+            downloadTriggered: true,
+            apiPaths: [...observedApi].slice(0, 12),
+            apiRequests: [...observedReq].slice(0, 12),
+            loginCopy,
+            tookMs: Date.now() - started,
+          };
+        }
+        if (apiRes && apiRes.needsLogin) {
+          apiTried = false;
+          anonSince = anonSince || Date.now();
+          if (!clickedLogin) {
+            clickedLogin = true;
+            await cdp.send('Runtime.evaluate', { expression: CLICK_LOGIN_SCRIPT, returnByValue: true });
+          }
+          continue;
+        }
+      }
+
+      // 兜底通路准备：确保在 /download 页面、版本列表已出且加载遮罩（el-loading-mask）已淡出。
       if (!String(st.pathname || '').toLowerCase().includes('/download')) {
         await cdp.send('Page.navigate', { url: pageUrl });
         await delay(1000);
         continue;
       }
-      if (!st.hasReleases) continue;
+      if (!st.hasReleases || st.maskVisible) continue;
       ready = true;
     }
 
@@ -585,14 +759,16 @@ async function defaultRunSession(target, {
       };
     }
 
-    // 2. 在下载页定位版本与附件（支持展开折叠区、最多翻 3 页）。
+    // 2. 兜底路径：在下载页定位版本与附件（支持展开折叠区、最多翻 10 页），命中后直调 DOM click。
     let located = null;
     for (let pageNo = 1; pageNo <= MAX_PAGES && Date.now() < deadline; pageNo += 1) {
-      let loc = (await cdp.send('Runtime.evaluate', { expression: buildLocateScript(target), returnByValue: true }))?.result?.result?.value;
+      clickAt = Date.now();
+      let loc = (await cdp.send('Runtime.evaluate', { expression: buildLocateScript(target, { clickDirect: true }), returnByValue: true }))?.result?.result?.value;
       if (loc && loc.needsExpand && loc.expandPoint) {
         await clickPoint(cdp, loc.expandPoint);
         await delay(1200);
-        loc = (await cdp.send('Runtime.evaluate', { expression: buildLocateScript(target), returnByValue: true }))?.result?.result?.value;
+        clickAt = Date.now();
+        loc = (await cdp.send('Runtime.evaluate', { expression: buildLocateScript(target, { clickDirect: true }), returnByValue: true }))?.result?.result?.value;
       }
       if (loc && loc.found) { located = loc; break; }
       if (!loc || !loc.hasNext || pageNo >= MAX_PAGES) break;
@@ -612,17 +788,26 @@ async function defaultRunSession(target, {
       };
     }
 
-    // 3. 点击附件并等待下载或接口信号确认（不触发则试同行备用图标一次）。
-    const points = [located.point, ...(Array.isArray(located.altPoints) ? located.altPoints : [])];
-    for (const pt of points) {
-      clickAt = Date.now();
-      await clickPoint(cdp, pt);
+    // 3. 等待直调 DOM click 触发下载/接口信号；若未观测到，再退回鼠标坐标点击主节点与备用节点。
+    if (located.domClicked) {
       const waitUntil = Math.min(deadline, Date.now() + 3500);
       while (Date.now() < waitUntil && !postClickDownloadHit && !dlEvents.length) {
         if (signal?.aborted || cdp.closed || edge.closed) break;
         await delay(200);
       }
-      if (postClickDownloadHit || dlEvents.length) break;
+    }
+    if (!postClickDownloadHit && !dlEvents.length) {
+      const points = [located.point, ...(Array.isArray(located.altPoints) ? located.altPoints : [])];
+      for (const pt of points) {
+        clickAt = Date.now();
+        await clickPoint(cdp, pt);
+        const waitUntil = Math.min(deadline, Date.now() + 3500);
+        while (Date.now() < waitUntil && !postClickDownloadHit && !dlEvents.length) {
+          if (signal?.aborted || cdp.closed || edge.closed) break;
+          await delay(200);
+        }
+        if (postClickDownloadHit || dlEvents.length) break;
+      }
     }
 
     if (!postClickDownloadHit && !dlEvents.length) {
@@ -788,10 +973,12 @@ function createOpenxDownloadRecorder({
     const pageUrl = String(raw.pageUrl || (projectName ? openxSource.downloadPageUrl(projectName) : '') || openxSource.downloadPageUrl() || '').trim();
     return {
       version,
+      projectId: raw.projectId != null ? raw.projectId : (openxSource.PROJECT_ID || null),
       releaseId: raw.releaseId != null ? raw.releaseId : null,
       releaseVersion,
       packageId: raw.packageId != null ? raw.packageId : null,
       packageTag: String(raw.packageTag || '').trim(),
+      urlSource: raw.urlSource != null ? raw.urlSource : null,
       file: String(raw.file || '').trim(),
       projectName,
       pageUrl,
@@ -999,6 +1186,7 @@ function createOpenxDownloadRecorder({
 module.exports = {
   createOpenxDownloadRecorder,
   defaultRunSession,
+  buildApiRecordScript,
   buildLocateScript,
   sanitizeApiPath,
   isDownloadLikeUrl,

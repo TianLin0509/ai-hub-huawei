@@ -72,10 +72,11 @@ test('检查更新失败（所有更新源都连不上）：后台补上内源�
     dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'upd-full-link-')), currentVersion: '5.6.20', fetchImpl, isPackaged: false,
     env: { ...env, AI_HUB_UPDATE_RESOURCES: os.tmpdir() }, logger: { warn() {}, info() {} }, sendToRenderer: (_ch, s) => sent.push(s) });
   const s = await c.check({ silent: false });
-  assert.equal(s.phase, 'error');
+  assert.equal(s.phase, 'none');   // 2026-11-25：内源连得上、只是没清单 → 平静显示「暂无可安装的新版本」，仍补完整包
+  assert.equal(s.pending, true);
   for (let i = 0; i < 50 && !c.getState().fullPackage; i++) await new Promise(r => setTimeout(r, 10));
   assert.deepEqual(c.getState().fullPackage, { url: url('AIHubHuawei-Setup-5.6.98.exe'), file: 'AIHubHuawei-Setup-5.6.98.exe', version: '5.6.98', releaseId: 12385 });
-  assert.ok(sent.some(v => v.fullPackage && v.phase === 'error'), '推给界面');
+  assert.ok(sent.some(v => v.fullPackage && v.phase === 'none' && v.pending), '推给界面');
   c.dispose();
 });
 

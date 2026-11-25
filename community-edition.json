@@ -59,9 +59,10 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "开会时更省资源、打字更顺：会议页只取有变化的内容，切到别的页面后不再在后台反复刷新；开着低开销模式时会议页刷新放慢到 5 秒一次"
+    "检查更新：内源新版还在准备时不再弹红色报错，改为一行「暂时没有可安装的新版本」；手动检查会立即重新查询内源",
+    "内源无感下载计数升级为同源轻量接口直调（零大文件流量、约 8 秒完成），同步修复下载页点击兜底的加载遮罩与新标签页识别"
   ],
-  "version": "5.6.110",
+  "version": "5.6.111",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

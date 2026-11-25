@@ -14,6 +14,7 @@ function menuStatusText(state, { labelVersion = '' } = {}) {
   if (pending && state.phase === 'ready') return `v${latest} 已就绪，重启生效`;
   if (pending && state.phase === 'downloading') return `正在下载 v${latest}`;
   if (pending && ['available', 'applying', 'error'].includes(state.phase)) return `有新版本 v${latest}`;
+  if (state.phase === 'none' && state.pending) return '暂无可装的新版本';
   if (state.phase === 'none' || (latest && !pending)) return cur ? `已是最新 ${cur}` : '已是最新';
   return cur ? `当前 ${cur}` : '';
 }

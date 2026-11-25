@@ -297,10 +297,12 @@ async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, 
       onAttempt && onAttempt(attempts.map(a => ({ ...a })));
       const openxInfo = {
         status: 'ok',
+        projectId: hit.projectId != null ? hit.projectId : null,
         releaseId: hit.releaseId != null ? hit.releaseId : null,
         releaseVersion: hit.releaseVersion,
         packageId: hit.packageId != null ? hit.packageId : null,
         packageTag: hit.packageTag || '',
+        urlSource: hit.urlSource != null ? hit.urlSource : null,
         projectName: hit.projectName || '',
         file: expect.file || '',
         ms: r.ms,

@@ -146,22 +146,38 @@ async function find({ file, version, release, strict = false, fetchImpl, signal,
     if (hit) {
       return {
         url: safeUrl(hit.url),
+        projectId,
         releaseId: rec.id,
         releaseVersion: String(rec.version || ''),
         packageId: hit.id != null ? hit.id : null,
         packageTag: String(hit.tag || ''),
+        urlSource: hit.urlSource != null ? hit.urlSource : null,
         projectName: state.projectName || '',
       };
     }
     // 分片（r24）：内源单个附件有大小上限（600 MB 的 PPT Doctor 被拒），大文件按 <文件名>.000、.001… 放在同一个版本里。
     const parts = [];
+    let firstPart = null;
     for (let i = 0; i < 100; i++) {
       const name = `${key}.${String(i).padStart(3, '0')}`;
       const p = packages.find(x => x && String(x.originalFileName || '').toLowerCase() === name && safeUrl(x.url));
       if (!p) break;
+      if (!firstPart) firstPart = p;
       parts.push(safeUrl(p.url));
     }
-    if (parts.length) return { url: parts[0], urls: parts, releaseId: rec.id, releaseVersion: String(rec.version || ''), projectName: state.projectName || '' };
+    if (parts.length) {
+      return {
+        url: parts[0],
+        urls: parts,
+        projectId,
+        releaseId: rec.id,
+        releaseVersion: String(rec.version || ''),
+        packageId: firstPart && firstPart.id != null ? firstPart.id : null,
+        packageTag: String((firstPart && firstPart.tag) || ''),
+        urlSource: firstPart && firstPart.urlSource != null ? firstPart.urlSource : null,
+        projectName: state.projectName || '',
+      };
+    }
   }
   return miss('内源上没有这个文件');
 }
@@ -202,7 +218,8 @@ function diagnostics({ now = Date.now } = {}) {
     listAgeSec: state.list ? Math.round((now() - state.listAt) / 1000) : null, lastReason: state.lastReason || '' };
 }
 // 用户点「重测」：清掉「5 分钟内不再试」和「这个文件上次校验没过」的标记，马上真的去连一次。
-function clearDown() { state.unreachableUntil = 0; state.bad.clear(); }
+// 2026-11-25：用户手动「检查更新」时同时作废版本列表缓存（原先要等 10 分钟，补传清单后仍查不到新版）。
+function clearDown() { state.unreachableUntil = 0; state.bad.clear(); state.listAt = 0; }
 
 // 内源现在的状态：up（10 分钟内连上过）/ down（5 分钟内连不上过）/ unknown（还没探测）。
 function reachability({ now = Date.now } = {}) {
@@ -339,7 +356,8 @@ async function fetchManifest({ fetchImpl, validate, signal, currentVersion, publ
       .sort((a, b) => compareVersions(b.appVersion, a.appVersion));
     // 某一版清单没签名、签名不对或版本对不上（如发版中途只传了一半）：记下原因，接着看更早的一版（R29 审查 #4）。
     let skipped = '';
-    for (const rec of releases.slice(0, 3)) {
+    // 2026-11-25：某几版的清单漏传时（104–107 实际发生过）往前多看几版，最多 6 个程序版本；详情有缓存，耗时仍受 8 秒总预算约束。
+    for (const rec of releases.slice(0, 6)) {
       if (ac.signal.aborted) break;
       let packages = state.details.get(rec.id);
       if (!packages) {
@@ -366,7 +384,8 @@ async function fetchManifest({ fetchImpl, validate, signal, currentVersion, publ
       return result(true, { manifest, releaseVersion: String(rec.version || '') });
     }
     if (ac.signal.aborted) return result(false, { reason: signal && signal.aborted ? '已取消' : `${budget / 1000} 秒内没读完内源版本清单` });
-    return result(false, { reason: skipped || '内源上的程序版本还没有附带版本清单' });
+    // pending：内源连得上，只是新版的清单还没上来——不是用户能处理的故障，界面按「暂无可装的新版本」平静显示。
+    return result(false, skipped ? { reason: skipped } : { reason: '内源上的程序版本还没有附带版本清单', pending: true });
   })().catch(error => {
     if (signal && signal.aborted) return result(false, { reason: '已取消' });
     if (ac.signal.aborted) return result(false, { reason: `${budget / 1000} 秒内没读完内源版本清单` });
@@ -423,8 +442,9 @@ async function findLatestFull({ fetchImpl, portable = false, currentVersion = ''
       const url = m && m[1] === rec.appVersion ? safeUrl(p.url) : '';
       if (url) {
         return {
-          ok: true, url, file, version: m[1], releaseId: rec.id, releaseVersion: String(rec.version || ''),
-          packageId: p.id != null ? p.id : null, packageTag: String(p.tag || ''), projectName: state.projectName || '',
+          ok: true, url, file, version: m[1], projectId, releaseId: rec.id, releaseVersion: String(rec.version || ''),
+          packageId: p.id != null ? p.id : null, packageTag: String(p.tag || ''),
+          urlSource: p.urlSource != null ? p.urlSource : null, projectName: state.projectName || '',
         };
       }
     }
