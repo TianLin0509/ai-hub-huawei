@@ -124,9 +124,11 @@ test('会议列表没改文件不重读，mtime变化及保存后更新，删除
   const file = path.join(m.dir(first.id), 'meeting.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   saved.title = '外部修改的会议'; saved.events.push({ kind: 'slide' }); fs.writeFileSync(file, JSON.stringify(saved));
   const nextTime = new Date(Date.now() + 10000); fs.utimesSync(file, nextTime, nextTime);
+  m.listMemo = null; /* Hub 之外的改动最多 15 秒后才反映（LIST_TTL_MS），这里直接让列表过期 */ 
   assert.equal(m.list().find(x => x.id === first.id).pages, 1); assert.equal(load.mock.callCount(), 1);
   m.rename(second.id, '重新命名'); assert.equal(m.list().find(x => x.id === second.id).title, '重新命名');
   fs.rmSync(m.dir(first.id), { recursive: true, force: true });
+  m.listMemo = null; /* Hub 之外的改动最多 15 秒后才反映（LIST_TTL_MS），这里直接让列表过期 */ 
   assert.equal(m.list().length, 1); assert.equal(m.listCache.has(first.id), false);
 });
 

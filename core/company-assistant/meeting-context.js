@@ -1,5 +1,6 @@
 'use strict';
-const { localModelOptions } = require('../codeagent-config');
+const { resolveCodeAgentConfig } = require('../codeagent-config');
+const codeAgentModels = require('../codeagent-models');
 const { isSafeModelId } = require('../codeagent-models');
 const time = ms => `${String(Math.floor(ms / 60000)).padStart(2, '0')}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
 const normalize = text => String(text || '').normalize('NFKC').replace(/[\p{P}\p{S}\s]/gu, '').toLowerCase();
@@ -54,8 +55,30 @@ function relevant(question, events, k = 12) {
   return events.filter(e => keep.has(e.seq));
 }
 // 用户在 CodeAgent settings.json 里自配的模型（source: 'settings'）只进会话的模型下拉，账号清单里没读到，不拿来自动挑快速模型、也不进会议的快速模型清单。
+// 找 CodeAgent 配置目录要扫 PATH、读安装信息（实测每次约 25 ms），会议页每次拉状态要用两次（2026-11-25 后台开销）。
+// 同样的环境 30 秒内复用；模型清单本身每次照读，探测到的新模型立即出现。
+// 键里带全决定配置目录的几样（core/codeagent-config.js resolveCodeAgentConfig）：显式目录（环境变量或 Hub 设置）、
+// 继承来的目录变量及 Hub 对它的采用判定、用户主目录。任何一项变了（换号、继承判定更新、改设置）立即重算，
+// 不再拿旧目录读模型清单（2026-11-25 复审）。
+let configMemo = null;
+function configDirKey(env) {
+  const cfg = require('../codeagent-config');
+  let provider = {}; try { provider = require('../hub-config').getConfig()?.providers?.codeagent || {}; } catch { provider = {}; }
+  let variable = '', inherited = '', decision = null;
+  try { variable = cfg.configDirEnvName(env, provider); inherited = cfg.inheritedConfigDir(env, provider) || ''; decision = cfg.getInheritedDecision(); } catch { /* 读不到按空值算 */ }
+  return JSON.stringify([env.AI_HUB_CODEAGENT_CONFIG_DIR || '', env.AI_HUB_CODEAGENT_COMMAND || '', env.PATH || '', env.USERPROFILE || env.HOME || '',
+    provider.configDir || '', provider.command || '', variable, inherited, decision ? [!!decision.adopt, decision.variable || '', decision.inherited || ''] : null]);
+}
+function configDirCached() {
+  const env = process.env, key = configDirKey(env);
+  if (!configMemo || configMemo.key !== key || Date.now() - configMemo.at > 30000) {
+    let dir = null; try { dir = resolveCodeAgentConfig(env).configDir; } catch { dir = null; }
+    configMemo = { key, at: Date.now(), dir };
+  }
+  return configMemo.dir;
+}
 function modelOptions(deps) {
-  return (deps.meetingModels ? deps.meetingModels() : localModelOptions(deps.dataDir)).filter(m => isSafeModelId(m.id) && m.source !== 'settings');
+  return (deps.meetingModels ? deps.meetingModels() : codeAgentModels.modelOptions(deps.dataDir, { configDir: configDirCached() })).filter(m => isSafeModelId(m.id) && m.source !== 'settings');
 }
 function fastModel(models) {
   return models.find(m => m.fast === true || m.speed === 'fast' || /(?:fast|flash|lite|极速|快速)/i.test(`${m.id} ${m.label}`))?.id

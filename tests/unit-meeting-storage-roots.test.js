@@ -167,6 +167,7 @@ test('一个目录读不了：只把那里的会议记为读不出，其他会�
   t.mock.method(fs, 'statSync', (p, ...r) => { if (deny(p)) throw eacces(); return realStat(p, ...r); });
   t.mock.method(fs, 'readFileSync', (p, ...r) => { if (deny(p)) throw eacces(); return realRead(p, ...r); });
   t.mock.method(fs, 'readdirSync', (p, ...r) => { if (deny(p)) throw eacces(); return realDir(p, ...r); });
+  m.listMemo = null; /* Hub 之外的改动最多 15 秒后才反映（LIST_TTL_MS），这里直接让列表过期 */ 
   assert.deepEqual(m.list().map(x => x.id), [here]);
   assert.deepEqual(m.status().storage.corrupt.map(x => x.id), [there]);
 });

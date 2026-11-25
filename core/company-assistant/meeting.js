@@ -68,6 +68,36 @@ function answerSettled(prev, next) {
   const before = new Map((prev?.answers || []).map(q => [q.id, q.state]));
   return next.answers.some(q => SETTLED.has(q.state) && before.get(q.id) !== q.state);
 }
+// 会议页增量拉取（2026-11-25 后台开销）：每场正本记一份「哪一版改了什么」，页面带着自己手里的版本来要，只回之后改过的字段、事件和问题。
+// epoch：正本从盘上重读（外部改动、内存淘汰）时换新，页面手里的版本对不上就回全量；base：比它旧的版本一律回全量。
+const LIST_TTL_MS = 15000;   // 会议列表最多这么久重扫一次目录；Hub 里的新建、删除和每次保存立即反映，只有 Hub 之外的改动（手工删文件夹、换盘）最多晚 15 秒
+const LOG_MAX = 20000;       // 事件改动记录太长就整体作废（页面回一次全量），免得无限增长
+const valueEqual = (a, b) => a === b || (a !== null && b !== null && typeof a === 'object' && typeof b === 'object' && JSON.stringify(a) === JSON.stringify(b));
+function flatEqual(a, b) {
+  if (a === b) return true; if (!a || !b) return false;
+  const ka = Object.keys(a); if (ka.length !== Object.keys(b).length) return false;
+  for (const k of ka) if (!valueEqual(a[k], b[k])) return false;
+  return true;
+}
+function newRevs(version) { return { epoch: randomUUID().slice(0, 8), base: version, fields: new Map(), eventLog: [], answers: new Map() }; }
+// 记下 next 相对 prev 的改动（rev＝这次保存后的版本号）。events 只能追加或改已有条目；变短、序号对不上就整体作废。
+function trackRevs(revs, prev, next, rev) {
+  if (!prev) { revs.base = rev; revs.fields.clear(); revs.eventLog = []; revs.answers.clear(); return; }
+  for (const k of new Set([...Object.keys(prev), ...Object.keys(next)])) if (k !== 'events' && k !== 'answers' && !valueEqual(prev[k], next[k])) revs.fields.set(k, rev);
+  const pe = prev.events || [], ne = next.events || [];
+  if (ne.length < pe.length) revs.base = rev;
+  else {
+    for (let i = 0; i < ne.length; i++) {
+      if (i < pe.length && flatEqual(pe[i], ne[i])) continue;
+      if (i < pe.length && pe[i]?.seq !== ne[i]?.seq) { revs.base = rev; break; }
+      revs.eventLog.push(rev, ne[i]?.seq);
+    }
+    if (revs.eventLog.length > LOG_MAX * 2) { revs.base = rev; revs.eventLog = []; }
+  }
+  const pa = prev.answers || [], na = next.answers || [], before = new Map(pa.map(q => [q.id, q]));
+  if (na.length < pa.length || !na.every((q, i) => i >= pa.length || pa[i]?.id === q.id)) revs.base = rev;
+  for (const q of na) if (!valueEqual(before.get(q.id), q)) revs.answers.set(q.id, rev);
+}
 const sleepSync = ms => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* 不支持就不等 */ } };
 // 上次写临时文件成功、改名失败（杀毒或索引占用）时，最新内容留在 .tmp 里：能完整解析、又比正式文件新，就用它。半截的 .tmp 解析不了，忽略。
 function readTmp(p) {
@@ -243,7 +273,8 @@ class MeetingCompanion {
       if (!(e && st && e.stat && st.mtimeMs === e.stat.mtimeMs && st.size === e.stat.size)) {
         const m = read(file, null); if (!m) { this.mem.delete(id); this.unindex(id); throw new Error('会议不存在'); }
         try { const s = fs.statSync(file); st = { mtimeMs: s.mtimeMs, size: s.size }; } catch {} // 读时可能刚把 .tmp 改名过来
-        e = { m, home, dirty: false, stat: st, version: (e?.version || 0) + 1 }; this.index(m);
+        const version = (e?.version || 0) + 1;
+        e = { m, home, dirty: false, stat: st, version, revs: newRevs(version) }; this.index(m); this.listMemo = null;
       }
     }
     this.mem.delete(id); this.mem.set(id, e); this.trimMemory(); return e;
@@ -365,6 +396,10 @@ class MeetingCompanion {
     let prev = this.mem.get(id); if (prev && prev.home !== home) prev = null; // 目录已改选（只会发生在干净、不在采集时）：按新目录算
     const stateChanged = prev?.m.state !== m.state, copy = cloneMeeting(m);
     const e = { stat: null, ...(prev || {}), m: copy, home, dirty: true, version: (prev?.version || 0) + 1 };
+    if (!prev?.revs) e.revs = newRevs(e.version); trackRevs(e.revs, prev?.m, copy, e.version);
+    // 会议列表：进程内的改动直接改掉列表里这一场的摘要（标题、状态、页数、录像大小随即准确）；新会议才让列表重扫。
+    if (!prev) this.listMemo = null;
+    else if (this.listMemo) { const list = this.listMemo.value, i = list.findIndex(x => x.id === id); if (i < 0) this.listMemo = null; else { list[i] = this.summary(copy); if (prev.m.startedAt !== copy.startedAt) list.sort((a, b) => b.startedAt - a.startedAt); } }
     this.mem.delete(id); this.mem.set(id, e); this.index(copy); this.listCache?.delete(id); this.trackPending(copy);
     if (flush || stateChanged || !ACTIVE.has(copy.state) || answerSettled(prev?.m, copy)) this.flushOne(id); else this.scheduleFlush();
     this.notify(flush || stateChanged);
@@ -458,7 +493,7 @@ class MeetingCompanion {
       if (this.removeInterrupted.has(id)) throw new Error('删除期间又提交了整理或转写请求，会议没有删；等它完成后再删');
       this.tools.unbind?.(m);
       this.pending.delete(id); this.pendingAsr.delete(id); this.live?.delete(id); this.keepAwake((this.live?.size || 0) > 0);
-      this.good?.delete(id); this.corrupt?.delete(id); this.listCache?.delete(id); this.recording.errors.delete(id);
+      this.good?.delete(id); this.corrupt?.delete(id); this.listCache?.delete(id); this.listMemo = null; this.recording.errors.delete(id);
       this.mem.delete(id); this.unindex(id); // 先丢掉内存正本，免得合并落盘把删掉的文件夹又写回来
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
       // 先记墓碑，再按用户选择删别的目录里的副本：副本留着或删不掉（被占用）都不会从列表里冒出来。
@@ -475,6 +510,11 @@ class MeetingCompanion {
     } finally { this.removing.delete(id); this.removeInterrupted.delete(id); }
   }
   list() {
+    // 会议页录制中每 2.5 秒问一次：列表在 LIST_TTL_MS 内直接复用（不扫目录、不逐场 stat）。调用方只读。
+    if (this.listMemo && Date.now() - this.listMemo.at < LIST_TTL_MS) return this.listMemo.value;
+    const value = this.listFresh(); this.listMemo = { at: Date.now(), value }; return value;
+  }
+  listFresh() {
     this.listCache ||= new Map();
     const ids = this.ids(), present = new Set(ids);
     for (const id of this.listCache.keys()) if (!present.has(id)) this.listCache.delete(id);
@@ -516,7 +556,7 @@ class MeetingCompanion {
     if (r.kind === 'heartbeat') {
       // 心跳只记采集进度：改正本、不另起落盘，随下一次合并落盘或退出刷盘写下；也不广播。
       const e = this.entry(id); if (e.m.state !== 'recording') throw new Error('会议未在采集中');
-      const at = this.time(r.at); if (at > e.m.capturedMs) { e.m.capturedMs = at; e.dirty = true; }
+      const at = this.time(r.at); if (at > e.m.capturedMs) { e.m.capturedMs = at; e.dirty = true; e.version++; e.revs?.fields.set('capturedMs', e.version); }
       return { ok: true };
     }
     const m = this.load(id); if (m.state !== 'recording' && !(m.state === 'paused' && ['recording-gap','recording-gap-open','recording-chunk','recording-finish'].includes(r.kind))) throw new Error('会议未在采集中');
@@ -573,17 +613,35 @@ class MeetingCompanion {
     this.save(m); if (op === 'pause' || op === 'stop') void this.recording.drain(id).catch(() => {}); // 录像同步到磁盘
     this.start(); void this.tick(); if (op === 'close-old-sessions') void this.closePending(id); return this.status(id);
   }
-  status(id) {
+  // since：页面手里那一版 { id, epoch, rev }（上次回给它的 meetingRev）。对得上就只回 meetingDelta（之后改过的字段、事件、问题），
+  // 对不上（换了会议、正本重读过、改动记录作废、版本比现在新）或没带就回全量 meeting。会议本身按只读正本（peek）组装，不复制。
+  status(id, since = null) {
     // 选中的这场暂时读不了，不能拖垮整页刷新：列表、材料位置照常返回，错误单独带回。
-    let meeting = null, meetingError = '';
-    if (id) { try { meeting = this.load(id); } catch (e) { meetingError = e.message; this.corrupt?.set(id, e.message); } }
+    let meeting = null, meetingError = '', e = null;
+    if (id) { try { meeting = this.peek(id); e = this.mem.get(id); } catch (err) { meetingError = err.message; this.corrupt?.set(id, err.message); } }
     meeting = questions.view(this, meeting);
+    const meetingRev = e ? { id, epoch: e.revs.epoch, rev: e.version } : null;
+    const delta = e && meeting && this.delta(e, meeting, since);
     const models = modelOptions(this.deps), speed = meeting?.speed || 'normal';
     const engines = this.deps.meetingTerminals ? engine.rank(engine.engines(this.terminals()), speed, this.deps.meetingDefaultEngine?.() || '') : [];
     const storageError = this.storageError(id), recordingError = [this.recording.errors.get(id), storageError].filter(Boolean).join('；');
-    return { ok: true, meetings: this.list(), storage: { ...this.storage(), ...(id && meeting ? { current: this.dir(id), copies: this.copiesOf(id) } : {}) }, meeting, ...(meetingError ? { meetingError } : {}), asr: this.asr.status(), models, defaultFastModel: fastModel(models),
+    return { ok: true, meetings: this.list(), storage: { ...this.storage(), ...(id && meeting ? { current: this.dir(id), copies: this.copiesOf(id) } : {}) }, meeting: delta ? null : meeting, ...(delta ? { meetingDelta: delta } : {}), ...(meetingRev ? { meetingRev } : {}), ...(meetingError ? { meetingError } : {}), asr: this.asr.status(), models, defaultFastModel: fastModel(models),
       engines: engines.map(({ id, label }) => ({ id, label })), recommendedEngine: engines[0]?.id || '', recordingError, ...(storageError ? { storageError } : {}), questionSpeed: meeting?.questionSpeed || 'fast', questionLaneError: meeting?.questionLaneError || null,
       ...(meeting ? { ...this.laneHealth(meeting), ...this.engineInfo(meeting) } : {}) };
+  }
+  // 增量：只在页面那一版对得上时给。问题卡总带上排队/在答的几题（它们的 live 进度不经保存也会变）。
+  delta(e, view, since) {
+    const r = e.revs;
+    if (!since || since.id !== view.id || since.epoch !== r.epoch || !Number.isFinite(since.rev) || since.rev < r.base || since.rev > e.version) return null;
+    const fields = {}, unset = [];
+    for (const [k, rev] of r.fields) if (rev > since.rev) { if (k in view && view[k] !== undefined) fields[k] = view[k]; else unset.push(k); }
+    fields.questionSpeed = view.questionSpeed;
+    const seqs = new Set(), log = r.eventLog;
+    for (let i = log.length - 2; i >= 0 && log[i] > since.rev; i -= 2) seqs.add(log[i + 1]);
+    const events = [];
+    for (const seq of [...seqs].sort((a, b) => a - b)) { const ev = view.events[seq - 1]?.seq === seq ? view.events[seq - 1] : view.events.find(x => x.seq === seq); if (ev) events.push(ev); }
+    const answers = view.answers.filter(q => (r.answers.get(q.id) || 0) > since.rev || q.live);
+    return { id: view.id, from: since.rev, fields, unset, events, answers };
   }
   // 契约第 7 节：理解线自动重试与旧会话待关闭的摘要，界面「会议理解」tab 顶部据此显示「会议理解停了：原因（已自动重试 N 次，下次 X 秒后）」。
   // 会话空闲 ≥15 秒仍没收到本轮回执。
@@ -702,11 +760,17 @@ class MeetingCompanion {
     this.busy = this.lanes.size > 0;
     await Promise.all(tasks);
   }
+  // 每秒对每个待处理会议跑两条车道：先看只读正本（peek）判断有没有事要做，真要改时才 load 一份副本（2026-11-25 后台开销）。
   async runLane(id, slot) {
-    const m = this.load(id), lane = this.lane(slot);
-    if (slot === 'questionJob') return this.runQuestion(m);
-    if (m.pendingClose?.length) void this.closePending(id);
-    if (m[slot] && m[slot].state !== 'error') { await this.collect(m, slot); return; }
+    const p = this.peek(id), lane = this.lane(slot);
+    if (slot === 'questionJob') {
+      // 与 runQuestion 的各个出口一致：没有在途、排队、待关会话、待预热时它什么也不做。
+      if (p.questionCleanupError || (!p.questionSessionId && !p.questionPrimeRequested && !p.questionJob && !p.answers.some(q => q.state === 'queued'))) return;
+      return this.runQuestion(this.load(id));
+    }
+    if (p.pendingClose?.length) void this.closePending(id);
+    if (p[slot] && p[slot].state !== 'error') { await this.collect(this.load(id), slot); return; }
+    const m = p[slot]?.state === 'error' ? this.load(id) : p; // autoRetry 会改它，给副本
     if (m[slot]?.state === 'error' && !this.autoRetry(m)) return;
     const pendingAudio = !m.events.every(settledAudio);
     const useful = m.events.some(e => e.seq > m.cursor && e.kind !== 'audio');
@@ -715,7 +779,7 @@ class MeetingCompanion {
     // 第一版纪要不等满一个间隔：开会 1 分钟、有了原话就先出一版，用户早点看到伴侣在工作（之后按设定间隔）。
     const wait = m.minutesProtocol === 2 && !m.revision ? Math.min(interval, 60000) : interval;
     const auto = m.autoUnderstand && interval > 0 && useful && this.now() - (m.lastDispatch || m.startedAt || 0) >= wait;
-    if (m[lane.prime] || m.requested || final || auto) await this.dispatch(m, null, final, slot);
+    if (m[lane.prime] || m.requested || final || auto) await this.dispatch(m === p ? this.load(id) : m, null, final, slot);
   }
   // 理解线失败后自动重试（2026-11-24）：最多 3 次，退避 30 秒、2 分钟、5 分钟；次数、下次时刻、原因写进 m.understandingRetry 给界面。
   // inFlight＝刚重试或首次见到这次失败、还没记下原因。会后只为没做完的最终复核、且结束不到 6 小时的会议重试，其余不空转；

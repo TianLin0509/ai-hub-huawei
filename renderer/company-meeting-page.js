@@ -8,11 +8,16 @@ const { questionQueue, questionStatus, cardVersion, chatCardHtml, applyQuestionP
 const { backstageHtml, fallbackLog, logText, isMissingHandler } = require('./company-meeting-backstage');
 const { tickWait } = require('./wait-progress');
 const understandingView = require('./company-meeting-understanding');
+const { createStatusPuller } = require('./company-meeting-delta');
+// 会议页轮询（2026-11-25 后台开销）：显示时每 2.5 秒按版本增量拉（只回新增和改过的部分）；会议页隐藏时一律不拉，切回立即全量补齐；
+// 低开销模式下显示时放慢到 5 秒。录音、录屏、转写、理解、问答都在主进程和采集模块里跑，不靠这条轮询。
+const POLL_MS = 2500, POLL_LOW_OVERHEAD_MS = 5000;
 function createCompanyMeetingPage({ document, window, call, markdown, openSession, openBackstage }) {
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const time = ms => `${String(Math.floor((ms || 0) / 60000)).padStart(2, '0')}:${String(Math.floor((ms || 0) / 1000) % 60).padStart(2, '0')}`;
   let root, id = null, capture, state, poll, sourceList = [], playback = null, playRequest = 0;
-  let busy = false, refreshing = false, evidenceRequest = 0, thumbsObserver, meterTimer, activeSeq = null, refreshAgain = false;
+  let busy = false, refreshing = false, evidenceRequest = 0, thumbsObserver, meterTimer, activeSeq = null, refreshAgain = false, lastPollAt = 0;
+  const puller = createStatusPuller({ call, hidden: () => !root || root.hidden }); // 隐藏不拉、切回全量的规则都在这里
   const EXCLUSIVE_ACTS = new Set(['start', 'start-without-asr', 'pause', 'stop', 'new', 'delete-meeting', 'delete-video', 'cancel-record-only', 'retry-save']);
   const running = new Set();
   // 右栏 tab、聊天列表、角标、后台抽屉（2026-11-24）。
@@ -372,12 +377,15 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     if (el('storage-note').textContent !== note) { el('storage-note').textContent = note; el('storage-note').hidden = !note; }
   }
   async function refresh() {
-    if (!root?.isConnected) return;
+    if (!root?.isConnected || root.hidden) return; // 隐藏时任何入口都不拉，切回时 open() 全量补齐
     if (refreshing) { refreshAgain = true; return; }
     refreshing = true; refreshAgain = false;
     try {
-      const requested = id, next = await call('meeting-status', { id });
-      if (requested !== id) return;
+      // 手里有这场的版本就带上，只要增量；切回页面、换会议、上次出错后拉全量。
+      const requested = id, pulled = await puller.pull(id, () => state);
+      if (!pulled || requested !== id) return;
+      if (pulled.retry) { refreshAgain = true; return; }
+      const next = pulled.next;
       // 推送可能比这次轮询更新：旧轮询不把卡片退回去（partial 变短、完成闪回在答）。
       if (next.meeting && state?.meeting?.id === next.meeting.id) next.meeting = mergeQuestionState(state.meeting, next.meeting);
       state = next;
@@ -701,9 +709,14 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
             player.addEventListener('timeupdate',()=>{if(!playback)return;const at=playbackTime(player.currentTime);root.querySelector('[data-m="seek"]').value=String(at/1000);root.querySelector('[data-m="play-time"]').textContent=time(at);root.querySelector('[data-m="seek-seconds"]').value=(at/1000).toFixed(1);});
       el('rate').addEventListener('change',e=>{const rate=Number(e.target.value);player.defaultPlaybackRate=rate;player.playbackRate=rate;});
       player.addEventListener('ended',()=>{if(!playback||playback.spans)return;const next=state.meeting?.recording?.segments.find(s=>s.status==='ready'&&s.at>playback.segment.at);if(next){if(next.at>playback.segment.end+1000)message(`跳过未录制时段 ${time(playback.segment.end)}—${time(next.at)}`);void playAt(Math.max(next.at,playback.segment.end),true).catch(e=>message(e.message));}});
-      poll = setInterval(() => { if (!root.hidden || capture?.running) void refresh().catch(e => message(e.message, { fromPoll: true })); }, 2500);
+      poll = setInterval(() => {
+        if (root.hidden) return; // 隐藏时不拉：采集和问答推送都不依赖它，切回时 open() 立即全量刷新
+        const slow = window.__hubLowOverhead?.isEnabled?.() === true, now = Date.now();
+        if (slow && now - lastPollAt < POLL_LOW_OVERHEAD_MS - 100) return;
+        lastPollAt = now; void refresh().catch(e => message(e.message, { fromPoll: true }));
+      }, POLL_MS);
     }
-    if (!root.isConnected) parent.append(root); root.hidden = false; void modelSync.read(); restoreScroll(); await refresh(); if (!sourceList.length) await action('sources');
+    if (!root.isConnected) parent.append(root); root.hidden = false; puller.markFull(); void modelSync.read(); restoreScroll(); await refresh(); if (!sourceList.length) await action('sources');
   }
   const SCROLLERS = ['timeline', 'summary-scroll', 'chat-list'];
   const scroller = name => name === 'summary-scroll' ? root.querySelector('.meeting-summary-scroll') : el(name);
