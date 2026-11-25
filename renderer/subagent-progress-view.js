@@ -30,6 +30,7 @@
     if (el._text === p.text && !el.hidden) return;
     el._text = p.text;
     el.classList.toggle('sap-running', p.running > 0);
+    el.classList.toggle('sap-interrupted', !(p.running > 0) && p.interrupted > 0);   // R46：全都停了但有没跑完的 / all stopped, some unfinished
     el.innerHTML = '<span class="sap-dot" aria-hidden="true"></span><span class="sap-text"></span>';
     el.querySelector('.sap-text').textContent = p.text;
     el.title = p.text;

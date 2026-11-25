@@ -129,8 +129,17 @@ function renderStrip(row, meeting, { onError = () => {} } = {}) {
         <span class="mr-orch-muted">${esc(runText(run))}</span>${steps}
         <span class="mr-orch-muted">成员做完自动交回负责人 · @成员 可直接点名</span>
       </div>
-      <div class="mr-orch-actions">${live ? '<button type="button" data-squad-stop>停止小队</button>' : ''}</div>
+      <div class="mr-orch-actions">${live ? '<button type="button" data-squad-stop>停止小队</button>' : ''}${run && run.recoverable
+        ? `<button type="button" class="primary" data-squad-resume>${run.recoverMode === 'restart-only' ? '重启负责人' : run.restartLeader ? '重启负责人并继续' : '重新交给负责人'}</button>` : ''}</div>
     </section>`;
+  // R46：负责人掉线时一键重启并重发停下的那一棒。One click restarts the leader and resends the halted leg.
+  row.querySelector('[data-squad-resume]')?.addEventListener('click', async event => {
+    event.currentTarget.disabled = true;
+    try {
+      const result = await ipcRenderer.invoke('squad:resume', { meetingId: meeting.id });
+      if (result && result.ok === false) onError(result.reason || '没能接着做');
+    } catch (error) { onError(error.message); }
+  });
   row.querySelector('[data-squad-stop]')?.addEventListener('click', async event => {
     event.currentTarget.disabled = true;
     try {

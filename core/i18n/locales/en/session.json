@@ -524,5 +524,11 @@
   "这条消息可能没送到：{0}。{1}，请先到终端看一眼是否已收到{2}": "This message may not have been delivered: {0}. {1}; check the terminal first to see whether it arrived{2}",
   "消息没发出去：{0}。{1}{2}": "Message not sent: {0}. {1}{2}",
   "关闭这条提示": "Close this notice",
-  "先别重复发送 ⓘ": "Don't resend yet ⓘ"
+  "先别重复发送 ⓘ": "Don't resend yet ⓘ",
+  "{0} 个子任务进行中": "{0} subtasks running",
+  "{0} 个子任务已完成": "{0} subtasks finished",
+  "{0} 个已完成": "{0} finished",
+  "{0} 个已中断": "{0} interrupted",
+  "{0} 个子任务已中断（CLI 退出时没跑完，需要的话让它重新派）": "{0} subtasks interrupted (unfinished when the CLI exited; ask it to dispatch them again if needed)",
+  "最近一步：{0}": "Latest step: {0}"
 }

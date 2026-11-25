@@ -107,3 +107,54 @@
 .avx-qr{display:block;max-width:240px;height:auto;image-rendering:pixelated;border-radius:6px;background:var(--hw-surface)}
 .avx-ac.avx-focus{outline:2px solid var(--b);outline-offset:1px;animation:avx-pulse 1s 3}
 .avx-pf div .avx-btn{flex:none;margin-left:auto}
+/* 2026-11-26 阶段 2 第 2 批：试答页签（左选题 / 自己问，右结果 + 依据 + 评价），一屏内各栏受控滚动；待确认空态的试答入口；扫码原始报错折叠。 */
+.avx-try{display:grid;grid-template-columns:360px minmax(0,1fr);gap:12px;height:100%;min-height:0}
+.avx-try>.avx-card{display:flex;flex-direction:column;min-height:0}
+.avx-try-list{flex:1;min-height:0;margin:0 -14px;border-top:1px solid var(--ln2);overflow:auto}
+.avx-try-his{flex:none;max-height:124px;margin:0 -14px;border-top:1px solid var(--ln2);overflow:auto}
+.avx-try-his .avx-it{padding:5px 14px}.avx-try-his .avx-it b span:not(.avx-ch){flex:1;min-width:0;font-weight:400}
+.avx-it.ts{padding:8px 14px;cursor:default}.avx-it.ts:hover{background:none}.avx-it.ts.on{background:var(--bs)}
+.avx-it.ts b small{min-width:0;overflow:hidden;color:var(--t2);font-weight:400;text-overflow:ellipsis;white-space:nowrap}
+.avx-it.ts p{display:-webkit-box;margin:3px 0 4px;overflow:hidden;font-size:13px;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+.avx-it.ts .avx-line{justify-content:flex-end}
+.avx-ck{display:inline-flex;align-items:center;gap:4px;margin-right:auto;color:var(--w);font-size:12px;cursor:pointer}
+.avx-pad{padding:10px 14px}
+.avx-try-ask{display:flex;gap:6px}.avx-try-ask .avx-in{flex:1;min-width:0}
+.avx-try-main{flex:1;min-height:0;overflow:auto}
+.avx-try-ans{margin:0 0 6px;padding:10px 13px;border-radius:9px;background:color-mix(in srgb,var(--hw-brand-soft) 55%,var(--hw-surface));line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+.avx-push{margin-left:auto!important}
+.avx-note.w{background:var(--ws);color:var(--w)}
+.avx-bar{position:relative;height:4px;margin:14px 0 6px;border-radius:2px;background:var(--sf3);overflow:hidden}
+.avx-bar i{position:absolute;top:0;left:-35%;width:35%;height:100%;border-radius:2px;background:var(--b);opacity:.75;animation:avx-slide 2.2s ease-in-out infinite}
+@keyframes avx-slide{to{left:100%}}
+.avx-try-rate{flex:none;display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:10px;border-top:1px solid var(--ln2)}
+.avx-try-rate>span{color:var(--t2);font-size:12.5px;white-space:nowrap}.avx-try-rate .avx-in{flex:1;min-width:0}
+.avx-try-rate+.avx-m{min-height:20px}.avx-m.ok{color:var(--g)}
+.avx-try-edge{flex:none;margin:6px 0 0;color:var(--t3);font-size:12px}
+.avx-try-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;height:100%;text-align:center}.avx-try-empty p{color:var(--t2)}
+.avx-try-cta{display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:6px}
+.avx-scan .avx-raw{width:100%;text-align:left}
+/* 2026-11-26 阶段 2 第 3 批：答错就地纠偏（错因 + 正确说法 + 预览 → 新旧并排）、回复对象改配、群分身转交分组、「它学到的」页签。只用局部变量（都转引 --hw-*）。 */
+.avx-btn.fixb{border-color:color-mix(in srgb,var(--hw-brand) 45%,var(--hw-surface));color:var(--b)}.avx-btn.fixb:hover{background:var(--bs)}
+.avx-grp{display:flex;align-items:center;gap:6px;padding:6px 12px 4px;border-bottom:1px solid var(--ln2);background:var(--sf2);color:var(--t2);font-size:12px;font-weight:600}.avx-grp em{color:var(--w);font-style:normal}
+.avx-it.ext{box-shadow:inset 3px 0 0 var(--hw-amber)}
+.avx-tgt{display:flex;align-items:center;gap:10px;margin:4px 0}.avx-tgt>.avx-m{flex:1;min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.avx-tgt-a{flex:none;display:flex;gap:12px}
+.avx-lk{padding:0;border:0;background:none;color:var(--b);font:inherit;font-size:12.5px;cursor:pointer}.avx-lk:hover{text-decoration:underline}.avx-lk:focus-visible{outline:2px solid var(--b);outline-offset:1px}
+.avx-cands{margin:2px 0 6px;border:1px solid var(--ln);border-radius:8px;overflow:hidden}.avx-cands .avx-it{padding:5px 10px}.avx-cands .avx-line{padding:4px 10px}
+.avx-fix{margin-top:8px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--hw-brand) 35%,var(--hw-surface));border-radius:10px;background:color-mix(in srgb,var(--hw-brand-soft) 30%,var(--hw-surface))}
+.avx-fix .avx-line h3{font-size:14px}.avx-fix .avx-x.big{margin-left:auto}.avx-fix .avx-lb{margin-top:6px}
+.avx-fix .avx-pk:disabled{opacity:.5;cursor:default}
+.avx-fix-pv{margin:6px 0 0;padding:6px 10px;border-radius:7px;background:var(--sf);color:var(--t2);font-size:12.5px;overflow-wrap:anywhere}
+.avx-q.dim{color:var(--t2);background:var(--sf2);border-left-color:var(--ln)}
+.avx-q.new{background:color-mix(in srgb,var(--hw-green-soft) 70%,var(--hw-surface));border-left-color:var(--hw-green)}
+.avx-q.clamp,.avx-clamp{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.avx-clamp{margin:0;font-size:13px;-webkit-line-clamp:3;overflow-wrap:anywhere}
+.avx-cmp{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.avx-cmp .avx-q{min-height:64px;max-height:150px;margin:0;overflow:auto}
+.avx-ch.hit,.avx-hit{background:var(--ws);color:var(--w);font-weight:600}
+.avx-hit{padding:0 3px;border-radius:4px}
+.avx-learn{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px;height:100%;min-height:0}
+.avx-learn>.avx-stack{gap:10px}.avx-learn .avx-line h3{margin:0;font-size:14px}
+.avx-t tr.off td{color:var(--t3)}
+.avx-t td small{color:var(--t3);font-size:11.5px}
+.avx-learn-foot{flex:none;margin:0;color:var(--t3);font-size:12px;text-align:right}

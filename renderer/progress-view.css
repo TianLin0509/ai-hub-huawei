@@ -94,6 +94,7 @@
 #subagent-progress-line .sap-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #subagent-progress-line .sap-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--pg-done); }
 #subagent-progress-line.sap-running .sap-dot { background: var(--pg-ok); animation: sap-pulse 1.6s ease-in-out infinite; }
+#subagent-progress-line.sap-interrupted .sap-dot { background: var(--status-warning, #c27c0e); }
 @keyframes sap-pulse { 50% { opacity: .35; } }
 
 /* 公司版换皮（2026-11-05）：与助理、会议室、PPT 同一外框——浅灰底上的页头（22 号标题 + 同行说明），下面一张白底大圆角纸，四栏是纸上的浅灰泳道。

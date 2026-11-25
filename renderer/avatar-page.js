@@ -1,6 +1,7 @@
 'use strict';
-// 「分身」页（Beta）：左边分身列表，右边待确认、运行记录、生效范围、上下文、后端与前缀，每个页签一屏。
+// 「分身」页（Beta）：左边分身列表，右边待确认、试答、它学到的、运行记录、生效范围、上下文、后端与前缀，每个页签一屏。
 // 2026-11-25 阶段 2 第 1 批：首屏自检与就地扫码、5 段状态流水与巡检健康、结构化报错就地修、待确认里的进度与「可能已回答」。
+// 2026-11-26 阶段 2 第 3 批：草稿「答错了，这样改」就地纠偏（存本机纠错卡 + 同题重答 + 新旧并排）、回复对象改配 / 不是问我的、群分身转交、「它学到的」页签、反馈附脱敏现场。
 // 页面只经 avatar:* 接口读状态和发操作；发送只有「本人点发送」这一条路，收信方由主进程从事项记录里取。
 
 const TEMPLATES = [
@@ -51,17 +52,60 @@ function scopeSummary(a) {
   if (!a.targets?.length) return '还没有选择目标，这个分身暂时不处理任何消息。';
   return `${a.targets.map(t => `${t.name}（${ACT[t.action]}）`).join('、')}。上级的消息最多起草，所有消息都由你点了才发。`;
 }
+// 扫码失败的报错：不含中文、或像命令行崩溃输出（Node.js 版本行、调用栈、多行日志）时，主提示换成人话，原文放进折叠的「原始报错」。
+const SCAN_HUMAN = '扫码登录没成功，请重新获取二维码或到助理页扫码';
+const CRASH_LIKE = /Node\.js v\d|node:internal|^\s*at\s|\bat\s.+:\d+:\d+|Error:|Traceback|\bERR_[A-Z_]+|exit code|[\r\n]/m;
+function humanScanError(message) {
+  const s = String(message ?? '').trim();
+  if (!s) return { head: '', raw: '' };
+  if (!/[一-鿿]/.test(s) || CRASH_LIKE.test(s)) return { head: SCAN_HUMAN, raw: s };
+  return { head: s, raw: '' };
+}
+// 试答：题目来源的标签、处理方式的名字、评价三选一。
+const TRY_TAG = { group: ['群真实题', 'b'], example: ['示例题', ''], dm: ['私聊 · 需你同意', 'w'] };
+const TRY_ACT = { draft: '会起草', remind: '只提醒你', skip: '不用回' };
+const VERDICTS = [['like', '像我'], ['unlike', '不像'], ['issue', '有问题']];
+const TRY_CONSENT_HINT = '这是私聊消息：先在左边勾选「同意送模型试答」，再点试答。';
+// 依据不足：后端标了 lowConfidenceFallback，或把握为 0 且一条依据都没有（与第 1 批待确认同一口径）。
+const tryoutLow = r => !!r && (!!r.lowConfidenceFallback || (!(Number(r.confidence) > 0) && !(r.basis || []).length));
+// 第 3 批：答错一键就地纠偏。错因六选一；纠错卡只存公司本机该分身目录，默认不外发。
+const FIX_REASONS = [['fact', '事实错'], ['tone', '语气不像'], ['should_not_reply', '不该回'], ['too_long', '太长'], ['missing_point', '漏关键点'], ['wrong_target', '回错人']];
+const FIX_PH = { should_not_reply: '比如：这类催进度的消息不用回，提醒我就行', wrong_target: '比如：这条是问别人的，我不用回', tone: '比如：说短一点，用「我这边」开头', too_long: '比如：一句话说清结论，细节让他私聊问' };
+const FIX_LOCAL = '只存公司本机，默认不外发';
+const reasonName = k => (FIX_REASONS.find(r => r[0] === k) || [])[1] || '其他';
+// 卡号对用户只显示数字部分（cor-3 → #3）；依据里写到「纠错卡 #…」的地方高亮。
+const cardNo = c => String(c?.id ?? '').replace(/^cor-/, '');
+const markCards = html => String(html).replace(/(你的)?纠错卡\s*#[\w-]+(\s*v\d+)?/g, m => `<mark class="avx-hit">${m.replace('#cor-', '#')}</mark>`);
+// 群分身转交（外部只读转交文件）：只取待处理的，统一成待确认事项的形状；key 前缀 ext| 与本人分身的事项分开。
+function externalRows(list, avatars) {
+  const fallback = (avatars || []).find(a => a.tpl === 'qa') || (avatars || [])[0];
+  return (Array.isArray(list) ? list : []).filter(x => x && x.id && (x.status || 'pending') === 'pending').map(x => ({
+    _key: `ext|${x.id}`, id: x.id, external: true, kind: x.kind === 'promise' ? 'promise' : 'draft', avatarId: x.avatarId || fallback?.id || '', avatarName: '群分身',
+    who: x.askerName || '群成员', convName: x.convName || '群', group: true, at: Number(x.at) || 0, since: Number(x.at) || 0, text: x.question || '', draft: x.answer || '',
+    confidence: Number(x.confidence) || 0, basis: Array.isArray(x.basis) ? x.basis.join('、') : String(x.basis || ''), flags: [], state: 'ready' }));
+}
+const extTag = r => (r.kind === 'promise' ? '承诺待回收' : `群分身低把握 · 把握 ${r.confidence || 0}`);
 
 function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage = () => {}, selectSession = () => {} }) {
   let page, root, data = null, targets = null, sel = 'all', tab = 'inbox', error = '', busy = '', wiz = null, confirmBox = null, notice = null, logFilter = 'all', logPage = 0, logPick = -1, noticeTimer = null;
   const itemSel = {}, edits = {}, ack = {}, ackNote = {}, rawOpen = {};
+  // 第 3 批：fixes 按「分身|事项」存就地纠偏的进度（切分身、切页签不丢、不串）；retargetOpen：改配消息的候选列表是否展开；learned：每个分身「它学到的」。
+  const fixes = {}, retargetOpen = {}, learned = {};
+  const learnOf = id => (learned[id] ||= { loaded: false, loading: false, error: '', cards: [], examplesCount: null, persona: '', memoryLines: null, page: 0, pick: '', busy: '' });
+  // 试答（第 2 批）：每个分身各一份，切分身、切页签不丢；personaNote：「从我的发言重新生成」没归纳出来时的说明。
+  const tryouts = {}, personaNotes = {};
+  const tryOf = id => (tryouts[id] ||= { loaded: false, loading: false, error: '', samples: [], history: [], consent: {}, ask: '', pick: null, running: null, failure: null, lastQ: null, hint: '', verdict: '', note: '', rating: false, rateMsg: '', rateErr: '', seq: 0 });
   // checking：打开页面后的首次自检（含一次自动「重新检查」）还没结束，期间只显示一行平静的「正在检查」，不先报「用不了」。
   // scan：就地扫码弹层；focus：报错条「去账号卡」后要高亮的那一项（几秒后自动淡掉）。
   let checking = false, autoRechecked = false, scan = null, scanTimer = null, clockTimer = null, scopePage = 0, focus = null;
   const isOpen = () => !!page && !page.hidden;
   const avatar = id => data?.avatars?.find(a => a.id === id);
   const cur = () => avatar(sel);
-  const keyOf = it => `${it.avatarId}|${it.id}`;
+  const keyOf = it => it._key || `${it.avatarId}|${it.id}`;
+  const extList = () => externalRows(data?.externalItems, data?.avatars);
+  // 外部条目纠正后主进程立刻结案、从 externalItems 移除；新旧对照或重答失败面板还要给用户看，就用发起时的快照留在原位，点「×」才移出。
+  const extKept = () => { const live = new Set(extList().map(keyOf)); return Object.entries(fixes).filter(([k, f]) => f.snap?.external && f.mode && f.mode !== 'edit' && !live.has(k)).map(([, f]) => ({ ...f.snap, resolved: true })); };
+  const rowOf = key => [...extList(), ...(data?.items || [])].find(r => keyOf(r) === key) || (fixes[key]?.snap?.external ? fixes[key].snap : null);
   async function call(op, payload = {}) {
     const result = await ipcRenderer.invoke('avatar:' + op, payload);
     if (!result || (result.ok === false && !result.needAck)) throw new Error(result?.error || '没有收到结果，请重试');
@@ -170,6 +214,8 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     page.innerHTML = '<div class="avx-root"></div>'; root = page.firstChild; document.body.append(page);
     page.addEventListener('click', event => { const b = event.target.closest('[data-av]'); if (b && !b.disabled) void act(b, event).catch(e => { error = e.message; render(); }); });
     page.addEventListener('input', onInput);
+    // 「自己问一句」回车直接试答（输入法选词时的回车不算）。
+    page.addEventListener('keydown', event => { const t = event.target; if (event.key === 'Enter' && !event.isComposing && t?.dataset && 'tryAsk' in t.dataset) { event.preventDefault(); void tryAct('try-ask', t).catch(e => { error = e.message; render(); }); } });
     // 「原始报错」展开后，后台刷新重画时保持展开。
     page.addEventListener('toggle', event => { const d = event.target; if (d?.dataset?.raw) rawOpen[d.dataset.raw] = d.open; }, true);
     page.addEventListener('change', event => { void onChange(event).catch(e => { error = e.message; render(); }); });
@@ -233,7 +279,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   function banners() {
     const out = [];
     if (error) out.push(`<div class="avx-bn r">${esc(error)}</div>`);
-    if (notice) out.push(`<div class="avx-bn b">${esc(notice.text)}${notice.action ? `<button class="avx-btn s" data-av="${notice.action.op}" data-a="${esc(notice.action.a)}" data-i="${esc(notice.action.i)}">${esc(notice.action.label)}</button>` : ''}</div>`);
+    if (notice) out.push(`<div class="avx-bn b">${esc(notice.text)}${notice.action ? `<button class="avx-btn s" data-av="${notice.action.op}" data-a="${esc(notice.action.a)}" data-i="${esc(notice.action.i)}" data-k="${esc(notice.action.k)}">${esc(notice.action.label)}</button>` : ''}</div>`);
     if (!data?.available) return out.join('');
     if (data.paused) out.push('<div class="avx-bn r"><b>全部分身已暂停。</b>不读取新消息，不起草，也不能发送。已写好的草稿还在。</div>');
     else if (data.activeFailure) out.push(failureBox(data.activeFailure, 'page'));
@@ -296,16 +342,16 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   }
   const tplCard = ([k, n, d, m]) => `<button class="avx-tpl" data-av="tpl" data-t="${k}"><b>${n}</b><span>${d}</span><small>${m}</small></button>`;
   function list() {
-    const total = data.items.length;
+    const total = data.items.length + extList().length;
     return `<aside class="avx-list" aria-label="分身列表"><button class="avx-row ${sel === 'all' ? 'on' : ''}" data-av="sel" data-id="all"><div class="n"><span>全部待确认</span>${total ? `<b>${total}</b>` : ''}</div><small>所有分身交给你的事</small></button><hr>
       <div class="avx-rows" data-sc="av">${data.avatars.map(a => `<button class="avx-row ${sel === a.id ? 'on' : ''}" data-av="sel" data-id="${esc(a.id)}"><div class="n"><i class="avx-dot ${dotOf(a)}" title="${esc(a.state.text)}"></i><span>${esc(a.name)}</span>${a.pending ? `<b>${a.pending}</b>` : ''}</div><small>${esc(scopeText(a))}</small><small>${esc(modeText(a))} · 今日处理 ${a.stats.model} 条</small></button>`).join('')}</div>
       <p class="avx-foot">每个分身是一个独立会话，在左侧「后台任务」里也能看到。</p></aside>`;
   }
   const dotOf = a => ({ on: 'g', waiting: 'w', error: 'r', paused: 'r' }[a.state.code] || '');
   function detail() {
-    if (sel === 'all') return `<section class="avx-detail"><div class="avx-dh line"><h2>全部待确认</h2><span class="avx-ch">${data.items.length} 条</span></div><div class="avx-body">${inbox(null)}</div></section>`;
-    const a = cur(), tabs = [['inbox', '待确认'], ['log', '运行记录'], ['scope', '生效范围'], ['ctx', '上下文'], ['back', '后端与前缀']];
-    const body = { inbox: () => inbox(a), log: () => logs(a), scope: () => scope(a), ctx: () => context(a), back: () => backend(a) }[tab]();
+    if (sel === 'all') return `<section class="avx-detail"><div class="avx-dh line"><h2>全部待确认</h2><span class="avx-ch">${data.items.length + extList().length} 条</span></div><div class="avx-body">${inbox(null)}</div></section>`;
+    const a = cur(), tabs = [['inbox', '待确认'], ['try', '试答'], ['learn', '它学到的'], ['log', '运行记录'], ['scope', '生效范围'], ['ctx', '上下文'], ['back', '后端与前缀']];
+    const body = { inbox: () => inbox(a), try: () => tryTab(a), learn: () => learnTab(a), log: () => logs(a), scope: () => scope(a), ctx: () => context(a), back: () => backend(a) }[tab]();
     return `<section class="avx-detail"><div class="avx-dh"><h2>${esc(a.name)}</h2><span class="avx-ch ${{ on: 'g', error: 'r', paused: 'r', waiting: 'w' }[a.state.code] || ''}">${esc(a.state.text)}</span><span class="avx-ch b">${esc(modeText(a))}</span>
       <div class="avx-right"><button class="avx-btn s" data-av="open-session">打开会话</button><button class="avx-btn s" data-av="toggle">${a.enabled ? '暂停这个分身' : '恢复'}</button><button class="avx-btn s d" data-av="remove">删除</button></div></div>
       ${a.state.failure ? failureBox(a.state.failure, 'av:' + a.id, true) : a.state.error && !data.activeFailure ? `<div class="avx-bn r slim">${esc(a.state.error)}${a.state.providerRepair ? a.state.providerRepair.canUseManual ? `<button class="avx-btn s" data-av="repair-provider" data-account="${esc(a.state.providerRepair.account)}">改用手动会话在用的供应商</button>` : '<button class="avx-btn s" data-av="provider-settings">选择模型与供应商</button>' : ''}</div>` : ''}
@@ -318,20 +364,70 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     return rows.map(p => `<div class="avx-it prog"><b><i class="avx-dot b"></i>${esc(p.convName || '处理中')}<em>已用 <span data-since="${Number(p.since) || 0}">${span(Date.now() - (Number(p.since) || Date.now())) || '0 秒'}</span></em></b><span>${esc(p.question || '')}</span><small>${STAGE_NAME[p.stage] || '处理中'}${p.queuePos ? ` · 前面还有 ${p.queuePos} 条` : ''}</small></div>`).join('');
   }
   function inbox(a) {
-    const rows = data.items.filter(i => !a || i.avatarId === a.id), scopeKey = a?.id || 'all', prog = progress(a);
-    if (!rows.length) return `<div class="avx-empty"><h2>没有待确认的消息</h2><p>${prog ? '下面这些正在处理，好了会出现在这里；写不出也会说明原因。' : a?.working ? `分身正在处理 ${a.working} 条，好了会出现在这里。` : '新的草稿和提醒会出现在这里。'}</p>${prog ? `<div class="avx-card ls avx-progbox">${prog}</div>` : ''}</div>`;
+    // 群分身转交只在「全部待确认」顶部出现；没有外部条目时这一组完全不画。
+    const ext = a ? [] : [...extList(), ...extKept()], own = data.items.filter(i => !a || i.avatarId === a.id), rows = [...ext, ...own], scopeKey = a?.id || 'all', prog = progress(a);
+    // 空态给一个醒目的试答入口：新建完不用干等真实消息，先挑几道题看看分身怎么答。「全部」视图只有一个分身时直达它。
+    const tryTo = a ? `<button class="avx-btn p" data-av="tab" data-k="try">先试答几道题看看效果</button>` : data.avatars.length === 1 ? `<button class="avx-btn p" data-av="try-go" data-id="${esc(data.avatars[0].id)}">先试答几道题看看效果</button>` : '';
+    if (!rows.length) return `<div class="avx-empty"><h2>没有待确认的消息</h2><p>${prog ? '下面这些正在处理，好了会出现在这里；写不出也会说明原因。' : a?.working ? `分身正在处理 ${a.working} 条，好了会出现在这里。` : '新的草稿和提醒会出现在这里。'}</p>${prog ? `<div class="avx-card ls avx-progbox">${prog}</div>` : ''}${tryTo ? `<div class="avx-try-cta">${tryTo}<span class="avx-m">挑近期真实问题或示例题，看分身会怎么答；试答不会发到群里。</span></div>` : ''}</div>`;
     const it = rows.find(r => keyOf(r) === itemSel[scopeKey]) || rows[0]; itemSel[scopeKey] = keyOf(it);
-    const key = keyOf(it), text = edits[key] ?? it.draft ?? '', leader = (it.flags || []).some(f => f === 'leader' || f === 'leader-present'), remind = it.state === 'remind';
-    const rt = it.replyTarget, ma = it.maybeAnswered;
-    const target = rt ? `<p class="avx-m"><b>回的是：</b>${esc(rt.sender || it.who)} ${rt.at ? when(rt.at) : ''} 这条「${esc(String(rt.snippet || '').slice(0, 60))}」</p>` : '';
-    const maybe = ma ? `<div class="avx-note"><span>你可能已经回过：${esc(ma.by || '你')} ${ma.at ? when(ma.at) : ''} 说「${esc(String(ma.snippet || '').slice(0, 60))}」，但没有引用这条提问，所以没有自动结案。</span><button class="avx-btn s" data-av="answered" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">确实已回答，结案</button></div>` : '';
-    return `<div class="avx-split"><div class="avx-card ls" data-sc="il">${prog}${rows.map(r => `<button class="avx-it ${keyOf(r) === key ? 'on' : ''}" data-av="item" data-k="${esc(scopeKey)}" data-id="${esc(keyOf(r))}"><b>${esc(r.who)}${(r.flags || []).includes('leader') ? '<span class="avx-ch r">上级</span>' : ''}${r.failure ? '<span class="avx-ch w">没写成</span>' : r.lowConfidenceFallback ? '<span class="avx-ch w">依据不足</span>' : ''}<em>${when(r.at)}</em></b><span>${esc(r.text)}</span><small>${esc(r.avatarName)} · ${r.state === 'remind' ? '提醒' : '起草'} · ${waited(r.since || r.at)}</small></button>`).join('')}</div>
-      <div class="avx-card scroll"><div class="avx-line"><h3>${esc(it.who)}</h3><span class="avx-m">${esc(it.group ? it.convName : '私聊')} · ${when(it.at)} · 来自「${esc(it.avatarName)}」</span>${(it.flags || []).includes('leader') ? '<span class="avx-ch r">回上级</span>' : (it.flags || []).includes('leader-present') ? '<span class="avx-ch r">群里有上级</span>' : ''}${it.lowConfidenceFallback ? '<span class="avx-ch w">依据不足，转你处理</span>' : it.confidence ? `<span class="avx-ch">把握 ${it.confidence}</span>` : ''}</div>
-      <div class="avx-q">${esc(it.text)}</div>${target}${maybe}${failureBox(it.failure, 'it:' + key, true)}${it.why ? `<p class="avx-m"><b>为什么交给你：</b>${esc(it.why)}</p>` : ''}${it.basis ? `<p class="avx-m"><b>依据：</b>${esc(it.basis)}</p>` : ''}
-      ${remind ? `<div class="avx-line act"><button class="avx-btn p" data-av="done" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">知道了</button><button class="avx-btn" data-av="redraft" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">让分身起草一条</button><button class="avx-btn" data-av="drop" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">不用管</button></div>` : `
-      <label class="avx-lb" for="avx-draft">草稿，可以直接改</label><textarea id="avx-draft" class="avx-ta" rows="5" data-edit="${esc(key)}">${esc(text)}</textarea>
+    const key = keyOf(it), text = edits[key] ?? it.draft ?? '', leader = (it.flags || []).some(f => f === 'leader' || f === 'leader-present'), remind = it.state === 'remind', fx = fixes[key];
+    const rowBtn = r => `<button class="avx-it ${keyOf(r) === key ? 'on' : ''}${r.external ? ' ext' : ''}" data-av="item" data-k="${esc(scopeKey)}" data-id="${esc(keyOf(r))}"><b>${esc(r.who)}${(r.flags || []).includes('leader') ? '<span class="avx-ch r">上级</span>' : ''}${r.external ? `<span class="avx-ch w">${esc(r.kind === 'promise' ? '承诺待回收' : `把握 ${r.confidence || 0}`)}</span>` : r.failure ? '<span class="avx-ch w">没写成</span>' : r.lowConfidenceFallback ? '<span class="avx-ch w">依据不足</span>' : ''}${r.correctedCardId || r.resolved ? '<span class="avx-ch b">已纠错</span>' : ''}<em>${when(r.at)}</em></b><span>${esc(r.text)}</span><small>${r.external ? esc(r.convName) + ' · 群分身转交' : `${esc(r.avatarName)} · ${r.state === 'remind' ? '提醒' : '起草'}`} · ${waited(r.since || r.at)}</small></button>`;
+    const listHtml = ext.length ? `<div class="avx-grp">群分身转交<em>${ext.length}</em></div>${ext.map(rowBtn).join('')}${own.length || prog ? '<div class="avx-grp">分身待确认</div>' : ''}${prog}${own.map(rowBtn).join('')}` : prog + own.map(rowBtn).join('');
+    const head = `<div class="avx-line"><h3>${esc(it.who)}</h3><span class="avx-m">${esc(it.group ? it.convName : '私聊')} · ${when(it.at)} · ${it.external ? '群分身转交' : `来自「${esc(it.avatarName)}」`}</span>${it.external ? `<span class="avx-ch w">${esc(extTag(it))}</span>` : ''}${(it.flags || []).includes('leader') ? '<span class="avx-ch r">回上级</span>' : (it.flags || []).includes('leader-present') ? '<span class="avx-ch r">群里有上级</span>' : ''}${it.external ? '' : it.lowConfidenceFallback ? '<span class="avx-ch w">依据不足，转你处理</span>' : it.confidence ? `<span class="avx-ch">把握 ${it.confidence}</span>` : ''}</div>`;
+    const extra = it.external ? '' : `${reassignLine(it, key)}${maybeLine(it)}${failureBox(it.failure, 'it:' + key, true)}`;
+    const why = it.why ? `<p class="avx-m"><b>为什么交给你：</b>${esc(it.why)}</p>` : '';
+    const basis = it.basis ? `<p class="avx-m"><b>依据：</b>${markCards(esc(it.basis))}</p>` : '';
+    let foot;
+    if (fx) foot = fixPanel(it, key, fx, text);
+    else if (it.external) foot = `${it.draft ? `<label class="avx-lb">群分身在群里的草稿</label><div class="avx-q dim">${esc(it.draft)}</div>` : `<div class="avx-note"><span>${it.kind === 'promise' ? '群分身在群里答应了「确认后再回」，等你给出正确说法。' : '群分身没写出草稿。'}</span></div>`}
+      <div class="avx-line act"><button class="avx-btn p" data-av="fix-open" data-key="${esc(key)}">答错了，这样改</button><span class="avx-m">纠正只记在本地，不自动替群分身发群。</span></div>`;
+    else if (remind) foot = `<div class="avx-line act"><button class="avx-btn p" data-av="done" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">知道了</button><button class="avx-btn" data-av="redraft" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">让分身起草一条</button><button class="avx-btn" data-av="drop" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">不用管</button></div>`;
+    else foot = `<label class="avx-lb" for="avx-draft">草稿，可以直接改</label><textarea id="avx-draft" class="avx-ta" rows="5" data-edit="${esc(key)}">${esc(text)}</textarea>
       <p class="avx-hint" id="avx-risk">${ack[key] ? esc(ackNote[key] || '这句话在向上级应承一件事。确认无误就点「确认发送」。') : leader && COMMIT_HINT.test(text) ? '这句话可能在向上级应承一件事，请确认后再发。' : ''}</p>
-      <div class="avx-line act"><button class="avx-btn p" data-av="send" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}" data-key="${esc(key)}" ${busy ? 'disabled' : ''}>${ack[key] ? '确认发送' : busy === '正在发送' ? '正在发送…' : '发送'}</button><button class="avx-btn" data-av="redraft" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">让分身重写</button><button class="avx-btn" data-av="remind-only" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">改成只提醒</button><button class="avx-btn" data-av="drop" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">丢弃</button><span class="avx-m">${it.prefixed ? `发出时带「🤖【${esc(it.prefix)}】」` : '以你本人名义发出，不带前缀'}</span></div>`}</div></div>`;
+      <div class="avx-line act"><button class="avx-btn p" data-av="send" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}" data-key="${esc(key)}" ${busy ? 'disabled' : ''}>${ack[key] ? '确认发送' : busy === '正在发送' ? '正在发送…' : '发送'}</button><button class="avx-btn fixb" data-av="fix-open" data-key="${esc(key)}">答错了，这样改</button><button class="avx-btn" data-av="redraft" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">让分身重写</button><button class="avx-btn" data-av="remind-only" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">改成只提醒</button><button class="avx-btn" data-av="drop" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">丢弃</button><span class="avx-m">${it.prefixed ? `发出时带「🤖【${esc(it.prefix)}】」` : '以你本人名义发出，不带前缀'}</span></div>`;
+    return `<div class="avx-split"><div class="avx-card ls" data-sc="il">${listHtml}</div>
+      <div class="avx-card scroll" data-sc="id">${head}<div class="avx-q">${esc(it.text)}</div>${extra}${fx ? '' : why + basis}${foot}</div></div>`;
+  }
+  // 回复对象：「回的是哪条」+「改成回别的消息」「不是问我的，忽略」。候选是同群近期别的提问（主进程给就列，没给就友好说明）。
+  const candOf = it => (Array.isArray(it.targetCandidates) ? it.targetCandidates : Array.isArray(it.candidates) ? it.candidates : []).filter(c => c && (c.msgKey || c.key));
+  function reassignLine(it, key) {
+    const rt = it.replyTarget;
+    if (!rt && !it.group) return '';
+    const who = rt ? `${esc(rt.sender || it.who)} ${rt.at ? when(rt.at) : ''} 这条「${esc(String(rt.snippet || '').slice(0, 60))}」` : '上面这条提问';
+    const open = retargetOpen[key], cands = candOf(it);
+    const pick = open ? `<div class="avx-cands">${cands.map((c, n) => `<button class="avx-it" data-av="retarget-pick" data-key="${esc(key)}" data-n="${n}"><b>${esc(c.sender || '同事')}<em>${c.at ? when(c.at) : ''}</em></b><span>${esc(c.text || c.snippet || '')}</span></button>`).join('')}<div class="avx-line"><span class="avx-m">点一条，分身改回那条并重新起草</span><button class="avx-btn s avx-push" data-av="retarget-close" data-key="${esc(key)}">收起</button></div></div>` : '';
+    return `<div class="avx-tgt"><span class="avx-m"><b>回的是：</b>${who}</span><span class="avx-tgt-a"><button class="avx-lk" data-av="retarget-open" data-key="${esc(key)}">改成回别的消息</button><button class="avx-lk" data-av="not-me" data-key="${esc(key)}">不是问我的，忽略</button></span></div>${pick}`;
+  }
+  function maybeLine(it) {
+    const ma = it.maybeAnswered;
+    return ma ? `<div class="avx-note"><span>你可能已经回过：${esc(ma.by || '你')} ${ma.at ? when(ma.at) : ''} 说「${esc(String(ma.snippet || '').slice(0, 60))}」，但没有引用这条提问，所以没有自动结案。</span><button class="avx-btn s" data-av="answered" data-a="${esc(it.avatarId)}" data-i="${esc(it.id)}">确实已回答，结案</button></div>` : '';
+  }
+  // 就地纠偏三段：填写（错因 + 正确说法 + 保存前预览）→ 保存并重答中 → 结果（新旧并排 / 卡已存但重答没成功 / 卡已存、重写排队中）。
+  const fixPreview = fx => `将存为本分身纠错卡（${FIX_LOCAL}）：${fx.reason ? `错因「${reasonName(fx.reason)}」` : '先选错在哪'}${String(fx.text || '').trim() ? `，以后这类问题按「${String(fx.text).trim().slice(0, 80)}」答` : '，再写正确说法'}。`;
+  function fixPanel(it, key, fx, text) {
+    const k = esc(key), card = fx.card, no = card ? esc(cardNo(card)) : '';
+    const close = `<button class="avx-x big" data-av="fix-close" data-key="${k}" aria-label="收起" ${fx.saving ? 'disabled' : ''}>×</button>`;
+    if (fx.mode === 'compare') {
+      const r = fx.result || {}, b = (Array.isArray(r.basis) ? r.basis : r.basis ? [r.basis] : []).filter(Boolean);
+      const chips = [`<span class="avx-ch hit">你的纠错卡 #${no}</span>`, ...b.filter(x => !(card && String(x).includes(card.id))).map(x => `<span class="avx-ch ${/纠错卡/.test(x) ? 'hit' : 'b'}" title="${esc(x)}">${esc(String(x).slice(0, 24))}</span>`)].join('');
+      const adopt = it.external ? `<span class="avx-m">本地记录已纠正（纠错卡 #${no}），不自动替群分身发群。</span>` : `<button class="avx-btn p" data-av="fix-adopt" data-key="${k}">采用新稿</button><button class="avx-btn" data-av="fix-keep" data-key="${k}">保留原稿</button><span class="avx-m">采用后填回草稿框，仍由你点发送。</span>`;
+      return `<div class="avx-fix"><div class="avx-line"><h3>按纠错卡重写好了</h3><span class="avx-ch g">纠错卡 #${no} 已保存</span>${r.confidence ? `<span class="avx-ch">把握 ${Number(r.confidence) || 0}</span>` : ''}${close}</div>
+        <div class="avx-cmp"><div><label class="avx-lb">原来的稿</label><div class="avx-q dim" data-cmp="old">${esc(fx.oldText || '（原来没有草稿）')}</div></div><div><label class="avx-lb">按你的纠正重写</label><div class="avx-q new" data-cmp="new">${esc(r.draft || '')}</div></div></div>
+        <div class="avx-line"><span class="avx-m">新依据</span>${chips}</div>${r.why ? `<p class="avx-m">${markCards(esc(r.why))}</p>` : ''}<div class="avx-line act">${adopt}</div></div>`;
+    }
+    if (fx.mode === 'failed') return `<div class="avx-fix"><div class="avx-line"><h3>纠错卡已保存在本机，重答暂未成功</h3><span class="avx-ch g">纠错卡 #${no} 已保存</span>${close}</div>
+      <p class="avx-m">你的纠正没有丢：下次分身遇到这类问题会按它答。修好下面的问题后可以只重答这一条。</p><div data-fixredo="${k}">${failureBox({ ...fx.failure, retryAfterMs: 0 }, 'fix:' + key, true)}</div>
+      <div class="avx-line act">${it.external || (fx.failure?.actions || []).some(x => x.kind === 'retry_tick') ? '' : `<button class="avx-btn" data-av="fix-redo" data-key="${k}">只重答这一条</button>`}<span class="avx-m">${it.external ? '本地记录已纠正，不自动替群分身发群。' : '重答不会重新跑整轮巡检。'}</span></div></div>`;
+    if (fx.mode === 'saved') return `<div class="avx-fix"><div class="avx-line"><h3>纠错卡 #${no} 已保存</h3>${close}</div><p class="avx-m">${it.external ? '本地记录已纠正，不自动替群分身发群。' : '分身正在按新纠错卡重写这条，写好会回到草稿框；写不出也会说明原因。'}</p></div>`;
+    const ph = FIX_PH[fx.reason] || '写出你认为正确的说法或标准口径，比如：在纪要页右上角选导出，格式选 Word';
+    return `<div class="avx-fix"><div class="avx-line"><h3>答错了，这样改</h3><span class="avx-m">只纠这个分身，存成纠错卡后以后同类问题优先按它答</span>${close}</div>
+      ${String(text || '').trim() ? `<label class="avx-lb">它原来这样答</label><div class="avx-q dim clamp">${esc(text)}</div>` : ''}
+      <label class="avx-lb">错在哪</label><div class="avx-chips">${FIX_REASONS.map(([r, n]) => `<button class="avx-pk ${fx.reason === r ? 'on' : ''}" data-av="fix-reason" data-key="${k}" data-k="${r}" ${fx.saving ? 'disabled' : ''}>${n}</button>`).join('')}</div>
+      <label class="avx-lb" for="avx-fix-text">正确说法</label><textarea id="avx-fix-text" class="avx-ta" rows="3" maxlength="1000" data-fix-text="${k}" placeholder="${esc(ph)}" ${fx.saving ? 'disabled' : ''}>${esc(fx.text || '')}</textarea>
+      <p class="avx-fix-pv" id="avx-fix-pv">${esc(fixPreview(fx))}</p>
+      ${fx.saving ? `<div class="avx-bar" role="progressbar" aria-label="正在保存并重答"><i></i></div><p class="avx-m">正在保存纠错卡并按它重答 · 已用 <span data-since="${fx.saving}">${span(Date.now() - fx.saving) || '0 秒'}</span>，一般十几秒到半分钟。</p>` : ''}
+      ${fx.err ? `<p class="avx-m r">${esc(fx.err)}</p>` : ''}
+      <div class="avx-line act"><button class="avx-btn p" data-av="fix-save" data-key="${k}" ${fx.saving || !fx.reason || !String(fx.text || '').trim() ? 'disabled' : ''}>${fx.saving ? '正在保存…' : '保存并重答'}</button><button class="avx-btn" data-av="fix-close" data-key="${k}" ${fx.saving ? 'disabled' : ''}>取消</button></div></div>`;
   }
   function logs(a) {
     const rows = a.log.filter(LOG_FILTER[logFilter]), { rows: view, at, pages } = paginate(rows, logPage, 9), s = a.stats, picked = a.log[logPick];
@@ -358,7 +454,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   }
   function context(a) {
     const people = targets?.people || [];
-    return `<div class="avx-c3"><div class="avx-stack"><div class="avx-card grow col"><h3>人设<small>它以什么身份、怎么说话</small></h3><textarea class="avx-ta grow" data-save="persona" placeholder="留空时使用默认说法">${esc(a.persona)}</textarea><div class="avx-line mt"><button class="avx-btn s" data-av="persona">从我的发言重新生成</button></div></div>
+    return `<div class="avx-c3"><div class="avx-stack"><div class="avx-card grow col"><h3>人设<small>它以什么身份、怎么说话</small></h3><textarea class="avx-ta grow" data-save="persona" placeholder="留空时使用默认说法">${esc(a.persona)}</textarea><div class="avx-line mt"><button class="avx-btn s" data-av="persona">从我的发言重新生成</button>${personaNotes[a.id] ? `<span class="avx-m" id="avx-persona-note">${esc(personaNotes[a.id])}</span>` : ''}</div></div>
       <div class="avx-card"><h3>权威答疑人<small>他们的原话优先</small></h3>${a.authorities.map(x => `<div class="avx-li"><span>${esc(x.name)}</span><button class="avx-x" data-av="chip-del" data-f="authorities" data-id="${esc(x.id)}" aria-label="移除">×</button></div>`).join('') || '<p class="avx-m">没有设置。群答疑模板会自动找出常答疑的人。</p>'}<select class="avx-in sm mt" data-chg="chip-add" data-f="authorities"><option value="">添加人…</option>${people.filter(p => !a.authorities.some(x => x.id === p.id)).map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></div></div>
       <div class="avx-stack"><div class="avx-card grow scroll" data-sc="kn"><h3>知识来源</h3>${a.memoryLines ? `<div class="avx-li"><span>群历史问答</span><small>自动 · ${a.memoryLines} 条</small></div>` : ''}${a.sources.map((s, i) => `<div class="avx-li"><span title="${esc(s.path)}">${esc(s.name)}</span><small>${s.type === 'dir' ? '文件夹' : '文件'}</small><button class="avx-x" data-av="source-del" data-i="${i}" aria-label="移除">×</button></div>`).join('')}${!a.memoryLines && !a.sources.length ? '<p class="avx-m">还没有资料。</p>' : ''}<div class="avx-line mt"><button class="avx-btn s" data-av="source" data-t="file">添加文件</button><button class="avx-btn s" data-av="source" data-t="dir">添加文件夹</button></div></div>
       <div class="avx-card"><h3>范例<small>你改过的稿自动进来</small></h3><p class="avx-m">已有 <b>${a.examples}</b> 条，分身写新草稿时会参考。</p></div></div>
@@ -378,6 +474,203 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
       <div class="avx-stack"><div class="avx-card"><h3>发言前缀</h3><div class="avx-pfx"><span>🤖</span><input class="avx-in" maxlength="20" data-save="prefix" value="${esc(a.prefix)}"></div><p class="avx-m">🤖 不能去掉：同事能看出是 AI，其他分身也靠它避免对聊。群答疑和空白分身发送时带前缀。</p><label class="avx-lb">群里看到的样子</label><div class="avx-bub" id="avx-preview">🤖【${esc(a.prefix)}】张三 关于『导出纪要』：在纪要页右上角选导出，格式选 Word。</div></div>
       <div class="avx-card grow"><h3>名字与身份</h3><label class="avx-lb">分身名字</label><input class="avx-in" maxlength="30" data-save="name" value="${esc(a.name)}"><label class="avx-line mt"><input type="checkbox" data-chg="hide" ${a.hideModel ? 'checked' : ''}> 不透露底层用的是哪个模型</label></div></div></div>`;
   }
+  // ---- 试答（第 2 批）：只读近期问题、调模型生成一条模拟答复，不写待确认、不改游标、不进发送队列 ----
+  async function loadTryout(id, force = false) {
+    const t = tryOf(id);
+    if (t.loading || (t.loaded && !force)) return;
+    t.loading = true; t.error = ''; if (isOpen()) render();
+    try {
+      const r = await call('tryout-samples', { avatarId: id });
+      t.samples = Array.isArray(r.samples) ? r.samples : [];
+      const fresh = Array.isArray(r.history) ? r.history : [];
+      // 刚试答完、后端历史还没带上的那条不丢。
+      t.history = [...t.history.filter(h => !fresh.some(x => x.id === h.id)), ...fresh].sort((x, y) => (y.at || 0) - (x.at || 0)).slice(0, 30);
+      t.loaded = true;
+    } catch (e) {
+      t.error = /No handler registered/i.test(e?.message || '') ? '这个版本的 Hub 还不支持试答，升级到新版本后就能用。' : (e?.message || '没读到近期问题');
+    } finally { t.loading = false; if (isOpen() && !typing()) render(); }
+  }
+  async function runTryout(id, q) {
+    const t = tryOf(id);
+    if (t.running) return;
+    const question = String(q.question || '').trim();
+    if (!question) { t.hint = '先在下面写一句想问的话，再点试答。'; render(); return; }
+    if (q.kind === 'dm' && !t.consent[q.sampleId]) { t.hint = TRY_CONSENT_HINT; render(); return; }
+    const seq = ++t.seq;
+    Object.assign(t, { hint: '', failure: null, pick: null, verdict: '', note: '', rateMsg: '', rateErr: '', lastQ: { ...q, question }, running: { question, kind: q.kind, convName: q.convName || '', since: Date.now() } });
+    render();
+    let r = null;
+    try {
+      r = await ipcRenderer.invoke('avatar:tryout-run', { avatarId: id, question, sampleId: q.sampleId || undefined, kind: q.kind, convName: q.convName || undefined, explicitPrivateConsent: q.kind === 'dm' && !!t.consent[q.sampleId] });
+    } catch (e) {
+      r = { ok: false, error: /No handler registered/i.test(e?.message || '') ? '这个版本的 Hub 还不支持试答，升级到新版本后就能用。' : (e?.message || '试答没成功，请重试') };
+    }
+    if (seq !== t.seq) return; // 期间又点了别的试答：旧结果丢掉
+    t.running = null;
+    if (!r || r.ok === false || !r.result) {
+      // 模型没就绪、私聊没同意等：直接用第 1 批的结构化报错渲染人话 + 就地修复按钮，不伪造答案。
+      t.failure = r?.failure || { severity: 'error', headline: r?.error || '试答没成功，请重试', retryable: true, actions: [] };
+    } else {
+      const res = { ...r.result, question: r.result.question || question };
+      t.history = [res, ...t.history.filter(h => h.id !== res.id)].slice(0, 30);
+      t.pick = res.id; t.verdict = res.verdict || '';
+      if (q.kind === 'own') t.ask = '';
+    }
+    if (isOpen()) render();
+  }
+  async function rateTryout(id) {
+    const t = tryOf(id), entry = t.history.find(h => h.id === t.pick);
+    if (!entry || !t.verdict || t.rating) return;
+    const note = t.note.trim(), before = Number(avatar(id)?.examples) || 0;
+    t.rating = true; t.rateMsg = ''; t.rateErr = ''; render();
+    try {
+      const r = await call('tryout-rate', { avatarId: id, tryoutId: entry.id, verdict: t.verdict, ...(note ? { note } : {}) });
+      const next = { ...entry, ...(r.entry || {}), verdict: r.entry?.verdict || t.verdict, note: r.entry?.note ?? note };
+      t.history = t.history.map(h => (h.id === next.id ? next : h));
+      const n = Number(r.examples), av = avatar(id);
+      if (av && Number.isFinite(n)) av.examples = n;
+      // 只有范例数真的变多才说「已存入」；短备注、敏感词被过滤等没新增时如实说明。
+      const now = Number.isFinite(n) ? n : before;
+      t.rateMsg = now > before ? `已存入分身本地范例（现有 ${now} 条）` : `已记录这次评价（参考范例仍为 ${now} 条，补充一句具体改法后会记进范例）`;
+      t.note = '';
+    } catch (e) { t.rateErr = e.message || '评价没存上，请重试'; } finally { t.rating = false; if (isOpen()) render(); }
+  }
+  async function tryAct(op, b) {
+    const a = cur(); if (!a) return;
+    const t = tryOf(a.id);
+    if (op === 'try-reload') { await loadTryout(a.id, true); return; }
+    if (op === 'try-run') { const s = t.samples.find(x => x.id === b.dataset.id); if (s) await runTryout(a.id, { question: s.question, sampleId: s.id, kind: s.kind, convName: s.convName }); return; }
+    if (op === 'try-ask') { const el = root.querySelector('[data-try-ask]'); if (el) t.ask = el.value; await runTryout(a.id, { question: t.ask, kind: 'own' }); return; }
+    if (op === 'try-again') { if (t.lastQ) await runTryout(a.id, t.lastQ); return; }
+    if (op === 'try-pick') { const h = t.history.find(x => x.id === b.dataset.id); if (h && !t.running) Object.assign(t, { pick: h.id, failure: null, hint: '', verdict: h.verdict || '', note: '', rateMsg: '', rateErr: '' }); render(); return; }
+    if (op === 'try-verdict') { t.verdict = b.dataset.k; t.rateMsg = ''; t.rateErr = ''; render(); return; }
+    if (op === 'try-rate') { await rateTryout(a.id); }
+  }
+  function tryTab(a) {
+    const t = tryOf(a.id), off = t.running ? 'disabled' : '';
+    const triedQ = new Set(t.history.map(h => String(h.question || '').trim()));
+    const sample = s => {
+      const [tag, cls] = TRY_TAG[s.kind] || TRY_TAG.example, dm = s.kind === 'dm', ok = !!t.consent[s.id];
+      return `<div class="avx-it ts${t.running?.question === s.question ? ' on' : ''}"><b><span class="avx-ch ${cls}">${tag}</span>${s.convName ? `<small title="${esc(s.convName)}">${esc(s.convName)}</small>` : ''}${triedQ.has(String(s.question || '').trim()) ? '<span class="avx-ch g">已试答</span>' : ''}<em>${s.at ? when(s.at) : ''}</em></b><p title="${esc(s.question)}">${esc(s.question)}</p>
+        <div class="avx-line">${dm ? `<label class="avx-ck"><input type="checkbox" data-chg="try-consent" data-id="${esc(s.id)}" ${ok ? 'checked' : ''}> 同意送模型试答</label>` : ''}<button class="avx-btn s${dm && !ok ? '' : ' p'}" data-av="try-run" data-id="${esc(s.id)}" ${off}>试答</button></div></div>`;
+    };
+    const listBody = t.loading && !t.samples.length ? '<p class="avx-m avx-pad">正在读取近期问题…</p>'
+      : t.error ? `<div class="avx-pad"><p class="avx-m">${esc(t.error)}</p><button class="avx-btn s" data-av="try-reload">重试</button></div>`
+      : t.samples.length ? t.samples.map(sample).join('') : '<p class="avx-m avx-pad">还没有可用的问题，在下面自己问一句。</p>';
+    const vName = k => (VERDICTS.find(v => v[0] === k) || [])[1] || '已评';
+    const his = t.history.length ? `<h3 class="mt">最近试答<small>${t.history.length} 条，点开看结果</small></h3><div class="avx-try-his" data-sc="th">${t.history.map(h => `<button class="avx-it ${h.id === t.pick ? 'on' : ''}" data-av="try-pick" data-id="${esc(h.id)}" ${off}><b>${h.verdict ? `<span class="avx-ch ${h.verdict === 'like' ? 'g' : 'w'}">${esc(vName(h.verdict))}</span>` : ''}<span>${esc(h.question)}</span><em>${when(h.at)}</em></b></button>`).join('')}</div>` : '';
+    const left = `<div class="avx-card col"><h3>选一道题试答<small>近期问题，不够时补示例题</small></h3><div class="avx-try-list" data-sc="ts">${listBody}</div>${his}
+      <label class="avx-lb" for="avx-try-ask">自己问一句</label><div class="avx-try-ask"><input id="avx-try-ask" class="avx-in" maxlength="300" data-try-ask placeholder="比如：会议纪要怎么导出成 Word？" value="${esc(t.ask)}"><button class="avx-btn p" data-av="try-ask" ${off}>试答</button></div></div>`;
+    const shown = t.history.find(h => h.id === t.pick), q = t.running || t.lastQ;
+    const qline = x => `<div class="avx-line"><h3>试答</h3>${x.kind && TRY_TAG[x.kind] ? `<span class="avx-ch ${TRY_TAG[x.kind][1]}">${TRY_TAG[x.kind][0]}</span>` : x.kind === 'own' ? '<span class="avx-ch">自己问的</span>' : ''}${x.convName ? `<span class="avx-m">${esc(x.convName)}</span>` : ''}</div><div class="avx-q">${esc(x.question)}</div>`;
+    let body, foot = '';
+    if (t.running) body = `${qline(t.running)}<div class="avx-bar" role="progressbar" aria-label="正在试答"><i></i></div><p class="avx-m">分身正在找依据、写答复 · 已用 <span data-since="${t.running.since}">${span(Date.now() - t.running.since) || '0 秒'}</span>，一般十几秒到半分钟。</p>`;
+    else if (t.failure) body = `${q ? qline(q) : ''}<div data-tryout="1">${failureBox({ ...t.failure, retryAfterMs: 0 }, 'try:' + a.id, true)}</div><div class="avx-line act"><button class="avx-btn" data-av="try-again">再试一次</button></div>`;
+    else if (shown) {
+      const low = tryoutLow(shown), conf = Number(shown.confidence) || 0, basis = (shown.basis || []).filter(Boolean);
+      const answer = String(shown.answer || '').trim();
+      body = `<div class="avx-line"><h3>试答结果</h3>${shown.action && TRY_ACT[shown.action] ? `<span class="avx-ch b">真实运行时${TRY_ACT[shown.action]}</span>` : ''}${low ? '<span class="avx-ch w">依据不足，转你处理</span>' : `<span class="avx-ch ${conf >= 70 ? 'g' : conf >= 40 ? '' : 'w'}">把握 ${conf}</span>`}<span class="avx-m avx-push">耗时 ${span(Number(shown.durationMs) || 0) || '不到 1 秒'}${shown.modelLabel ? ` · ${esc(shown.modelLabel)}` : ''}${shown.at ? ` · ${when(shown.at)}` : ''}</span></div>
+        <div class="avx-q">${esc(shown.question)}</div>
+        ${answer ? `<label class="avx-lb">分身会这样答（只是试答，不会发出）</label><div class="avx-try-ans">${esc(answer)}</div>` : `<div class="avx-note"><span>${low ? '没有找到可靠依据：真实运行时这类问题会转给你处理，分身不会硬答。' : shown.action === 'skip' ? '分身判断这条不需要回复。' : '这次没有写出答复。'}</span></div>`}
+        <div class="avx-line mt"><span class="avx-m">命中依据</span>${basis.length ? basis.map(x => `<span class="avx-ch b" title="${esc(x)}">${esc(String(x).slice(0, 24))}</span>`).join('') : '<span class="avx-m">没有命中</span>'}</div>
+        ${basis.length || shown.why ? `<details class="avx-raw" data-raw="tw:${esc(shown.id)}"${rawOpen['tw:' + shown.id] ? ' open' : ''}><summary>展开依据详情与理由</summary><pre>${esc([...basis.map((x, i) => `${i + 1}. ${x}`), shown.why ? `理由：${shown.why}` : ''].filter(Boolean).join('\n'))}</pre></details>` : ''}`;
+      const done = shown.verdict ? `已评价：${esc(vName(shown.verdict))}${shown.note ? `，备注「${esc(shown.note)}」` : ''}。可以改评。` : '';
+      foot = `<div class="avx-try-rate"><span>这个回答</span><div class="avx-seg">${VERDICTS.map(([k, n]) => `<button class="${t.verdict === k ? 'on' : ''}" data-av="try-verdict" data-k="${k}">${n}</button>`).join('')}</div><input class="avx-in" maxlength="200" data-try-note placeholder="可选：哪里不像、应该怎么答" value="${esc(t.note)}"><button class="avx-btn p" data-av="try-rate" ${!t.verdict || t.rating ? 'disabled' : ''}>${t.rating ? '正在提交…' : '提交评价'}</button></div>
+        ${t.rateErr ? `<p class="avx-m r">${esc(t.rateErr)}</p>` : t.rateMsg ? `<p class="avx-m ok" id="avx-rate-msg">${esc(t.rateMsg)}</p>` : done ? `<p class="avx-m">${done}</p>` : '<p class="avx-m">点「像我」或写一句纠偏，会存进分身本地范例，之后真实起草时参考。</p>'}`;
+    } else body = `<div class="avx-try-empty"><h3>看看分身会怎么答</h3><p>从左边挑一道近期问题，或自己问一句。</p><p class="avx-m">结果会显示答复、把握和命中的依据，你可以评价「像我」「不像」「有问题」。</p></div>`;
+    const right = `<div class="avx-card col"><div class="avx-try-main" data-sc="tr">${t.hint ? `<div class="avx-note w"><span>${esc(t.hint)}</span></div>` : ''}${body}</div>${foot}<p class="avx-try-edge">试答会调用所选模型推理，但绝不发到群、不改游标、不进发送队列。</p></div>`;
+    return `<div class="avx-try">${left}${right}</div>`;
+  }
+  // ---- 就地纠偏（第 3 批）：保存纠错卡 + 同题重答；回包只写回发起的那条事项（按「分身|事项」隔离） ----
+  async function saveFix(key) {
+    const fx = fixes[key], it = rowOf(key);
+    if (!fx || fx.saving || !it) return;
+    const correctAnswer = String(fx.text || '').trim();
+    if (!fx.reason || !correctAnswer) { fx.err = '先选错在哪，再写正确说法'; render(); return; }
+    // 原稿以发起时草稿框里的字为准（含本人没发的改动）；主进程回了 oldDraftSnapshot 就用它。
+    const oldText = edits[key] ?? it.draft ?? '';
+    Object.assign(fx, { saving: Date.now(), err: '', snap: { ...it } }); render();
+    let r = null;
+    try {
+      r = await call('correct-item', { avatarId: it.avatarId, itemId: it.id, reason: fx.reason, correctAnswer, scope: 'this_avatar', redraft: true, ...(it.external ? { external: true } : {}) });
+    } catch (e) {
+      fx.saving = 0;
+      fx.err = /No handler registered/i.test(e?.message || '') ? '这个版本的 Hub 还不支持纠错卡，升级到新版本后就能用。' : (e?.message || '纠错卡没存上，请重试');
+      render(); return;
+    }
+    if (fixes[key] !== fx) return; // 期间收起了：回包丢掉，但卡已存在后端
+    if (r.status) accept(r.status); else accept(r);
+    if (it.avatarId && learned[it.avatarId]) learned[it.avatarId].loaded = false;
+    const after = [...extList(), ...(data?.items || [])].find(r => keyOf(r) === key);
+    Object.assign(fx, { saving: 0, card: r.card || { id: '' }, oldText: after?.oldDraftSnapshot ?? it.oldDraftSnapshot ?? oldText });
+    if (r.redraftResult) { fx.mode = 'compare'; fx.result = r.redraftResult; }
+    else if (r.redraftFailure) { fx.mode = 'failed'; fx.failure = r.redraftFailure; }
+    else fx.mode = 'saved';
+    if (it.external) flash(`本地记录已纠正（纠错卡 #${cardNo(fx.card)}），不自动替群分身发群`);
+    else if (!after) { delete fixes[key]; flash(`纠错卡 #${cardNo(fx.card)} 已保存（${FIX_LOCAL}）`); }
+    render();
+  }
+  // 重答失败后的「重试」：只重写这一条（avatar:redraft），绝不走正式巡检 avatar:recheck，也不再新建一张纠错卡。
+  async function redoFix(key) {
+    const it = rowOf(key);
+    if (!it || it.external) return;
+    if (await run('正在重写', 'redraft', { avatarId: it.avatarId, itemId: it.id })) { if (fixes[key]) fixes[key].mode = 'saved'; delete edits[key]; flash('已交给分身按新纠错卡重写这一条'); render(); }
+  }
+  async function reassign(key, action, cand) {
+    const it = rowOf(key);
+    if (!it) return;
+    const payload = { avatarId: it.avatarId, itemId: it.id, action, ...(cand ? { targetMsgKey: cand.msgKey || cand.key, targetText: cand.text || cand.snippet || '', targetSender: cand.sender || '' } : {}) };
+    const r = await runAny('正在处理', ['reassign-target'], payload).catch(() => null);
+    if (!r) { if (/No handler registered/i.test(error)) { error = ''; flash('这个版本的 Hub 还不支持改配回复对象，可以先「丢弃」这条'); render(); } return; }
+    delete retargetOpen[key]; delete fixes[key];
+    if (action === 'not_for_me') { delete edits[key]; flash('已标记「不是问我的」，这条已从待确认拿掉，不会发任何消息'); }
+    else { delete edits[key]; flash(`已改成回 ${cand?.sender || '同事'} 的那条，分身正在重新起草`); }
+    render();
+  }
+  // ---- 「它学到的」页签：纠错卡列表（撤销 / 恢复）+ 它还参考了什么 ----
+  async function loadLearned(id, force = false) {
+    const l = learnOf(id);
+    if (l.loading || (l.loaded && !force)) return;
+    l.loading = true; l.error = ''; if (isOpen()) render();
+    try {
+      const r = await call('corrections-list', { avatarId: id });
+      Object.assign(l, { cards: Array.isArray(r.cards) ? r.cards : [], examplesCount: Number.isFinite(Number(r.examplesCount)) ? Number(r.examplesCount) : null, persona: String(r.persona || ''), memoryLines: Number.isFinite(Number(r.memoryLines)) ? Number(r.memoryLines) : null, loaded: true });
+    } catch (e) {
+      l.error = /No handler registered/i.test(e?.message || '') ? '这个版本的 Hub 还不支持纠错卡，升级到新版本后就能用。' : (e?.message || '没读到纠错卡');
+    } finally { l.loading = false; if (isOpen() && !typing()) render(); }
+  }
+  async function toggleCard(id, cardId) {
+    const l = learnOf(id), c = l.cards.find(x => x.id === cardId);
+    if (!c || l.busy) return;
+    l.busy = cardId; render();
+    try {
+      const r = await call('correction-toggle', { avatarId: id, cardId, active: !c.active });
+      if (Array.isArray(r.cards)) l.cards = r.cards; else if (r.card) l.cards = l.cards.map(x => (x.id === cardId ? r.card : x));
+      const now = l.cards.find(x => x.id === cardId);
+      flash(now?.active ? `已恢复纠错卡 #${cardNo(c)}，下一条消息起重新参考` : `已撤销纠错卡 #${cardNo(c)}，下一条消息起不再参考；记录保留可恢复`);
+    } catch (e) { error = e.message; } finally { l.busy = ''; render(); }
+  }
+  const LEARN_SIZE = 9;
+  function learnTab(a) {
+    const l = learnOf(a.id);
+    if (l.loading && !l.loaded) return '<div class="avx-try-empty"><p class="avx-m">正在读取纠错卡…</p></div>';
+    if (l.error && !l.loaded) return `<div class="avx-try-empty"><p class="avx-m">${esc(l.error)}</p><button class="avx-btn s" data-av="learn-reload">重试</button></div>`;
+    const cards = [...l.cards].sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0)), { rows, at, pages } = paginate(cards, l.page, LEARN_SIZE), on = cards.filter(c => c.active).length;
+    const pick = cards.find(c => c.id === l.pick) || rows[0];
+    const table = cards.length ? `<div class="avx-card fill flat"><table class="avx-t"><colgroup><col style="width:74px"><col style="width:84px"><col style="width:26%"><col><col style="width:84px"><col style="width:64px"></colgroup><tr><th>卡号</th><th>错因</th><th>原题</th><th>正确说法</th><th>状态</th><th></th></tr>
+      ${rows.map(c => `<tr class="ck ${c.id === pick?.id ? 'on' : ''}${c.active ? '' : ' off'}" data-av="learn-pick" data-id="${esc(c.id)}"><td>#${esc(cardNo(c))} <small>v${Number(c.version) || 1}</small></td><td>${esc(reasonName(c.reason))}</td><td title="${esc(c.question)}">${esc(c.question)}</td><td title="${esc(c.correctAnswer)}">${esc(c.correctAnswer)}</td><td><span class="avx-ch ${c.active ? 'g' : ''}">${c.active ? '生效中' : '已撤销'}</span></td><td><button class="avx-btn s${c.active ? ' d' : ''}" data-av="learn-toggle" data-id="${esc(c.id)}" ${l.busy ? 'disabled' : ''}>${l.busy === c.id ? '…' : c.active ? '撤销' : '恢复'}</button></td></tr>`).join('')}</table></div>
+      <div class="avx-line"><span class="avx-m">第 ${at + 1} / ${pages} 页，共 ${cards.length} 张</span><button class="avx-btn s" data-av="learn-page" data-d="-1" ${at ? '' : 'disabled'}>上一页</button><button class="avx-btn s" data-av="learn-page" data-d="1" ${at < pages - 1 ? '' : 'disabled'}>下一页</button></div>`
+      : '<div class="avx-card fill avx-try-empty"><h3>还没有纠错卡</h3><p>在「待确认」里点草稿下面的「答错了，这样改」，写一句正确说法，它就记住了。</p><p class="avx-m">以后同类问题，纠错卡排在范例和群历史问答前面，优先按它答。</p></div>';
+    const detailCard = pick ? `<div class="avx-card grow scroll" data-sc="lc"><div class="avx-line"><h3>纠错卡 #${esc(cardNo(pick))}</h3><span class="avx-m">v${Number(pick.version) || 1}${pick.createdAt ? ` · ${when(pick.createdAt)} 记下` : ''}${!pick.active && pick.revokedAt ? ` · ${when(pick.revokedAt)} 撤销` : ''}</span></div>
+      <label class="avx-lb">原题${pick.convName ? ` · ${esc(pick.convName)}` : ''}</label><div class="avx-q">${esc(pick.question || '—')}</div>${pick.oldAnswer ? `<label class="avx-lb">原来答错的稿</label><div class="avx-q dim clamp">${esc(pick.oldAnswer)}</div>` : ''}
+      <label class="avx-lb">正确说法 · 错因「${esc(reasonName(pick.reason))}」</label><div class="avx-q new">${esc(pick.correctAnswer || '')}</div></div>` : '';
+    const num = n => (n === null ? '—' : String(n));
+    const persona = String(l.persona || a.persona || '').trim();
+    const summary = `<div class="avx-card"><h3>它还参考了<small>纠错卡优先于这些</small></h3><div class="avx-li"><span>你改过的范例</span><small>${num(l.examplesCount ?? (Number.isFinite(Number(a.examples)) ? Number(a.examples) : null))} 条</small></div><div class="avx-li"><span>群历史问答</span><small>${num(l.memoryLines ?? (Number.isFinite(Number(a.memoryLines)) ? Number(a.memoryLines) : null))} 条</small></div>
+      <label class="avx-lb">人设摘要</label><p class="avx-clamp" title="${esc(persona)}">${persona ? esc(persona) : '<span class="avx-m">还没有人设，使用默认说法</span>'}</p></div>`;
+    return `<div class="avx-learn"><div class="avx-stack"><div class="avx-line"><h3>纠错卡</h3><span class="avx-m">${cards.length ? `${cards.length} 张，生效中 ${on} 张；点一行看全文` : ''}</span>${l.loading ? '<span class="avx-m">正在刷新…</span>' : ''}</div>${table}</div>
+      <div class="avx-stack">${detailCard || '<div class="avx-card grow tint"><h3>纠错卡怎么用</h3><p class="avx-m">每张卡带卡号和版本号；分身起草时引用它，会在依据里写「你的纠错卡 #卡号」。撤销后立刻不再参考，记录保留，可以再恢复。</p></div>'}${summary}<p class="avx-learn-foot">纠错卡只存公司本机该分身目录，默认不外发。</p></div></div>`;
+  }
   // ---- 报错条上的修复动作 ----
   async function repairProvider(account, btn) {
     if (btn) btn.disabled = true;
@@ -387,6 +680,11 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     flash('已改用手动会话成功使用的供应商，下次任务起生效');
   }
   async function fixAction(kind, b) {
+    // 试答区的报错：「重试」只重跑这次试答（原问题、样本、同意态都沿用），绝不走正式巡检 avatar:recheck。
+    if (kind === 'retry_tick' && b.closest('[data-tryout]')) { await tryAct('try-again', b); return; }
+    // 纠错后重答失败的报错：「重试」只重写这一条，也不走正式巡检。
+    const redo = b.closest('[data-fixredo]');
+    if (kind === 'retry_tick' && redo) { await redoFix(redo.dataset?.fixredo || ''); return; }
     if (kind === 'provider_repair') { await repairProvider(b.dataset.account, b); return; }
     if (kind === 'open_account_card') {
       if (!cur() && data?.avatars?.[0]) sel = data.avatars[0].id;
@@ -447,9 +745,10 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (!failed && !scanned && f.qr?.kind === 'blocks') qr = `<img class="avx-qr" src="${esc(f.qr.value)}" width="${Number(f.qr.px) || ''}" height="${Number(f.qr.px) || ''}" alt="WeLink 登录二维码">`;
     else if (!failed && !scanned && f.qr?.kind === 'data') qr = `<img class="avx-qr" src="${esc(f.qr.value)}" alt="WeLink 登录二维码">`;
     else if (!failed && !scanned && f.qr?.kind === 'file') qr = `<img class="avx-qr" src="${esc('file:///' + String(f.qr.value).replace(/\\/g, '/'))}" alt="WeLink 登录二维码">`;
-    const state = failed ? `登录没成功：${esc(scan.error || f.error || '原因没认出来')}` : scanned ? '已扫码，正在登录…' : scan.phase === 'starting' || !f.qr ? '正在向 WeLink 要二维码，一般几秒就出来…' : '用手机 WeLink 扫下面的二维码，扫完这里自动接着用。';
+    const he = failed ? humanScanError(scan.error || f.error || '') : { head: '', raw: '' };
+    const state = failed ? (he.raw ? esc(he.head) : `登录没成功：${esc(he.head || '原因没认出来')}`) : scanned ? '已扫码，正在登录…' : scan.phase === 'starting' || !f.qr ? '正在向 WeLink 要二维码，一般几秒就出来…' : '用手机 WeLink 扫下面的二维码，扫完这里自动接着用。';
     const tick = !failed && !scanned && p.phase === 'waiting' ? `<p class="avx-m">等待扫码 · ${Number(p.elapsed) || 0} 秒</p>` : '';
-    return `<div class="avx-ov"><div class="avx-md sm"><div class="avx-mh"><h2>扫码登录 WeLink</h2><button class="avx-x big" data-av="scan-close" aria-label="关闭">×</button></div><div class="avx-mb avx-scan"><p>${state}</p>${qr}${tick}<p class="avx-m">扫码授权的是这台电脑上的 WeLink 命令行，用你本人的身份读消息；不会替你发消息。</p></div>
+    return `<div class="avx-ov"><div class="avx-md sm"><div class="avx-mh"><h2>扫码登录 WeLink</h2><button class="avx-x big" data-av="scan-close" aria-label="关闭">×</button></div><div class="avx-mb avx-scan"><p>${state}</p>${qr}${tick}${he.raw ? `<details class="avx-raw" data-raw="scan"${rawOpen.scan ? ' open' : ''}><summary>原始报错</summary><pre>${esc(he.raw)}</pre></details>` : ''}<p class="avx-m">扫码授权的是这台电脑上的 WeLink 命令行，用你本人的身份读消息；不会替你发消息。</p></div>
       <div class="avx-mf"><button class="avx-btn" data-av="scan-assistant">到助理页扫码</button>${failed || f.state === 'finished' ? '<button class="avx-btn p" data-av="scan-restart">重新获取二维码</button>' : '<button class="avx-btn" data-av="scan-restart">换一张码</button>'}</div></div></div>`;
   }
   function confirmDialog() { return `<div class="avx-ov"><div class="avx-md sm"><div class="avx-mh"><h2>${esc(confirmBox.title)}</h2></div><div class="avx-mb">${esc(confirmBox.body)}</div><div class="avx-mf"><button class="avx-btn" data-av="confirm-no">取消</button><button class="avx-btn dd" data-av="confirm-yes">${esc(confirmBox.yes)}</button></div></div></div>`; }
@@ -482,8 +781,11 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (op === 'provider-settings') { close(); window.dispatchEvent(new CustomEvent('hub-pet:open-assistant', { detail: { settingsTab: 'model' } })); return; }
     if (op === 'repair-provider') { await repairProvider(b.dataset.account, b); return; }
     if (op === 'sel') { sel = b.dataset.id; tab = 'inbox'; logPage = 0; logPick = -1; scopePage = 0; render(); return; }
-    if (op === 'tab') { tab = b.dataset.k; logPage = 0; logPick = -1; scopePage = 0; if (['scope', 'ctx'].includes(tab)) void loadTargets(); render(); return; }
+    if (op === 'tab') { tab = b.dataset.k; logPage = 0; logPick = -1; scopePage = 0; if (['scope', 'ctx'].includes(tab)) void loadTargets(); if (tab === 'try' && cur()) void loadTryout(sel); if (tab === 'learn' && cur()) void loadLearned(sel, true); render(); return; }
+    if (op === 'try-go') { sel = b.dataset.id; tab = 'try'; logPage = 0; logPick = -1; scopePage = 0; void loadTryout(sel); render(); return; }
+    if (op.startsWith('try-')) { await tryAct(op, b); return; }
     if (op === 'item') { itemSel[b.dataset.k] = b.dataset.id; render(); return; }
+    if (op.startsWith('fix-') || op.startsWith('retarget-') || op === 'not-me' || op.startsWith('learn-')) { await fixAct(op, b); return; }
     if (op === 'targets-retry') { void loadTargets(); return; }
     if (op === 'new') { startWizard(); return; }
     if (op === 'tpl') { if (wiz) { const keep = wiz; startWizard(b.dataset.t); wiz.account = keep.account; } else startWizard(b.dataset.t); return; }
@@ -500,11 +802,11 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
       const w = wiz; w.step = 'run'; error = ''; render();
       try {
         const r = await call('create', { tpl: w.tpl, name: w.name, targets: w.targets, skip: w.skip, ...(w.prefix.trim() ? { prefix: w.prefix } : {}), ...(w.persona.trim() ? { persona: w.persona } : {}), backend: { account: w.account, model: '' } });
-        accept(r); sel = r.createdId; tab = 'inbox'; wiz = null; flash('分身已开始工作');
+        accept(r); sel = r.createdId; tab = 'inbox'; wiz = null; flash('分身已开始工作。想先看看效果，可以挑几道题试答，不会发到群里。', { op: 'tab', k: 'try', label: '先试答几道题看看效果' });
       } catch (e) { w.step = 2; error = e.message; }
       render(); return;
     }
-    if (op === 'feedback') { const open = window.__hubFeedback?.open; if (open) void open({ description: '【分身 Beta 反馈】\n我在用的模板：\n遇到的问题或建议：' }); else showMessage('这个版本没有一键反馈入口'); return; }
+    if (op === 'feedback') { await openFeedback(); return; }
     if (op === 'pause-all') { await run('正在处理', 'pause-all', { paused: !data.paused }); return; }
     if (op === 'relogin') { await runAny('正在检查', RECHECK); return; }
     if (op === 'retry-tick') { await retryTick(); return; }
@@ -538,7 +840,13 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     const av = cur(); if (!av) return;
     if (op === 'kind') { await save({ kind: b.dataset.k }); return; }
     if (op === 'chip-del') { const f = b.dataset.f; await save({ [f]: av[f].filter(x => x.id !== b.dataset.id) }); return; }
-    if (op === 'persona') { if (await run('正在生成', 'persona', { avatarId: sel })) flash('已根据你的发言重新生成'); render(); return; }
+    if (op === 'persona') {
+      // 记下发起时的分身：生成途中切到别的分身，回包也只写回原来那个（不串分身）。
+      const id = sel, r = await run('正在生成', 'persona', { avatarId: id });
+      // 后端给了 personaNote 或生成完人设仍是空的：按钮旁留一句灰色说明，不再静默留空。
+      if (r) { if (r.personaNote || !String(avatar(id)?.persona || '').trim()) personaNotes[id] = String(r.personaNote || '近期发言较少，暂未能自动归纳，可直接手写'); else { delete personaNotes[id]; if (sel === id) flash('已根据你的发言重新生成'); } }
+      render(); return;
+    }
     if (op === 'source') { const r = await call('pick-source', { type: b.dataset.t }); if (r.source) { await save({ sources: [...av.sources, r.source] }); flash('已添加，下一条消息开始使用'); render(); } return; }
     if (op === 'source-del') { await save({ sources: av.sources.filter((_, n) => n !== Number(b.dataset.i)) }); return; }
     // 部门 API key（网关）：写「功能使用的 Agent → 分身」那一项（所有分身共用）；点回 CodeAgent 账号时撤掉它。
@@ -548,21 +856,70 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (op === 'model') { await save({ backend: { ...av.backend, model: b.dataset.id } }); return; }
     if (op === 'effort') { await save({ backend: { ...av.backend, effort: b.dataset.k } }); }
   }
+  async function fixAct(op, b) {
+    const key = b.dataset.key || '', fx = fixes[key];
+    if (op === 'fix-open') { fixes[key] = { reason: '', text: '', saving: 0, err: '', mode: 'edit' }; delete retargetOpen[key]; render(); return; }
+    if (op === 'fix-close') { if (!fx?.saving) delete fixes[key]; render(); return; }
+    if (op === 'fix-reason' && fx) { fx.reason = b.dataset.k; fx.err = ''; render(); return; }
+    if (op === 'fix-save') { await saveFix(key); return; }
+    if (op === 'fix-redo') { await redoFix(key); return; }
+    if (op === 'fix-adopt' && fx) { edits[key] = String(fx.result?.draft || ''); delete ack[key]; delete fixes[key]; flash('新稿已填回草稿框，确认后点「发送」'); render(); return; }
+    if (op === 'fix-keep' && fx) { edits[key] = String(fx.oldText || ''); delete ack[key]; delete fixes[key]; flash(`已保留原稿；纠错卡 #${cardNo(fx.card)} 仍会用在以后的同类问题`); render(); return; }
+    if (op === 'not-me') { await reassign(key, 'not_for_me'); return; }
+    if (op === 'retarget-open') {
+      const it = rowOf(key);
+      if (!it || !candOf(it).length) { flash('同群近期没有别的提问可改选；如果整条都不用回，点「不是问我的，忽略」'); render(); return; }
+      retargetOpen[key] = true; render(); return;
+    }
+    if (op === 'retarget-close') { delete retargetOpen[key]; render(); return; }
+    if (op === 'retarget-pick') { const it = rowOf(key), c = it && candOf(it)[Number(b.dataset.n)]; if (c) await reassign(key, 'retarget', c); return; }
+    const av = cur(); if (!av) return;
+    const l = learnOf(av.id);
+    if (op === 'learn-reload') { await loadLearned(av.id, true); return; }
+    if (op === 'learn-page') { l.page = Math.max(0, l.page + Number(b.dataset.d)); l.pick = ''; render(); return; }
+    if (op === 'learn-pick') { l.pick = b.dataset.id; render(); return; }
+    if (op === 'learn-toggle') { await toggleCard(av.id, b.dataset.id); }
+  }
+  // 「反馈意见」：有选中的分身或问答时，先向主进程要一段脱敏后的现场（版本、分身配置、当前问答摘要、最近报错），预填进通用反馈弹窗，
+  const FEEDBACK_BASE = '【分身 Beta 反馈】\n我在用的模板：\n遇到的问题或建议：';
+  function feedbackTarget() {
+    const scopeKey = sel === 'all' ? 'all' : sel, it = itemSel[scopeKey] ? rowOf(itemSel[scopeKey]) : null;
+    if (it && (sel === 'all' || it.avatarId === sel)) return { avatarId: it.avatarId, itemId: it.id, ...(it.external ? { external: true } : {}) };
+    return sel !== 'all' && cur() ? { avatarId: sel } : null;
+  }
+  async function openFeedback() {
+    const open = window.__hubFeedback?.open;
+    if (!open) { showMessage('这个版本没有一键反馈入口'); return; }
+    const target = feedbackTarget();
+    let ctx = '';
+    if (target?.avatarId) {
+      let timer = null;
+      try {
+        const r = await Promise.race([ipcRenderer.invoke('avatar:feedback-context', target), new Promise(res => { timer = setTimeout(() => res(null), 4000); })]);
+        if (r && r.ok !== false) ctx = String(r.text || r.context || r.description || '').trim();
+      } catch { /* 旧主进程没有这个通道：用原模板 */ } finally { clearTimeout(timer); }
+    }
+    void open({ description: ctx ? `【分身 Beta 反馈】\n遇到的问题或建议：\n\n—— 以下是自动附上的现场（已隐去姓名、工号、手机号和密钥，可删改）——\n${ctx.slice(0, 4000)}` : FEEDBACK_BASE });
+  }
   function onInput(event) {
     const t = event.target;
+    if (t.dataset.fixText !== undefined && fixes[t.dataset.fixText]) { const fx = fixes[t.dataset.fixText]; fx.text = t.value; const pv = document.getElementById('avx-fix-pv'); if (pv) pv.textContent = fixPreview(fx); const sv = root?.querySelector('[data-av="fix-save"]'); if (sv) sv.disabled = !!fx.saving || !fx.reason || !t.value.trim(); }
     if (t.dataset.edit) {
       edits[t.dataset.edit] = t.value; delete ack[t.dataset.edit];
       const it = data.items.find(x => keyOf(x) === t.dataset.edit), risk = document.getElementById('avx-risk');
       if (risk && it) risk.textContent = (it.flags || []).some(f => f === 'leader' || f === 'leader-present') && COMMIT_HINT.test(t.value) ? '这句话可能在向上级应承一件事，请确认后再发。' : '';
     }
     if (t.dataset.wiz) wiz[t.dataset.wiz] = t.value;
+    if ('tryAsk' in t.dataset && cur()) tryOf(sel).ask = t.value;
+    if ('tryNote' in t.dataset && cur()) tryOf(sel).note = t.value;
     if (t.dataset.save === 'prefix') { const p = document.getElementById('avx-preview'); if (p) p.textContent = `🤖【${t.value.trim()}】张三 关于『导出纪要』：在纪要页右上角选导出，格式选 Word。`; }
   }
   async function onChange(event) {
     const t = event.target, c = t.dataset.chg, av = cur();
-    if (t.dataset.save && av) { if (t.value !== av[t.dataset.save]) { t.blur(); await save({ [t.dataset.save]: t.value }); flash('已保存'); render(); } return; }
+    if (t.dataset.save && av) { if (t.dataset.save === 'persona' && t.value.trim()) delete personaNotes[av.id]; if (t.value !== av[t.dataset.save]) { t.blur(); await save({ [t.dataset.save]: t.value }); flash('已保存'); render(); } return; }
     if (!c) return;
     if (c === 'wiz-account') { wiz.account = t.value; render(); return; }
+    if (c === 'try-consent' && av) { const x = tryOf(av.id); x.consent[t.dataset.id] = t.checked; if (t.checked && x.hint === TRY_CONSENT_HINT) x.hint = ''; render(); return; }
     if (!av) return;
     const nameOf = id => [...(targets?.groups || []), ...(targets?.people || [])].find(x => x.id === id);
     if (c === 'target') {
@@ -603,4 +960,4 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   return { open, close, isOpen, destroy() { close(); window.removeEventListener('resize', place); ipcRenderer.removeListener?.('avatar:changed', onChanged); ipcRenderer.removeListener?.('company-assistant:changed', onAssistantChanged); ipcRenderer.removeListener?.('feature-agents:changed', onChanged); page?.remove(); page = null; } };
 }
 
-module.exports = { createAvatarPage, paginate, waited, scopeText, modeText, scopeSummary };
+module.exports = { createAvatarPage, paginate, waited, scopeText, modeText, scopeSummary, humanScanError, tryoutLow, externalRows, markCards, cardNo };

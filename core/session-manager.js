@@ -5109,6 +5109,9 @@ try {
     const compatibilityMessage = [cliState.compatibilityNotice, effortMessage].filter(Boolean).join('；');
     if (compatibilityMessage) this.emit('session-notice', { sessionId, message: compatibilityMessage, level: 'warning' });
     s.pty.write(cmd);
+    // 原地重拉是新的 CLI 进程：记下启动时刻，旧进程留下的子任务据此显示「已中断」（R46 审查 P2-1）。
+    // The relaunched CLI is a new process: record its start so subagents left by the old one show as interrupted.
+    if (s.info) s.info.spawnedAt = Date.now();
     // 原地重拉也是一个新 CodeAgent 进程：按 bypass 档启动时同样盯一次确认框（与 _createSession 一致）。
     if (relaunchBypass) require('./claude-trust-dialog.js').watchBypassWarning(s.pty, {
       onAccepted: dialog => console.log(`[bypass-warning] ${String(sessionId).slice(0, 8)} 重拉后自动确认 Bypass Permissions 提示（光标行 ${dialog.cursorRow} → 确认行 ${dialog.acceptRow}）`),

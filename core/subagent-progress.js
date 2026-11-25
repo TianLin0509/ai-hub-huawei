@@ -19,6 +19,10 @@ const HEAD_BYTES = 4 * 1024;
 const STEP_MAX = 40;
 const STALE_RUNNING_MS = 10 * 60 * 1000;   // 上一轮派出、还没结束的子 Agent：10 分钟内有写入才继续算「进行中」
 const MAX_SUB_FILES = 40;
+// 主会话本轮已不在跑、子 Agent 又这么久没写入：按「已中断」显示（R46）。后台子 Agent 跑长命令时可能十几分钟不写，所以放宽到 30 分钟。
+// Main turn idle and no subagent write for this long → shown as interrupted (R46). Long builds can be silent for 10+ min, hence 30 min.
+const IDLE_INTERRUPTED_MS = 30 * 60 * 1000;
+const PROCESS_START_SLACK_MS = 5 * 1000;
 const AGENT_TOOLS = new Set(['Task', 'Agent']);
 
 /** 一段 jsonl 文本 → 记录数组。fromStart=false 时第一行可能是被切断的半行，丢掉；任何坏行都跳过。 */
@@ -136,17 +140,22 @@ function summarizeSubagentRecords(records) {
  * 合并主记录和子 Agent 文件 → 要显示的一行；没有子任务返回 null。
  * main：summarizeMainRecords 的结果；files：[{ name, toolUseId, firstTs, mtimeMs, done, lastStep }]。
  */
-function buildSubagentProgress(main, files, { now = Date.now() } = {}) {
+function buildSubagentProgress(main, files, { now = Date.now(), processStartedAt = null, cliGone = false, turnActive = null } = {}) {
   const m = main || { turnStartTs: null, toolUses: [], finished: new Set(), asyncLaunched: new Set() };
   const turnIds = new Set(m.toolUses.map(t => t.id));
   const start = m.turnStartTs;
   // 这一轮的子 Agent 文件：meta 里的 toolUseId 属于本轮，或开始时间在本轮之后；
   // 另外上一轮后台派出、还在写的也算（新一轮开始不该让它凭空消失）。
+  // 上一轮留下、已经停掉的子 Agent 不带进新一轮（R46 审查 P1-3）：只保留上一轮还在跑的后台子 Agent。
+  // Do not carry dead subagents from the previous turn into the new one (R46 review P1-3); keep only live background ones.
+  const deadFile = f => cliGone
+    || (Number.isFinite(processStartedAt) && f.mtimeMs != null && f.mtimeMs < processStartedAt - PROCESS_START_SLACK_MS)
+    || (turnActive === false && f.mtimeMs != null && now - f.mtimeMs > IDLE_INTERRUPTED_MS);
   const relevant = (files || []).filter(f => {
     if (f.toolUseId && turnIds.has(f.toolUseId)) return true;
     const began = f.firstTs != null ? f.firstTs : f.mtimeMs;
     if (start != null ? began >= start : turnIds.size > 0) return true;
-    return !f.done && now - f.mtimeMs < STALE_RUNNING_MS;
+    return !f.done && !deadFile(f) && now - f.mtimeMs < STALE_RUNNING_MS;
   }).sort((a, b) => (a.firstTs ?? a.mtimeMs) - (b.firstTs ?? b.mtimeMs));
   const tasks = [];
   const byId = new Map();
@@ -167,14 +176,33 @@ function buildSubagentProgress(main, files, { now = Date.now() } = {}) {
   }
   if (!tasks.length) return null;
   for (const t of tasks) if (t.file && t.file.done) t.done = true;
-  const running = tasks.filter(t => !t.done);
-  const done = tasks.length - running.length;
-  if (!running.length) return { total: tasks.length, running: 0, done, lastStep: '', text: `${tasks.length} 个子任务已完成` };
+  // 子 Agent 跑在 CLI 进程里，CLI 一退它们就跟着停，但记录里永远等不到「结束」那一条（R46：重启后一直显示 9 个进行中）。
+  // 判为已中断：① CLI 已退回系统终端；② 最后一次写入早于当前 CLI 进程的启动时刻（Hub 或会话重启过）；
+  // ③ 主会话本轮已结束、且 30 分钟没有写入。
+  // Subagents live inside the CLI process; when it dies their records never get an end marker (R46).
+  // Interrupted when: the CLI fell back to the shell; the last write predates the current CLI process; or the turn is idle with no write for 30 min.
+  const toolTs = new Map(m.toolUses.map(t => [t.id, t.ts]));
+  const lastActivity = t => (t.file ? t.file.mtimeMs : toolTs.get(t.id)) ?? null;
+  for (const t of tasks) {
+    if (t.done) continue;
+    const at = lastActivity(t);
+    if (cliGone
+      || (Number.isFinite(processStartedAt) && at != null && at < processStartedAt - PROCESS_START_SLACK_MS)
+      || (turnActive === false && at != null && now - at > IDLE_INTERRUPTED_MS)) t.interrupted = true;
+  }
+  const running = tasks.filter(t => !t.done && !t.interrupted);
+  const interrupted = tasks.filter(t => t.interrupted).length;
+  const done = tasks.length - running.length - interrupted;
+  if (!running.length && !interrupted) return { total: tasks.length, running: 0, done, interrupted: 0, lastStep: '', text: `${tasks.length} 个子任务已完成` };
+  if (!running.length) {
+    const text = [`${interrupted} 个子任务已中断（CLI 退出时没跑完，需要的话让它重新派）`, done ? `${done} 个已完成` : ''].filter(Boolean).join(' · ');
+    return { total: tasks.length, running: 0, done, interrupted, lastStep: '', text };
+  }
   const latest = running.map(t => t.file).filter(f => f && f.lastStep).sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
   const lastStep = latest ? latest.lastStep : '';
-  const text = [`${running.length} 个子任务进行中`, done ? `${done} 个已完成` : '', lastStep ? `最近一步：${lastStep}` : '']
-    .filter(Boolean).join(' · ');
-  return { total: tasks.length, running: running.length, done, lastStep, text };
+  const text = [`${running.length} 个子任务进行中`, done ? `${done} 个已完成` : '', interrupted ? `${interrupted} 个已中断` : '',
+    lastStep ? `最近一步：${lastStep}` : ''].filter(Boolean).join(' · ');
+  return { total: tasks.length, running: running.length, done, interrupted, lastStep, text };
 }
 
 /** 主记录路径 → 子 Agent 目录：<dir>/<sessionId>/subagents。 */
@@ -233,7 +261,9 @@ function createSubagentProgressReader({ fsImpl = fs, now = () => Date.now() } = 
       } catch { return { toolUseId: null, finished: false }; }
     });
   }
-  async function read(transcriptPath) {
+  // liveState：{ processStartedAt, cliGone, turnActive }，由服务按会话现状传入，用来把已经停掉的子任务判为「已中断」。
+  // live: current CLI process facts from the service, used to mark dead subagents as interrupted.
+  async function read(transcriptPath, liveState = {}) {
     if (!transcriptPath) return null;
     let main = null;
     try {
@@ -268,7 +298,7 @@ function createSubagentProgressReader({ fsImpl = fs, now = () => Date.now() } = 
       const base = key.endsWith('#meta') ? key.slice(0, -5).replace(/\.meta\.json$/i, '.jsonl') : key;
       if (!live.has(base)) cache.delete(key);
     }
-    return buildSubagentProgress(main, files, { now: now() });
+    return buildSubagentProgress(main, files, { now: now(), ...liveState });
   }
   return { read, _cache: cache };
 }

@@ -4,6 +4,8 @@
 // → 负责人再派或直接答复用户。每次用户发话后最多连续派工 maxRounds 轮，到了停下等用户。
 // 配置存在 <Hub 数据目录>/squad/<群 id>.json，不改群聊对象；关掉小队模式后群聊照旧。
 // 运行状态只在内存：Hub 重启后小队停在原地，用户回话给负责人即可接着做，不自动续派。
+// 负责人掉线（R46）：停下时记住这一棒要交给负责人的原文，界面给「重启负责人并继续」，一键重启并重发同一棒。
+// Leader offline (R46): keep the pending leader input; the strip offers one click to restart the leader and resend it.
 const fs = require('fs');
 const path = require('path');
 const P = require('../../core/squad-protocol');
@@ -12,6 +14,7 @@ function createSquadEngine(deps) {
   const {
     getHubDataDir, meetingManager, getDispatcher, getMembers, ensureMemberReady,
     interruptMeetingTurn = () => {}, getOrchestrator = () => null, sendToRenderer = () => {}, logger = console,
+    restartSession = null, leaderNeedsRestart = () => true,
   } = deps;
   let frozen = false;
   const runs = new Map();          // meetingId → { token, abort, status, round, maxRounds, steps, note }
@@ -40,9 +43,11 @@ function createSquadEngine(deps) {
   }
   function publicRun(run) {
     if (!run) return null;
-    const { token, abort, ...rest } = run;
+    const { token, abort, pending, recover, ...rest } = run;
     void token; void abort;
-    return { ...rest, steps: rest.steps.map(step => ({ ...step })) };
+    const recoverable = run.status === 'error' && !!pending && !!recover;
+    return { ...rest, steps: rest.steps.map(step => ({ ...step })), recoverable,
+      ...(recoverable ? { recoverMode: recover.mode, restartLeader: recover.mode !== 'resend' } : {}) };
   }
   function view(id) {
     const meeting = meetingManager.getMeeting(id);
@@ -143,6 +148,8 @@ function createSquadEngine(deps) {
       leaderMemberId: leader.memberId, leaderLabel: leader.label, steps: [], note: `${leader.label} 正在理解需求`, startedAt: Date.now() };
     runs.set(id, run);
     emit(id);
+    const leaderInput = P.leaderPrompt(text, { members: list, leaderMemberId: leader.memberId, maxRounds: cfg.maxRounds });
+    run.pending = { kind: 'leader', input: leaderInput };
     let result;
     try {
       // 负责人可能已休眠：先唤醒（普通群聊的头像路由会把休眠成员当缺席，这条路径不会自动唤醒）。
@@ -152,11 +159,11 @@ function createSquadEngine(deps) {
         ...args,
         recipientSids: undefined,                 // 不走「头像 + 句中 @」路由：提示词里有 @m2 这类示例
         targetMemberIds: [leader.memberId],
-        userInput: P.leaderPrompt(text, { members: list, leaderMemberId: leader.memberId, maxRounds: cfg.maxRounds }),
+        userInput: leaderInput,
         displayUserInput: typeof args.displayUserInput === 'string' ? args.displayUserInput : text,
       });
     } catch (error) {
-      if (runs.get(id) === run) { run.status = 'error'; run.note = error.message; emit(id); }
+      if (runs.get(id) === run) halt(id, run, error.message, { noteTurn: null });
       throw error;
     }
     if (runs.get(id) === run && !run.abort) {
@@ -170,6 +177,102 @@ function createSquadEngine(deps) {
   }
 
   const alive = (id, run) => !frozen && runs.get(id) === run && !run.abort;
+
+  // 负责人这一棒没接住：停下、就地说明，并留下「接着做」的入口（不自动重试，避免反复重启卡死）。
+  // Leader leg failed: stop, explain in place and keep a resume entry (no auto retry, so it cannot loop on restarts).
+  function halt(id, run, reason, { noteTurn } = {}) {
+    const mode = P.leaderRecoverMode(reason);
+    run.status = 'error';
+    run.haltedAt = Date.now();
+    run.recover = run.pending ? { mode } : null;
+    const why = P.reasonText(reason);
+    const where = run.round ? `第 ${run.round}/${run.maxRounds} 轮验收` : '理解需求';
+    run.note = !run.recover
+      ? `负责人没有给出回答（${why}），小队已停下。`
+      : mode === 'restart-resend'
+        ? `负责人 ${run.leaderLabel} 的 CLI 掉线了（${why}），小队停在${where}；点「重启负责人并继续」即可接着做，已完成的成员结果都保留。`
+        : mode === 'restart-only'
+          ? `负责人 ${run.leaderLabel} 这一棒没有结果（${why}），可能还在跑或没收到，小队已停下；可点「重启负责人」结束它这一轮，重启后不会自动重发，看一眼负责人会话后回话即可继续。`
+          : `负责人没有给出回答（${why}），小队已停下；点「重新交给负责人」重试，或查看负责人会话后回话。`;
+    if (noteTurn !== null) note(id, noteTurn || run.turnNum, run.note);
+    emit(id);
+  }
+
+  // 「重启负责人并继续」/「重新交给负责人」：立刻返回，后台重启并重发停下时那一棒，再接着原来的轮次走。
+  // Resume button: returns at once; restarts the leader in the background, resends the pending leg and continues the same run.
+  function resume(id) {
+    const run = runs.get(id);
+    if (frozen || !run || run.status !== 'error' || !run.pending || !run.recover) throw new Error('现在没有停下待接着做的小队任务');
+    const meeting = meetingManager.getMeeting(id);
+    const leader = meeting && members(meeting).find(m => m.memberId === run.leaderMemberId);
+    if (!leader) throw new Error('负责人已不在群里，请重新设置小队负责人');
+    const mode = run.recover.mode;
+    const haltedAt = run.haltedAt || 0;
+    run.recover = null;
+    run.status = 'leader';
+    run.resumes = (run.resumes || 0) + 1;
+    run.note = mode === 'resend' ? `正在重新交给 ${run.leaderLabel}` : `正在重启负责人 ${run.leaderLabel}…`;
+    emit(id);
+    (async () => {
+      let result, restarted = false;
+      try {
+        // restart-only：负责人可能还在跑，一律重启结束它这一轮；restart-resend：按 CLI 真实状态判断，用户已手动重启好的不再重启。
+        // restart-only always restarts to end a possibly running turn; restart-resend checks the real CLI state first.
+        const needRestart = mode === 'restart-only'
+          || (mode === 'restart-resend' && leader.sid && await leaderNeedsRestart(leader.sid, { haltedAt }));
+        if (needRestart) {
+          if (typeof restartSession !== 'function') throw new Error('Hub 未提供会话重启能力');
+          const fresh = await restartSession(leader.sid);
+          if (!fresh || fresh.ok === false) throw new Error(fresh?.message || '重启没有成功');
+          restarted = true;
+        }
+        try { await ensureMemberReady(meeting, leader.memberId); }
+        catch (error) { logger.warn?.('[squad] wake leader after restart failed:', error.message); }
+        if (!alive(id, run)) return;
+        if (mode === 'restart-only') {
+          // 不确定上一棒有没有送到：只重启、不重发，交给用户看过负责人会话后回话（R46 审查 P1-2）。
+          // Unknown delivery: restart only, no resend; the user replies after checking the leader session.
+          run.status = 'stopped';
+          run.note = `负责人 ${run.leaderLabel} 已重启。上一棒是否送到不确定，没有自动重发；看一眼负责人会话后回话即可继续。`;
+          note(id, run.turnNum, run.note);
+          emit(id);
+          return;
+        }
+        run.note = `${run.leaderLabel} 已就绪，正在接着做`;
+        emit(id);
+        const input = P.resumePrompt(run.pending.input, { restarted: restarted || mode === 'restart-resend' });
+        // 第一棒的原文是整段负责人协议，群里只放一行说明，全文只发给负责人；验收棒照常显示交回卡片。
+        // The first leg is the full leader protocol: the chat card shows one line, the full text goes to the leader only.
+        const card = run.pending.kind === 'leader' ? `Hub 重发给负责人 @${run.leaderLabel}：会话重启后，把你的需求原样再交给它` : input;
+        result = await getDispatcher().dispatchGroupChatTurn(id, {
+          shouldDispatch: () => alive(id, run),
+          userInput: card,
+          perMemberInput: { [leader.memberId]: input },
+          targetMemberIds: [leader.memberId],
+          appendUserMessage: false,
+          dispatchMode: 'squad',
+          workflowRun: { kind: 'squad-notice', runId: `squad-${run.startedAt}-${run.round}-resume-${run.resumes}`, stepIndex: 80 + run.round, attempt: run.resumes + 1 },
+        });
+      } catch (error) {
+        logger.warn?.('[squad] resume leader failed:', error.message);
+        if (alive(id, run)) {
+          run.status = 'error';
+          run.recover = { mode: mode === 'resend' ? 'restart-resend' : mode };
+          run.haltedAt = Date.now();
+          run.note = `重启负责人没有成功（${P.reasonText(error.message)}）；可以再点一次，或打开负责人会话看看。`;
+          note(id, run.turnNum, run.note);
+          emit(id);
+        }
+        return;
+      }
+      if (!alive(id, run)) return;
+      await continueFrom(id, run, result);
+    })().catch(error => {
+      logger.warn?.('[squad] resume run failed:', error.message);
+      if (alive(id, run)) { run.status = 'error'; run.note = error.message; emit(id); }
+    });
+    return { ok: true, ...view(id) };
+  }
 
   // Hub 退出排空时调用：所有小队就地停下，不再派下一棒、不再交回（不发 ESC，退出链自己收尾 PTY）。
   function freeze() {
@@ -185,16 +288,18 @@ function createSquadEngine(deps) {
       if (!meeting) return;
       const list = members(meeting);
       const leader = list.find(m => m.memberId === run.leaderMemberId);
+      // 用户点了「停止本轮」：就地停下，不进错误恢复态、不给重发按钮（R46 审查 P1-1，与 R38 一致）。
+      // The user pressed Stop: halt quietly; no error state and no resend button (R46 review P1-1, same as R38).
+      const leaderItem = leader && (result?.results || []).find(r => r && r.sid === leader.sid);
+      if (result?.interrupted || leaderItem?.status === 'interrupted') { stop(id, { quiet: true }); return; }
       const leaderFailure = leader ? failed(result, leader.sid, id) : '负责人不在群里';
       if (leaderFailure) {
-        run.status = 'error';
-        run.note = leaderFailure === 'cli_not_ready'
-          ? '负责人的 CLI 还没启动好，这句话没送到，小队已停下；等成员头像变绿后再发一次即可。'
-          : `负责人没有给出回答（${P.reasonText(leaderFailure)}），小队已停下；查看负责人会话后回话即可继续。`;
-        note(id, result?.turnNum || run.turnNum, run.note);
-        emit(id);
+        // 「负责人不在群里」重启也救不了：不留接着做的入口。A leader removed from the group cannot be resumed.
+        if (!leader) run.pending = null;
+        halt(id, run, leaderFailure, { noteTurn: result?.turnNum || run.turnNum });
         return;
       }
+      run.pending = null;
       if (result?.turnNum) run.turnNum = result.turnNum;
       const resolve = token => {
         const r = parseTargets('@' + token, list, [], true) || {};
@@ -284,11 +389,13 @@ function createSquadEngine(deps) {
       run.status = 'handback';
       run.note = `成员已交回，${run.leaderLabel} 正在验收`;
       emit(id);
-      await ensureMemberReady(meeting, leader.memberId);
+      run.pending = { kind: 'handback', input: P.handbackPrompt(outcomes, { round: run.round, maxRounds: run.maxRounds }) };
+      try { await ensureMemberReady(meeting, leader.memberId); }
+      catch (error) { logger.warn?.('[squad] wake leader for handback failed:', error.message); }
       if (!alive(id, run)) return;
       result = await getDispatcher().dispatchGroupChatTurn(id, {
         shouldDispatch: () => alive(id, run),
-        userInput: P.handbackPrompt(outcomes, { round: run.round, maxRounds: run.maxRounds }),
+        userInput: run.pending.input,
         targetMemberIds: [leader.memberId],
         appendUserMessage: false,
         dispatchMode: 'squad',
@@ -298,7 +405,7 @@ function createSquadEngine(deps) {
     }
   }
 
-  return { config, configure, stop, freeze, view, userTurn, _runs: runs };
+  return { config, configure, stop, freeze, view, userTurn, resume, _runs: runs };
 }
 
 function registerSquadIpc(ipcMain, getEngine) {
@@ -315,6 +422,7 @@ function registerSquadIpc(ipcMain, getEngine) {
     ...(a.maxRounds !== undefined ? { maxRounds: a.maxRounds } : {}),
   })));
   ipcMain.handle('squad:stop', call((e, a) => ({ ok: true, stopped: e.stop(String(a.meetingId || '')) })));
+  ipcMain.handle('squad:resume', call((e, a) => e.resume(String(a.meetingId || ''))));
 }
 
 module.exports = { createSquadEngine, registerSquadIpc };

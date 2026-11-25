@@ -280,6 +280,7 @@ function minePairs(rows, { owner, nameOf = a => a, authorities = [], limit = 400
 function rulesMarkdown(av, { memoryLines = 0, sources: known = [] } = {}) {
   const t = TEMPLATES[av.tpl] || TEMPLATES.blank;
   return [`# 分身「${av.name}」工作规则`, '', t.guide, '',
+    '## 纠错卡（最高优先级）', '任务 related 中匹配本题的生效纠错卡优先于人设、范例、历史问答和其他资料。只用于卡片原问题对应的主题，不扩展到无关问题。使用时在 basis 注明「你的纠错卡 #卡号」。撤销的卡片不再生效。', '',
     '## 人设', av.persona || '说话直接，先给判断再说理由，不客套。', '',
     ...(av.notes ? ['## 本人的补充要求', av.notes, ''] : []),
     ...(av.authorities?.length ? ['## 权威答疑人（他们的原话优先）', av.authorities.map(x => `- ${x.name}`).join('\n'), ''] : []),

@@ -16,4 +16,6 @@ test('分身页样式不写死颜色，全部转引 hw-tokens', () => {
     const rule = css.slice(css.indexOf(sel + '{'));
     assert.ok(css.includes(sel + '{') && /^[^}]*color:var\(--hw-surface\)/.test(rule), sel);
   }
+  // 第 3 批：就地纠偏、新旧并排、纠错卡高亮、「它学到的」都有样式，且同样只转引变量。
+  for (const sel of ['.avx-fix{', '.avx-cmp{', '.avx-ch.hit', '.avx-learn{', '.avx-btn.fixb{', '.avx-grp{']) assert.ok(css.includes(sel), sel);
 });

@@ -172,6 +172,38 @@ function memberFailureNote(label, reason) {
   return `小队成员 @${label} 的回答没能交回负责人：${reasonText(reason)}。`;
 }
 
+// 负责人收不到消息、重启会话就能接上的几类原因（R46）：CLI 退回系统终端、没启动好、进程退出、会话没就绪。
+// Leader failures that a session restart fixes (R46): CLI back at the shell, not ready, exited, session not ready.
+const LEADER_RESTART_CODES = new Set(['cli_not_ready', 'cli-not-ready', 'cli-exited', 'cli_exited', 'runtime_exited', 'session_not_ready']);
+// 终端 CLI 与 DSH / 千问 / pi / CodeAgent serve / 原生连接各自的掉线说法（R46 审查 P1-5）。
+// Disconnect wordings of the terminal CLI and the DSH / Qwen / pi / CodeAgent serve / native drivers (R46 review P1-5).
+const LEADER_DOWN_RE = /CLI 已退出|(?:DSH|pi|千问)\s*(?:CLI\s*)?已退出|退出到系统终端|CLI 没有启动|会话还没就绪|未找到 .{0,20}CLI|未连接|尚未连接|连接已断开|原生连接不可用|(?:CLI|会话)\s*已关闭/;
+function leaderNeedsRestart(reason) {
+  const raw = String(reason || '').trim();
+  return LEADER_RESTART_CODES.has(raw) || LEADER_DOWN_RE.test(raw);
+}
+
+// 负责人可能还在跑、或不确定收没收到（超时、粘贴卡住、提交结果不明）：不能直接再发一遍，否则同一棒会双发（R46 审查 P1-2）。
+// The leader may still be running or may have received it (timeout, stuck paste, unknown submission): never resend blindly (R46 review P1-2).
+const LEADER_UNCERTAIN_CODES = new Set(['hard_timeout', 'response_timeout', 'stuck', 'submission_unknown', 'unconfirmed']);
+
+// 负责人这一棒没接住时的接续方式：restart-resend 重启并重发；restart-only 只重启、不重发；resend 直接重发。
+// How to resume a halted leader leg: restart and resend; restart only (no resend); or resend without restart.
+function leaderRecoverMode(reason) {
+  if (leaderNeedsRestart(reason)) return 'restart-resend';
+  if (LEADER_UNCERTAIN_CODES.has(String(reason || '').trim())) return 'restart-only';
+  return 'resend';
+}
+
+// 重发同一棒：按是否真的重启过说明原因，避免负责人以为是新需求。
+// Resend the same leg, explaining whether the session was restarted, so it does not read as a new request.
+function resumePrompt(input, { restarted = true } = {}) {
+  const head = restarted
+    ? '（Hub 提示：你的会话刚重启，上一条消息没有送到，下面原样重发，接着做即可。）'
+    : '（Hub 提示：上一条消息你没有给出有效回答，下面原样重发一次，接着做即可。）';
+  return `${head}\n\n${String(input || '')}`;
+}
+
 function dispatchNote(task) {
   const summary = String(task.task || '').split('\n')[0].slice(0, 120);
   return `负责人派给 @${task.label}：${summary}`;
@@ -186,6 +218,9 @@ module.exports = {
   leaderPrompt,
   memberPrompt,
   handbackPrompt,
+  leaderNeedsRestart,
+  leaderRecoverMode,
+  resumePrompt,
   dispatchNote,
   reasonText,
   memberFailureNote,

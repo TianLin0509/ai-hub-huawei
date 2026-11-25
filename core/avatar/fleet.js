@@ -9,6 +9,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const F = require('./fleet-rules');
 const R = require('./rules');
+const C = require('./corrections');
 const { AvatarService } = require('./service');
 const { AgentSessions, IDLE_MS, normalizeFailure } = require('./agent-session');
 const welink = require('../company-assistant/welink');
@@ -32,6 +33,7 @@ class FleetService {
     this.accountEpoch = 0; this.runtimeOwner = undefined; this.statusVersion = 0;
     this.authCheck = null; this.authCheckAt = -Infinity; this.authSignature = '';
     this.resetHealth();
+    this.tryouts = new (require('./tryout').Tryouts)(this);
   }
   assistant() { return this.legacy.assistant(); }
   // 当前进程核实的身份优先；快照仍走 R40b 缓存，不能用旧账号快照覆盖刚核实的新身份。
@@ -509,11 +511,11 @@ class FleetService {
     return lines.slice(-6000);
   }
   material(owner, av, items) {
-    const lines = this.knowledge(owner, av);
+    const lines = this.knowledge(owner, av), cards = this.correctionCards(owner, av.id);
     return { avatar: av.name, items: items.map(item => ({ id: item.id, where: item.group ? `群「${item.convName}」` : '私聊', who: item.who, isLeader: (item.flags || []).includes('leader'), atMe: !!item.atMe, allowed: item.asked ? ['draft'] : item.level >= 3 ? ['draft', 'remind', 'skip'] : ['remind', 'skip'], ...(item.asked ? { ownerAsked: true } : {}),
-      incoming: F.safeText(item.text, 1200), history: this.messages(item.conv).slice(-20).map(m => `${m.displayTime || ''} ${m.sender}：${F.safeText(m.text || m.preview, 300)}`), related: F.related(lines, item.text, 12) })) };
+      incoming: F.safeText(item.text, 1200), history: this.messages(item.conv).slice(-20).map(m => `${m.displayTime || ''} ${m.sender}：${F.safeText(m.text || m.preview, 300)}`), related: [...C.relevant(cards, item.text), ...F.related(lines, item.text, 12)] })) };
   }
-  async runAvatar(owner, id) {
+  async runAvatar(owner, id, { itemId = '' } = {}) {
     if (this.owner() !== owner) return;
     const epoch = this.accountEpoch, running = this.running;
     if (this.running.has(id)) return;
@@ -523,7 +525,7 @@ class FleetService {
       const fleet = this.fleet(owner), av = fleet.avatars.find(v => v.id === id); if (!av || !av.enabled || fleet.paused) return;
       pending = this.mutate(owner, id, st => {
         this.count(st, 'model', 0);
-        const rows = Object.values(st.items).filter(i => i.state === 'new').sort((a, b) => a.at - b.at).slice(0, BATCH);
+        const rows = Object.values(st.items).filter(i => i.state === 'new' && (!itemId || i.id === itemId)).sort((a, b) => a.at - b.at).slice(0, BATCH);
         if ((st.stats.model || 0) >= DAILY_ITEMS) { for (const p of rows) Object.assign(p, { state: 'remind', why: '今天的处理量已到上限，这条请你看一下' }); return []; }
         for (const p of rows) p.state = 'drafting';
         return rows.map(p => ({ ...p }));
@@ -546,6 +548,11 @@ class FleetService {
       if (!this.current(owner, epoch)) return;
       const results = F.parseResults(raw);
       if (!this.exists(owner, id)) return;
+      // 生成期间本人教了新口径，旧回执不能覆盖纠正后的稿。
+      if ((this.find(owner, id).av.rulesVersion || 0) !== (av.rulesVersion || 0)) {
+        this.mutate(owner, id, st => { for (const p of pending) if (st.items[p.id]?.state === 'drafting') st.items[p.id].state = 'new'; });
+        return;
+      }
       this.mutate(owner, id, st => {
         for (const p of pending) {
           const item = st.items[p.id]; if (!item || item.state !== 'drafting') continue;
@@ -577,7 +584,7 @@ class FleetService {
             const item = st.items[p.id]; if (!item || item.state !== 'drafting') continue;
             item.failure = { ...failure, actions: failure.actions.map(a => a.kind === 'retry_tick' ? { ...a, payload: { ...a.payload, itemId: p.id } } : a) };
             item.tries = (item.tries || 0) + 1;
-            if (item.tries >= 2) { Object.assign(item, { state: 'remind', asked: false, why: '分身没处理成：' + short(e.message, 80) }); this.note(st, item, 'remind', '等你处理', item.why); } else item.state = 'new';
+            if (itemId || item.tries >= 2) { Object.assign(item, { state: 'remind', asked: false, why: '分身没处理成：' + short(e.message, 80) }); this.note(st, item, 'remind', '等你处理', item.why); } else item.state = 'new';
           }
           st.lastError = short(e.message, 160);
           st.providerRepair = e.providerRepair || null;
@@ -676,8 +683,126 @@ class FleetService {
     return this.status();
   }
   pauseAll(paused = true) { const owner = this.need(), fleet = this.fleet(owner); fleet.paused = !!paused; this.saveFleet(owner, fleet); this.legacy.audit(owner, { op: paused ? 'avatar-pause-all' : 'avatar-resume-all' }); return this.status(); }
-  regeneratePersona(id) { const owner = this.need(), { fleet, av } = this.find(owner, id); let texts = []; try { texts = this.legacy.myTexts(owner); } catch { /* 档案还没建 */ } const persona = R.personaFrom(texts); if (!persona) throw new Error('你的历史发言还不够，先手动写几句'); av.persona = persona; this.saveFleet(owner, fleet); return this.status(); }
-  item(owner, avatarId, itemId) { const st = this.state(owner, avatarId), item = st.items[itemId]; if (!item) throw new Error('这条已经处理过了'); return { st, item }; }
+  tryoutSamples(id) { return this.tryouts.samples(id); }
+  runTryout(id, opts = {}) { return this.tryouts.run(id, opts); }
+  rateTryout(id, opts = {}) { return this.tryouts.rate(id, opts); }
+  regeneratePersona(id) {
+    const owner = this.need(), { fleet, av } = this.find(owner, id); let texts = [];
+    try { texts = this.legacy.myTexts(owner); } catch { return { ...this.status(), personaNote: '近期发言暂时读不到，可直接手写人设后继续使用' }; }
+    const persona = R.personaFrom(texts);
+    if (!persona) return { ...this.status(), personaNote: '近期本人发言较少，暂未能自动归纳人设，可直接手写后继续使用' };
+    av.persona = persona; this.saveFleet(owner, fleet); return { ...this.status(), personaNote: '' };
+  }
+  item(owner, avatarId, itemId) { this.find(owner, avatarId); const st = this.state(owner, avatarId), item = st.items[itemId]; if (!item) throw new Error('这条已经处理过了'); return { st, item }; }
+  correctionFile(owner, id) { return path.join(this.home(owner, id), 'work', 'corrections.json'); }
+  correctionCards(owner, id) {
+    return this.fleet(owner).avatars.flatMap(av => C.read(this.correctionFile(owner, av.id)).filter(c => av.id === id || c.scope === 'all_avatars'));
+  }
+  correctionsList(id) {
+    const owner = this.need(), { av } = this.find(owner, id), st = this.state(owner, id);
+    return { ok: true, cards: C.read(this.correctionFile(owner, id)), examplesCount: exampleCount(path.join(this.home(owner, id), 'work', 'examples.md')), persona: av.persona || '', memoryLines: st.memoryLines || 0 };
+  }
+  bumpRules(owner, id, scope) {
+    this.mutateFleet(owner, fleet => { for (const av of fleet.avatars) if (av.id === id || scope === 'all_avatars') av.rulesVersion = (av.rulesVersion || 0) + 1; });
+    this.changed();
+  }
+  correctionToggle(id, { cardId, active } = {}) {
+    const owner = this.need(); this.find(owner, id);
+    const result = C.toggle(this.correctionFile(owner, id), cardId, active, this.now()); this.bumpRules(owner, id, result.card.scope);
+    return { ok: true, ...result };
+  }
+  externalFiles(owner) { return { inbox: this.legacy.file(owner, 'external-twin-inbox.jsonl'), resolved: this.legacy.file(owner, 'external-twin-resolved.jsonl') }; }
+  externalItems(owner, fleet = this.fleet(owner)) {
+    if (!fleet.avatars.length) return [];
+    const files = this.externalFiles(owner);
+    return C.external(files.inbox, files.resolved).map(row => {
+      const av = fleet.avatars.find(a => a.targets?.some(t => t.id === row.conv)) || fleet.avatars.find(a => a.enabled) || fleet.avatars[0];
+      return { ...row, externalTwin: true, avatarId: av.id, avatarName: av.name, state: 'remind', text: row.question, draft: row.answer, who: row.askerName, group: true, action: 'draft', level: 3,
+        why: row.kind === 'promise' ? '承诺待回收' : `群分身低把握（把握 ${row.confidence}）` };
+    });
+  }
+  async correctItem(id, itemId, opts = {}) {
+    const owner = this.need(), epoch = this.accountEpoch; this.find(owner, id);
+    let st = this.state(owner, id), item = st.items[itemId];
+    if (!item) { item = this.externalItems(owner).find(i => i.id === itemId && i.avatarId === id); if (!item) throw new Error('找不到这条待确认事项'); }
+    if (this.running.has(id)) throw new Error('这名分身正在生成，请等本轮完成后再纠正');
+    const card = C.create(this.correctionFile(owner, id), item, opts, this.now());
+    this.bumpRules(owner, id, card.scope);
+    const isExt = !!item.externalTwin;
+    if (!isExt) {
+      st.items[itemId] = { ...item, correctedCardId: card.id, oldDraftSnapshot: item.draft || '' }; this.saveState(owner, id, st);
+    } else {
+      const row = { id: item.id, conv: item.conv, convName: item.convName, askerName: item.who, question: item.text, answer: card.correctAnswer,
+        status: 'corrected', basis: Array.isArray(item.basis) ? item.basis : [], confidence: item.confidence || 0, kind: item.kind, at: this.now(), cardId: card.id, correctAnswer: card.correctAnswer };
+      try { C.resolve(this.externalFiles(owner).resolved, row); }
+      catch (e) { return { ok: true, card, status: this.status(), redraftFailure: normalizeFailure(new Error('纠错卡已保存，但本地结案记录未写入：' + e.message)) }; }
+    }
+    let redraftFailure, redraftResult;
+    if (opts.redraft !== false) {
+      try {
+        const agent = this.preflight(owner, this.backends()).agent;
+        if (!agent.ok) throw new Error(agent.label || '模型账号未就绪');
+        const { av, fleet } = this.find(owner, id);
+        if (!av.enabled || fleet.paused) throw new Error('分身已暂停，纠错卡已保存，恢复后可重新起草');
+        // 外部群分身事项只在重答期间临时挂进 items，跑完立即清理，避免在 state.json 留下计入待确认数的幽灵条目。
+        this.mutate(owner, id, now => {
+          if (isExt) now.items[itemId] = { ...item, correctedCardId: card.id, oldDraftSnapshot: item.draft || '' };
+          Object.assign(now.items[itemId], { state: 'new', level: 3, action: 'draft', tries: 0, asked: true });
+        });
+        try {
+          await this.runAvatar(owner, id, { itemId });
+          if (!this.current(owner, epoch)) throw new Error('账号已切换，纠错卡保留在原账号本机目录');
+          const latest = this.state(owner, id).items[itemId];
+          if (latest?.failure) redraftFailure = latest.failure;
+          else if (latest?.state === 'ready') { const { draft, basis, confidence, why } = latest; redraftResult = { draft, basis, confidence, why }; }
+          else redraftFailure = normalizeFailure(new Error(latest?.why || '纠错卡已保存，本次未生成可用草稿'));
+        } finally {
+          if (isExt) this.mutate(owner, id, now => { delete now.items[itemId]; });
+        }
+      } catch (e) { redraftFailure = normalizeFailure(e, { source: 'model', now: this.now() }); }
+    }
+    this.changed(); return { ok: true, card, status: this.status(), ...(redraftResult ? { redraftResult } : {}), ...(redraftFailure ? { redraftFailure } : {}) };
+  }
+  async reassignTarget(id, itemId, { action, targetMsgKey, redraft = true } = {}) {
+    const owner = this.need(), { st, item } = this.item(owner, id, itemId);
+    if (!OPEN.has(item.state) || this.running.has(id)) throw new Error('这条正在生成或已经处理，请稍后刷新');
+    if (item.externalTwin) throw new Error('群分身转交事项只支持本地纠正，不改配或发送');
+    if (action === 'not_for_me') { item.state = 'dropped'; this.note(st, item, 'not_for_me', '不是问我的，已忽略'); }
+    else if (action === 'retarget') {
+      const snap = this.snapshot(), recent = [...(snap?.login?.uid === owner ? snap.messages?.[item.conv] || [] : []), ...this.messages(item.conv)];
+      const message = recent.find(m => targetMsgKey != null && targetMsgKey !== '' && D.sameMsgKey(m.key, targetMsgKey));
+      if (!item.group || !message || message.mine || !message.text || message.contentType && !/TEXT/i.test(message.contentType)) throw new Error('请选择本群近期的一条文字消息');
+      Object.assign(item, { replyTarget: { key: message.key, msgKey: message.key, sender: message.sender || '', text: F.safeText(message.text, 1200), snippet: F.safeText(message.text, 120), at: message.at || 0 },
+        text: message.text.slice(0, 1200), firstKey: message.key, lastKey: message.key, messageKeys: [message.key], account: message.account, who: message.sender,
+        at: message.at || 0, sensitive: R.sensitiveHit(message.text), oldDraftSnapshot: item.draft || '', draft: '', state: 'remind', basis: '', confidence: 0, asked: false, maybeAnswered: null });
+      delete item.correctedCardId; delete item.failure;
+    } else throw new Error('请选择改配或忽略');
+    this.saveState(owner, id, st); this.changed();
+    if (action === 'retarget' && redraft !== false) return this.redraft(id, itemId);
+    return this.status();
+  }
+  replyTargets(item, snap, owner) {
+    if (!item.group || item.externalTwin) return {};
+    const rows = new Map();
+    for (const m of [...(snap?.login?.uid === owner ? snap.messages?.[item.conv] || [] : []), ...this.messages(item.conv)]) if (m.key != null) rows.set(String(m.key), m);
+    const target = [...rows.values()].find(m => D.sameMsgKey(m.key, item.lastKey));
+    const view = m => ({ key: m.key, msgKey: m.key, sender: m.sender || '', text: F.safeText(m.text || '', 1200), snippet: F.safeText(m.text || '', 120), at: m.at || 0 });
+    return { replyTarget: item.replyTarget || (target ? view(target) : { key: item.lastKey, msgKey: item.lastKey, sender: item.who || '', snippet: F.safeText(item.text, 120), at: item.at || 0 }),
+      targetCandidates: [...rows.values()].filter(m => !m.mine && m.text && (!m.contentType || /TEXT/i.test(m.contentType)) && !D.sameMsgKey(m.key, item.lastKey) && !R.sensitiveHit(m.text)).sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 8).map(view) };
+  }
+  feedbackContext(id, itemId) {
+    const owner = this.need(), { av } = this.find(owner, id), st = this.state(owner, id);
+    const item = itemId ? st.items[itemId] || this.externalItems(owner).find(i => i.id === itemId && i.avatarId === id) : null;
+    if (itemId && !item) throw new Error('找不到这条问答');
+    let names = []; try { names = Object.values(this.assistant()?.archive?.loadIndex?.(owner)?.names || {}); } catch { /* 无目录 */ }
+    const snap = this.snapshot();
+    for (const msg of [...(snap?.login?.uid === owner ? snap.messages?.[item?.conv] || [] : []), ...this.messages(item?.conv || '')]) names.push(msg.sender, msg.account);
+    for (const row of [...(av.targets || []), ...(av.only || []), ...(av.skip || []), ...(av.authorities || []), ...(snap?.conversations || [])]) names.push(row.name, row.id);
+    const config = { template: av.tpl, kind: av.kind, action: av.action, atOnly: av.atOnly, rulesVersion: av.rulesVersion || 0, backend: av.backend?.model || '自动', targetsCount: av.targets?.length || 0 };
+    const context = { version: require('../../package.json').version, config, question: item?.text || '', answer: item?.draft || '', confidence: item?.confidence || 0, basis: item?.basis || '', recentError: st.lastError || this.lastError || '' };
+    const text = C.feedback(context, [...names, owner, this.myName(), av.name, av.prefix, item?.who, item?.convName, item?.account]);
+    return { ok: true, text, context: text };
+  }
   finish(avatarId, itemId, state, result, why = '') { const owner = this.need(), { st, item } = this.item(owner, avatarId, itemId); if (!OPEN.has(item.state)) throw new Error('这条已经处理过了'); item.state = state; this.note(st, item, state === 'dropped' ? 'dropped' : 'done', result, why); this.saveState(owner, avatarId, st); return this.status(); }
   drop(avatarId, itemId) { return this.finish(avatarId, itemId, 'dropped', '已丢弃'); }
   done(avatarId, itemId) { return this.finish(avatarId, itemId, 'done', '已处理'); }
@@ -700,6 +825,7 @@ class FleetService {
   repliedAlready(item) { return F.answeredAfter(this.messages(item.conv), item, { authorities: [] })?.by === 'me'; }
   // 发送前的检查：进队列时查一次，轮到真正执行时再查一次（排队期间可能暂停了、本人回了、对方被认出是上级）。
   sendProblem(owner, avatarId, item, body, ackRisk) {
+    if (item.externalTwin) return { error: '群分身转交事项只在本机纠正，本页不代发群消息' };
     const fleet = this.fleet(owner), av = fleet.avatars.find(v => v.id === avatarId);
     if (fleet.paused) return { error: '分身已全部暂停，恢复后才能发送' };
     if (!av) return { error: '找不到这个分身' };
@@ -860,7 +986,7 @@ class FleetService {
     if (fleet.avatars.length) this.armTimer();   // 换了登录账号、新账号下有分身：打开页面时巡检恢复
     const avatars = fleet.avatars.map(av => {
       const st = this.state(owner, av.id), stats = st.stats.day === this.today() ? st.stats : {}, open = Object.values(st.items).filter(i => INBOX.has(i.state));
-      for (const item of open) items.push({ ...item, avatarId: av.id, avatarName: av.name, prefixed: !!F.TEMPLATES[av.tpl]?.prefixed, prefix: av.prefix, flags: [...new Set([...(item.flags || []), ...R.decide(item, roster).flags])] });
+      for (const item of open) items.push({ ...item, ...this.replyTargets(item, snap, owner), avatarId: av.id, avatarName: av.name, prefixed: !!F.TEMPLATES[av.tpl]?.prefixed, prefix: av.prefix, flags: [...new Set([...(item.flags || []), ...R.decide(item, roster).flags])] });
       const working = Object.values(st.items).filter(i => ['new', 'drafting'].includes(i.state)).length;
       const code = fleet.paused ? 'paused' : !av.enabled ? 'off' : !login.ok ? 'waiting' : st.lastError ? 'error' : 'on';
       return { ...av, state: { code, text: { paused: '已暂停', off: '已暂停', waiting: '等 WeLink 登录', error: '遇到问题', on: this.running.has(av.id) || working ? '处理中' : '运行中' }[code], error: st.lastError || '', providerRepair: st.providerRepair || null, failure: st.failure || null }, pending: open.length, working,
@@ -871,7 +997,8 @@ class FleetService {
     const inProgress = [...this.jobs.values()].flat(), queued = [];
     for (const av of fleet.avatars) for (const item of Object.values(this.state(owner, av.id).items)) if (item.state === 'new') queued.push({ itemId: item.id, avatarId: av.id, convName: item.convName || '', question: short(item.text, 160), stage: 'queued', since: item.createdAt || item.at || 0, queuePos: queued.length + 1 });
     const activeFailure = loginFailure || this.activeFailure || avatars.map(av => av.state.failure).find(Boolean) || null;
-    return { ok: true, available: true, beta: true, paused: fleet.paused, login, snapAt: snap?.at || 0, readError: this.readError, lastError: this.lastError, prep: this.prep, avatars, items: items.sort((x, y) => (y.at || 0) - (x.at || 0)), backends,
+    const externalItems = this.externalItems(owner, fleet);
+    return { ok: true, available: true, beta: true, paused: fleet.paused, login, snapAt: snap?.at || 0, readError: this.readError, lastError: this.lastError, prep: this.prep, avatars, externalItems, items: items.filter(i => !i.externalTwin).sort((x, y) => (y.at || 0) - (x.at || 0)), backends,
       preflight, health: this.health(fleet, login, activeFailure), stages: this.stages.map(s => ({ ...s, durationMs: s.state === 'running' ? Math.max(0, this.now() - s.at) : s.durationMs })), inProgress: [...inProgress, ...queued], activeFailure, statusVersion: this.statusVersion };
   }
 }

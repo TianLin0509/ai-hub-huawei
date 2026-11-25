@@ -109,7 +109,7 @@ class AgentSessions {
     const route = meta && this.d.dataDir ? routes.choose(this.d.dataDir, meta.codeagentPoolAccount || 'personal', routes.deferredModel(meta) || meta.currentModel?.id || meta.fixedModel || '',
       { configDir: meta.codeagentConfigDir, explicitModel: av.backend?.model || '' }) : null;
     const sameRoute = !require('../feature-agent-choice').stale(this.d.dataDir, 'avatar', meta) && (!require('../feature-agent-choice').inheritsAssistantChoice(meta?.featureAgentChoice) || routes.matchesSession(meta, route, { dataDir: this.d.dataDir }));
-    if (session?.id && this.alive(session.id) && sameRoute && (session.questions || 0) < MAX_QUESTIONS) return session;
+    if (session?.id && this.alive(session.id) && sameRoute && (session.rulesVersion || 0) === (av.rulesVersion || 0) && (session.questions || 0) < MAX_QUESTIONS) return session;
     if (this.starting.has(av.id)) return this.starting.get(av.id);
     const work = (async () => {
       if (session?.id && !(await this.close(session.id))) throw new Error('上一个分身会话还没关掉，下一轮再试');
@@ -119,7 +119,7 @@ class AgentSessions {
         ...(addDirs.length ? { addDirs: [...new Set(addDirs)] } : {}), ...backendOptions(av.backend, this.d.pickAccount) });
       const created = await this.d.createSession(picked.kind, picked.opts);
       if (created?.ok === false) throw new Error(created.message || created.error || '分身会话没有启动');
-      return { id, questions: 0, startedAt: this.now(), lastAt: this.now() };
+      return { id, questions: 0, startedAt: this.now(), lastAt: this.now(), rulesVersion: av.rulesVersion || 0 };
     })();
     this.starting.set(av.id, work);
     try { return await work; } finally { this.starting.delete(av.id); }

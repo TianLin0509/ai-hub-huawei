@@ -9,9 +9,10 @@ const { createSubagentProgressReader } = require('../core/subagent-progress');
 const { isClaudeFamily, isCodeAgentKind } = require('../core/ai-kinds');
 
 const POLL_MS = 2000;
+const safe = fn => { try { return fn(); } catch { return false; } };
 const LOCATE_RETRY_MS = 15000;   // 找不到记录时，过一会儿再到配置目录里找，不每轮都列目录
 
-function createSubagentProgressService({ getSession, sendToRenderer = () => {}, pollMs = POLL_MS, fsImpl = fs, now = () => Date.now(), logger = console } = {}) {
+function createSubagentProgressService({ getSession, isCliGone = () => false, isTurnActive = null, sendToRenderer = () => {}, pollMs = POLL_MS, fsImpl = fs, now = () => Date.now(), logger = console } = {}) {
   const reader = createSubagentProgressReader({ fsImpl, now });
   let watched = null, timer = null, lastKey = '', located = { sessionId: null, file: null, at: 0 };
 
@@ -51,7 +52,15 @@ function createSubagentProgressService({ getSession, sendToRenderer = () => {}, 
       const session = getSession(id);
       if (!session || !isClaudeFamily(session.kind)) { publish(id, null); return; }
       const file = transcriptOf(session);
-      const progress = file ? await reader.read(file) : null;
+      // 当前 CLI 进程的启动时刻、是否已退回系统终端、本轮是否还在跑：用来把 CLI 退出时没跑完的子任务标成「已中断」（R46）。
+      // Process start time, shell takeover and turn state let the reader mark subagents orphaned by a CLI exit as interrupted (R46).
+      const startedAt = Number(session.spawnedAt ?? session.createdAt);
+      const live = {
+        processStartedAt: Number.isFinite(startedAt) ? startedAt : null,
+        cliGone: !!safe(() => isCliGone(id)),
+        turnActive: typeof isTurnActive === 'function' ? !!safe(() => isTurnActive(id)) : null,
+      };
+      const progress = file ? await reader.read(file, live) : null;
       if (watched === id) publish(id, progress);
     } catch (e) {
       logger.warn?.('[subagent-progress] 读取失败：', e && e.message);

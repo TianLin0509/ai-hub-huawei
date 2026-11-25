@@ -2391,6 +2391,10 @@ try {
     ensureMemberReady: (meeting, memberId) => global.__loopEngine.ensureMemberReady(meeting, memberId),
     interruptMeetingTurn: (meetingId, options) => groupChatDispatcher.interruptMeetingTurn(meetingId, options),
     getOrchestrator: meetingId => groupchat.getOrchestrator(getHubDataDir(), meetingId),
+    // R46：首轮前掉线时原地重拉 CLI；按 CLI 真实状态判断要不要重启（main/groupchat/squad-leader-health.js）。
+    // R46: relaunch in place when no native id yet; decide restarts from the real CLI state.
+    restartSession: sid => require('./main/groupchat/squad-leader-health').restartLeader(sessionManager, id => sessionOperations.restartSession(id), sid),
+    leaderNeedsRestart: (sid, options) => require('./main/groupchat/squad-leader-health').leaderNeedsRestart(sessionManager, sid, options),
   });
   require('./main/groupchat/squad-engine').registerSquadIpc(ipcMain, () => global.__squadEngine);
 } catch (e) { console.warn('[squad] engine init failed:', e && e.message); }
@@ -2515,6 +2519,10 @@ try {
 try {
   require('./main/subagent-progress-service.js').createSubagentProgressService({
     getSession: id => sessionManager.getSession(id), sendToRenderer, logger: console,
+    // R46：CLI 退回系统终端（原生会话不看终端屏幕）、本轮是否还在跑。CLI exited to the shell / turn still running.
+    isCliGone: id => !sessionManager.getNativeClaude?.(id) && !sessionManager.getNativeSession?.(id)
+      && require('./core/host-shell-detector').detectHostShellTakeover(sessionManager.getSessionBuffer(id) || ''),
+    isTurnActive: id => sessionManager.isAgentTurnActive(id),
   }).registerIpc(ipcMain);
 } catch (error) { console.error('[subagent-progress] initialization failed:', error.message); }
 
