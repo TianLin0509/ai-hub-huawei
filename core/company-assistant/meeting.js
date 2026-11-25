@@ -72,23 +72,45 @@ function answerSettled(prev, next) {
 // epoch：正本从盘上重读（外部改动、内存淘汰）时换新，页面手里的版本对不上就回全量；base：比它旧的版本一律回全量。
 const LIST_TTL_MS = 15000;   // 会议列表最多这么久重扫一次目录；Hub 里的新建、删除和每次保存立即反映，只有 Hub 之外的改动（手工删文件夹、换盘）最多晚 15 秒
 const LOG_MAX = 20000;       // 事件改动记录太长就整体作废（页面回一次全量），免得无限增长
-const valueEqual = (a, b) => a === b || (a !== null && b !== null && typeof a === 'object' && typeof b === 'object' && JSON.stringify(a) === JSON.stringify(b));
-function flatEqual(a, b) {
-  if (a === b) return true; if (!a || !b) return false;
-  const ka = Object.keys(a); if (ka.length !== Object.keys(b).length) return false;
-  for (const k of ka) if (!valueEqual(a[k], b[k])) return false;
-  return true;
+// 比对「改没改」：逐项比，遇到第一处不同就停。原来对象字段和每道问题整份 JSON.stringify 再比、每条事件取两次键表，
+// 8000 条事件加 40 道长回答每次保存约 2.5 ms，比保存时复制一份还贵（2026-11-25 复审）。只认普通对象和数组；别的对象（日期等）照旧按 JSON 比。
+// 和 JSON 比只差两类：键顺序不同算没变（内容一样，页面按字段名取值看不出差别）；值为 undefined 的键、NaN 这类 JSON 看不出的差别算变了（多回一个字段，无害）。
+const hasOwn = Object.prototype.hasOwnProperty;
+function sameValue(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+  const list = Array.isArray(a);
+  if (list !== Array.isArray(b)) return false;
+  if (list) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!sameValue(a[i], b[i])) return false;
+    return true;
+  }
+  const pa = Object.getPrototypeOf(a), pb = Object.getPrototypeOf(b);
+  if ((pa !== Object.prototype && pa !== null) || (pb !== Object.prototype && pb !== null)) return JSON.stringify(a) === JSON.stringify(b);
+  // for...in 不逐个查「是不是自己的键」（8000 条事件 1.07→0.46 ms）：普通对象的原型上没有可枚举的键；万一有，两边继承到的一样、计数也抵消，最多判得更严。
+  // 只有两种情况要核对 b 自己有没有这个键：读出来是 undefined，或键名是 __proto__（b 没有这个自有键时读到的是继承来的原型对象，
+  // 会被当成「空对象、没变」，Codex 复审 2026-11-25 给出的反例见 tests/unit-meeting-status-delta.test.js）。
+  let n = 0;
+  for (const k in a) {
+    const x = a[k], y = b[k];
+    if (x !== y && !sameValue(x, y)) return false;
+    if ((y === undefined || k === '__proto__') && !hasOwn.call(b, k)) return false;
+    n++;
+  }
+  for (const k in b) n--;
+  return n === 0;
 }
 function newRevs(version) { return { epoch: randomUUID().slice(0, 8), base: version, fields: new Map(), eventLog: [], answers: new Map() }; }
 // 记下 next 相对 prev 的改动（rev＝这次保存后的版本号）。events 只能追加或改已有条目；变短、序号对不上就整体作废。
 function trackRevs(revs, prev, next, rev) {
   if (!prev) { revs.base = rev; revs.fields.clear(); revs.eventLog = []; revs.answers.clear(); return; }
-  for (const k of new Set([...Object.keys(prev), ...Object.keys(next)])) if (k !== 'events' && k !== 'answers' && !valueEqual(prev[k], next[k])) revs.fields.set(k, rev);
+  for (const k of new Set([...Object.keys(prev), ...Object.keys(next)])) if (k !== 'events' && k !== 'answers' && (hasOwn.call(prev, k) !== hasOwn.call(next, k) || !sameValue(prev[k], next[k]))) revs.fields.set(k, rev);
   const pe = prev.events || [], ne = next.events || [];
   if (ne.length < pe.length) revs.base = rev;
   else {
     for (let i = 0; i < ne.length; i++) {
-      if (i < pe.length && flatEqual(pe[i], ne[i])) continue;
+      if (i < pe.length && sameValue(pe[i], ne[i])) continue;
       if (i < pe.length && pe[i]?.seq !== ne[i]?.seq) { revs.base = rev; break; }
       revs.eventLog.push(rev, ne[i]?.seq);
     }
@@ -96,7 +118,7 @@ function trackRevs(revs, prev, next, rev) {
   }
   const pa = prev.answers || [], na = next.answers || [], before = new Map(pa.map(q => [q.id, q]));
   if (na.length < pa.length || !na.every((q, i) => i >= pa.length || pa[i]?.id === q.id)) revs.base = rev;
-  for (const q of na) if (!valueEqual(before.get(q.id), q)) revs.answers.set(q.id, rev);
+  for (const q of na) if (!sameValue(before.get(q.id), q)) revs.answers.set(q.id, rev);
 }
 const sleepSync = ms => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* 不支持就不等 */ } };
 // 上次写临时文件成功、改名失败（杀毒或索引占用）时，最新内容留在 .tmp 里：能完整解析、又比正式文件新，就用它。半截的 .tmp 解析不了，忽略。
@@ -1148,4 +1170,4 @@ class MeetingCompanion {
     const file = path.join(this.dir(id), '会议纪要.md'); fs.writeFileSync(file, text, 'utf8'); return file;
   }
 }
-module.exports = { MeetingCompanion, SPEEDS, INTERVALS };
+module.exports = { MeetingCompanion, SPEEDS, INTERVALS, sameValue };

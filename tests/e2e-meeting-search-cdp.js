@@ -170,7 +170,8 @@ function mcpClient(entry, toolset) {
         const list = await client.rpc('tools/list'); const tool = list.tools.find(t => t.name === 'meeting_search'); assert.ok(tool); assert.equal(tool.annotations.readOnlyHint, true);
         const reply = await client.rpc('tools/call', { name: 'meeting_search', arguments: { query: 'olla 0.4', from: '2026-11-24', to: '2026-11-24', limit: 20 } }); assert.equal(reply.isError, false, JSON.stringify(reply));
         const parsed = JSON.parse(reply.content.find(c => c.type === 'text').text); validateHits(parsed, ids); assert.equal(parsed.total, 3);
-        const same = await search({ query: 'olla 0.4', from: '2026-11-24', to: '2026-11-24', limit: 20 }); assert.deepEqual(parsed.items, same.items, 'MCP桥与IPC共用搜索结果');
+        const same = await search({ query: 'olla 0.4', from: '2026-11-24', to: '2026-11-24', limit: 20 }); assert.deepEqual(parsed.items, same.items.map(({ highlights, ...item }) => item), 'MCP桥与IPC共用搜索结果（给模型的不带高亮下标，2026-11-25）');
+        assert.ok(same.items.every(x => Array.isArray(x.highlights)) && parsed.items.every(x => !('highlights' in x)), '会议页照旧有高亮、模型结果不带');
         assert.match(parsed.note, /meetingId.*seq/); assert.equal(client.record.protocolErrors.length, 0); return { listed: list.tools.map(t => t.name), search: parsed };
       });
     }

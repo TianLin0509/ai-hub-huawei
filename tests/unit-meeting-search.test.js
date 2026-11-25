@@ -112,7 +112,8 @@ test('IPC与只读助理工具共用检索，MCP可见且按原有身份/用途�
   const a = { dir: __dirname, meetings, now: () => 1, changed() {}, state: () => ({ sessionId: 'legacy' }), toolsetFor: id => ({ desk: 'desk', ppt: 'ppt' })[id] };
   const tools = new HubTools(a);
   const result = await tools.invoke({ name: 'meeting_search', arguments: { query: '结论' }, callerSessionId: 'desk' });
-  assert.deepEqual(result.items, r.items); assert.match(result.note, /meetingId.*seq/);
+  assert.deepEqual(result.items, r.items.map(({ highlights, ...item }) => item)); assert.match(result.note, /meetingId.*seq/);
+  assert.ok(r.items[0].highlights.length, '会议页照旧拿到高亮'); assert.ok(result.items.every(x => !('highlights' in x)), '给模型的结果不带高亮位置');
   await assert.rejects(tools.invoke({ name: 'meeting_search', arguments: { query: '结论' }, callerSessionId: 'stranger' }), /只有公司助理/);
   await assert.rejects(tools.invoke({ name: 'meeting_search', arguments: { query: '结论' }, callerSessionId: 'ppt' }), /没有挂/);
   assert.ok(toolsFor('desk').some(t => t.name === 'meeting_search')); assert.ok(toolsFor('phone').some(t => t.name === 'meeting_search'));
@@ -158,6 +159,48 @@ test('投影缓存最多64场，淘汰后仍完整重读，不截掉搜索范围
   for (const m of rows) await searchMeetings(s, { query: '命中', meetingId: m.id });
   assert.equal(reads, 65);
   assert.equal((await searchMeetings(s, { query: '命中', meetingId: rows[0].id })).total, 1); assert.equal(reads, 66);
+});
+test('会议超过64场时整批搜索不互相挤掉：放得下的一直命中，只有放不下的每次重读；单独搜一场照旧换进缓存', async () => {
+  const rows = Array.from({ length: 70 }, () => meeting({ summary: '命中' })); let reads = 0;
+  const s = { ...store(rows), changeMark: () => 'fixed', peek: id => { reads++; return rows.find(m => m.id === id); } };
+  assert.equal((await searchMeetings(s, { query: '命中' })).total, 70); assert.equal(reads, 70);
+  assert.equal((await searchMeetings(s, { query: '命中' })).total, 70); assert.equal(reads, 76, '第二次只重读放不下的 6 场（原来 70 场全部重读）');
+  assert.equal((await searchMeetings(s, { query: '命中' })).total, 70); assert.equal(reads, 82);
+  const last = rows.at(-1); assert.equal((await searchMeetings(s, { query: '命中', meetingId: last.id })).total, 1); assert.equal(reads, 83);
+  assert.equal((await searchMeetings(s, { query: '命中', meetingId: last.id })).total, 1); assert.equal(reads, 83, '单独搜过的那场换进缓存，再搜命中');
+  assert.equal((await searchMeetings(s, { query: '命中' })).total, 70); assert.equal(reads, 89, '单独搜过一场后，整批搜索仍只重读放不下的 6 场（不连锁挤掉）');
+  rows.push(meeting({ summary: '命中' }));
+  assert.equal((await searchMeetings(s, { query: '命中' })).total, 71); assert.equal(reads, 96, '新建一场后整批搜索只多读这一场');
+});
+test('紧贴中文的用户目录路径也脱敏；纪要里当缩写用的 opt、var 和「上行/DL/UL」「王工/李工」照旧保留、照样搜得到', async () => {
+  for (const [input, want] of [['文件在/home/alice/key 里', '文件在〔本地路径〕 里'], ['文件在/home/alice/key里', '文件在〔本地路径〕'], ['见/Users/alice/auth。', '见〔本地路径〕。'], ['在/Users/张三/Desktop/a.txt', '在〔本地路径〕'], ['在/Users/中文名/项目/secret.txt，看一下', '在〔本地路径〕，看一下'], ['代码在/mnt/c/Users/alice/proj', '代码在〔本地路径〕'], ['拷在/Volumes/张三的移动硬盘/资料，会后传', '拷在〔本地路径〕，会后传']]) assert.equal(safeText(input), want, input);
+  const note = '对比最优/opt/基线和贪心、轮询的吞吐/时延，均值/var/std 指标';
+  for (const keep of ['上行/DL/UL', '王工/李工', '方差/var', 'A/B 支持上行/下行调度', note]) assert.equal(safeText(keep), keep, keep);
+  const s = store([meeting({ summary: note })]);
+  for (const query of ['贪心', '吞吐', '基线', 'std']) assert.equal((await searchMeetings(s, { query })).total, 1, query);
+  const leak = store([meeting({ summary: '材料在/Users/中文名/项目/secret.txt，会后看' })]);
+  assert.equal((await searchMeetings(leak, { query: 'secret.txt' })).total, 0, '中文子目录后的文件名也不进索引');
+  assert.equal((await searchMeetings(leak, { query: '会后看' })).total, 1, '路径外的中文照样搜得到');
+});
+test('按日期筛出另外几场反复搜：把这次没选中的冷会议换出去，第二次命中', async () => {
+  const day = d => Date.parse(`2026-11-${d}T09:00:00+08:00`);
+  const rows = [...Array.from({ length: 64 }, () => meeting({ summary: '命中', startedAt: day(10) })), ...Array.from({ length: 2 }, () => meeting({ summary: '命中', startedAt: day(20) }))];
+  let reads = 0; const s = { ...store(rows), changeMark: () => 'fixed', peek: id => { reads++; return rows.find(m => m.id === id); } };
+  assert.equal((await searchMeetings(s, { query: '命中', from: '2026-11-10', to: '2026-11-10' })).total, 64); assert.equal(reads, 64);
+  assert.equal((await searchMeetings(s, { query: '命中', from: '2026-11-20', to: '2026-11-20' })).total, 2); assert.equal(reads, 66);
+  assert.equal((await searchMeetings(s, { query: '命中', from: '2026-11-20', to: '2026-11-20' })).total, 2); assert.equal(reads, 66, '第二次命中，不再重读');
+});
+test('生产接口（listIds 只给编号）按日期反复搜：读过、不在范围里、没改过的会议不再读整场，第二次一场都不读', async () => {
+  const day = d => Date.parse(`2026-11-${d}T09:00:00+08:00`);
+  const rows = [...Array.from({ length: 64 }, () => meeting({ summary: '命中', startedAt: day(10) })), ...Array.from({ length: 2 }, () => meeting({ summary: '命中', startedAt: day(20) }))];
+  let reads = 0; const marks = new Map(rows.map(m => [m.id, 'v1']));
+  const s = { listIds: () => rows.map(m => m.id), changeMark: id => marks.get(id) || '', peek: id => { reads++; return rows.find(m => m.id === id); } };
+  assert.equal((await searchMeetings(s, { query: '命中' })).total, 66); assert.equal(reads, 66);
+  assert.equal((await searchMeetings(s, { query: '命中', from: '2026-11-20', to: '2026-11-20' })).total, 2); assert.equal(reads, 68, '旧会议开始时间已知、跳过；新两场读一次并换进缓存');
+  assert.equal((await searchMeetings(s, { query: '命中', from: '2026-11-20', to: '2026-11-20' })).total, 2); assert.equal(reads, 68, '第二次一场都不读');
+  rows[0].startedAt = day(20); marks.set(rows[0].id, 'v2');
+  assert.equal((await searchMeetings(s, { query: '命中', from: '2026-11-20', to: '2026-11-20' })).total, 3, '改过的会议照旧重读，改到范围里的会被搜到'); assert.equal(reads, 69);
+  assert.equal((await searchMeetings(s, { query: '命中' })).total, 66); assert.equal(reads, 71, '全量搜索：放不下的 2 场重读');
 });
 test('旧纪要混合编号和普通段落时均可检索，不丢未编号补充', async () => {
   const m = meeting({ summary: '## 决定\n- [D1] 采用门限0.4\n补充：张工负责核对32个用户' });

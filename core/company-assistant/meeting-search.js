@@ -16,6 +16,11 @@ function safeText(value) {
     .replace(/(?<![a-z0-9])(?:[a-z]:[\\/]|\\\\)(?:[^\s<>"'，。；！？)）\]]|[ \t]+(?=[^\s<>"'，。；！？)）\]]*[\\/]))*/gi, '〔本地路径〕')
     // Unicode词边界保护“上行/下行”“王工/李工”；Unix只认系统根或明确的多段路径。
     .replace(/(?<![\p{L}\p{N}_.\\/])\/(?:(?:home|Users|tmp|etc|var|usr|opt|root|mnt|Volumes|private|data)(?=\/|\s|[<>"'，。；！？)）\]]|$)(?:\/[^\s<>"'，。；！？)）\]]*)?|[a-zA-Z0-9._-]+\/[^\s<>"'，。；！？)）\]]+)/gu, '〔本地路径〕')
+    // 紧贴中文的用户目录路径（「文件在/home/alice/key」「在/Users/张三/项目/a.txt」）：上一条为保护「上行/DL/UL」不认紧跟文字的斜杠。
+    // 这里只补会带出用户名或盘名的 home、Users、mnt（WSL 的 /mnt/c/Users/…）、Volumes（外接盘名），和上一条一样一直隐到空白或标点
+    // （中文子目录、文件名也隐掉，紧跟的中文字会被一起隐去）。opt（最优）、var（方差）、data 在纪要里常当缩写用，不补，
+    // 免得把「最优/opt/基线和贪心」整段吞掉、索引里搜不到「贪心」（2026-11-25 复审）。
+    .replace(/(?<=[^\x00-\x7f])\/(?:home|Users|mnt|Volumes)\/[^\s<>"'，。；！？、)）\]]+/gu, '〔本地路径〕')
     .replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim();
 }
 function dateBound(value, end = false) {
@@ -125,17 +130,30 @@ class BestRows {
 }
 function cacheFor(store) {
   let cache = caches.get(store);
-  if (!cache) { cache = { rows: new Map(), bytes: 0 }; caches.set(store, cache); }
+  if (!cache) { cache = { rows: new Map(), bytes: 0, when: new Map() }; caches.set(store, cache); }
   return cache;
 }
 function drop(cache, id) {
   const row = cache.rows.get(id);
   if (row) { cache.bytes -= row.bytes; cache.rows.delete(id); }
 }
-async function projection(store, id, cache, pause) {
+// 放进缓存。会议场数（或文字量）超过容量时，原来整批搜索按同样顺序扫一遍，每放进一场就挤掉下一场要用的，每次搜索都全部重读
+// （70 场两次读 140 次）。现在满了只淘汰「这次搜索用不到」的里最久没用的：本次要用的不互相挤，放得下的一直命中、只有放不下的几场
+// 每次重读（70 场第二次只读 6 场）；单独搜的一场、按日期筛出的几场（日期范围外的会议见 searchMeetings 的 outside）照旧把用不到的
+// 冷会议换出去，第二次命中（2026-11-25 复审）。
+function admit(cache, id, entry, keep) {
+  drop(cache, id);
+  while (cache.rows.size >= CACHE_MEETINGS || cache.bytes + entry.bytes > CACHE_BYTES) {
+    let victim; for (const k of cache.rows.keys()) if (!keep.has(k)) { victim = k; break; }
+    if (victim === undefined) return;
+    drop(cache, victim);
+  }
+  cache.rows.set(id, entry); cache.bytes += entry.bytes;
+}
+async function projection(store, id, cache, pause, keep) {
   const mark = typeof store.changeMark === 'function' ? await store.changeMark(id) : '';
   const prior = cache.rows.get(id);
-  if (mark && prior?.mark === mark) { cache.rows.delete(id); cache.rows.set(id, prior); return prior; }
+  if (mark && prior?.mark === mark) { cache.rows.delete(id); cache.rows.set(id, prior); cache.when.set(id, { mark, startedAt: prior.startedAt }); return prior; }
   drop(cache, id);
   const m = await (typeof store.peek === 'function' ? store.peek(id) : store.load(id));
   if (!m || m.id !== id || !Array.isArray(m.events)) throw new Error('会议内容无效');
@@ -151,10 +169,8 @@ async function projection(store, id, cache, pause) {
   }
   // 构建期间保存了会议时，本次结果是读到的快照，下一次必须重读，不把旧片段挂在新版本上。
   const after = typeof store.changeMark === 'function' ? await store.changeMark(id) : '';
-  if (mark && mark === after && entry.bytes <= CACHE_BYTES) {
-    while (cache.rows.size >= CACHE_MEETINGS || cache.bytes + entry.bytes > CACHE_BYTES) drop(cache, cache.rows.keys().next().value);
-    drop(cache, id); cache.rows.set(id, entry); cache.bytes += entry.bytes;
-  }
+  if (mark && mark === after) cache.when.set(id, { mark, startedAt: entry.startedAt });
+  if (mark && mark === after && entry.bytes <= CACHE_BYTES) admit(cache, id, entry, keep);
   return entry;
 }
 async function searchMeetings(store, input = {}, { sliceMs = 4, yieldTurn = nextTurn } = {}) {
@@ -173,6 +189,11 @@ async function searchMeetings(store, input = {}, { sliceMs = 4, yieldTurn = next
     && !store.removing?.has?.(row.id) && (row.startedAt == null || Number(row.startedAt) >= from && Number(row.startedAt) <= to));
   const cache = cacheFor(store), present = new Set((Array.isArray(list) ? list : []).map(r => r?.id));
   for (const id of cache.rows.keys()) if (!present.has(id)) drop(cache, id);
+  for (const id of cache.when.keys()) if (!present.has(id)) cache.when.delete(id);
+  // 生产存储的 listIds 只给编号，开始时间要读过一次才知道。读过、开始时间不在日期范围里、会议也没改过的，不再读整场，
+  // 也不算这次要用的（缓存满了可以把它换出去）；按日期反复搜同一段时间，第二次一场都不用读（2026-11-25 复审）。
+  const outside = id => { const w = cache.when.get(id); return !!w && (w.startedAt < from || w.startedAt > to); };
+  const keep = new Set(selected.filter(r => !outside(r.id)).map(r => r.id));
   let heap, order, until = performance.now() + sliceMs;
   const pause = () => performance.now() >= until ? Promise.resolve(yieldTurn()).then(() => { until = performance.now() + sliceMs; }) : null;
   // 删除可能在setImmediate期间开始；仅在出现新删除ID时重扫，排除集合只增，最多重扫所选场数次。
@@ -182,7 +203,12 @@ async function searchMeetings(store, input = {}, { sliceMs = 4, yieldTurn = next
   for (const row of selected) {
     await yieldTurn();
     if (deleting.has(row.id) || store.removing?.has?.(row.id)) { deleting.add(row.id); drop(cache, row.id); continue; }
-    let entry; try { entry = await projection(store, row.id, cache, pause); } catch { result.skipped++; continue; }
+    if (outside(row.id) && typeof store.changeMark === 'function') {
+      const w = cache.when.get(row.id); let same = false;
+      try { same = w.mark === await store.changeMark(row.id); } catch { same = false; }
+      if (same) continue;
+    }
+    let entry; try { entry = await projection(store, row.id, cache, pause, keep); } catch { result.skipped++; continue; }
     if (store.removing?.has?.(row.id)) { deleting.add(row.id); drop(cache, row.id); continue; }
     const { title, startedAt } = entry;
     if (startedAt < from || startedAt > to) continue;

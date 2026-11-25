@@ -59,10 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "检查更新：内源新版还在准备时不再弹红色报错，改为一行「暂时没有可安装的新版本」；手动检查会立即重新查询内源",
-    "内源无感下载计数升级为同源轻量接口直调（零大文件流量、约 8 秒完成），同步修复下载页点击兜底的加载遮罩与新标签页识别"
+    "会议更省资源：录音时每次保存会议快约 3 倍；会议超过 64 场时搜索不再每次把全部会议重读一遍，按日期搜只读日期范围内的会议；搜索结果里紧贴中文的本机用户目录路径也会隐去，助理拿到的搜索结果更精简"
   ],
-  "version": "5.6.111",
+  "version": "5.6.112",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

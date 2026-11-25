@@ -161,3 +161,50 @@ test('配置目录缓存：继承判定变化后立即换用新目录读模型�
   assert.notEqual(seen[0], seen[1], '判定从不采用变成采用：目录要跟着变');
   assert.equal(path.resolve(seen[1]), path.resolve(inherited));
 });
+test('改动比对：逐项比和整份 JSON 比结论一致，只允许更严（键顺序不同算没变）；日期等对象照旧按 JSON 比', () => {
+  const { sameValue } = require('../core/company-assistant/meeting');
+  const json = (a, b) => a === b || (a !== null && b !== null && typeof a === 'object' && typeof b === 'object' && JSON.stringify(a) === JSON.stringify(b));
+  assert.equal(sameValue({ a: 1, b: [1, { c: 'x' }] }, { b: [1, { c: 'x' }], a: 1 }), true, '键顺序不同、内容一样');
+  assert.equal(sameValue({ a: undefined }, {}), false, 'JSON 看不出的差别算变了');
+  assert.equal(sameValue({ a: 1 }, { a: 1, b: 2 }), false);
+  assert.equal(sameValue([1, 2], [1, 2, 3]), false);
+  assert.equal(sameValue([], {}), false);
+  assert.equal(sameValue({ at: new Date(1) }, { at: new Date(2) }), false, '日期不同');
+  assert.equal(sameValue({ at: new Date(1) }, { at: new Date(1) }), true);
+  // mulberry32：原来的「乘法取低位」写法乘积超过 2^53、低位全是 0，rnd(2)、rnd(4) 几乎只出 0，生成的都是浅层小对象（复审 2026-11-25）。
+  let seed = 11; const rnd = n => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) % n; };
+  const depth = v => v !== null && typeof v === 'object' ? 1 + Math.max(0, ...Object.values(v).map(depth)) : 0;
+  const shapes = new Set(); let deepest = 0;
+  const gen = d => { const k = rnd(d > 3 ? 4 : 7); if (k === 0) return rnd(100); if (k === 1) return '字'.repeat(rnd(5)); if (k === 2) return rnd(2) === 1; if (k === 3) return null;
+    if (k === 4) return Array.from({ length: rnd(4) }, () => gen(d + 1)); const o = {}; for (let i = rnd(4); i > 0; i--) o['k' + rnd(6)] = gen(d + 1); return o; };
+  const mutate = (v, d) => {
+    if (v === null || typeof v !== 'object') return typeof v === 'number' ? v + 1 : typeof v === 'string' ? v + 'x' : typeof v === 'boolean' ? !v : 0;
+    const keys = Array.isArray(v) ? v.map((_, i) => i) : Object.keys(v);
+    if (!keys.length || rnd(5) === 0) { if (Array.isArray(v)) v.push(gen(d)); else v['n' + rnd(9)] = 0; return v; }
+    const k = keys[rnd(keys.length)]; v[k] = mutate(v[k], d + 1); return v;
+  };
+  for (let i = 0; i < 3000; i++) {
+    const a = gen(0), b = structuredClone(a); shapes.add(JSON.stringify(a)); deepest = Math.max(deepest, depth(a));
+    assert.equal(sameValue(a, b), true, '副本：' + JSON.stringify(a));
+    const c = mutate(structuredClone(a), 0);
+    if (json(a, c)) continue; // 加的键恰好已有同值：JSON 也认为没变
+    assert.equal(sameValue(a, c), false, '改动漏判：' + JSON.stringify(a) + ' → ' + JSON.stringify(c));
+  }
+  assert.ok(shapes.size > 500 && deepest >= 4, `随机数据要够多样：${shapes.size} 种、最深 ${deepest} 层`);
+});
+test('Codex 复审反例：旧条目带自有 __proto__ 键、新条目去掉它并补上正文 → 判为改动，页面合并后拿到正文', t => {
+  const { sameValue } = require('../core/company-assistant/meeting');
+  const before = JSON.parse('{"seq":1,"kind":"mark","__proto__":{}}'), after = { seq: 1, kind: 'mark', text: 'new content' };
+  assert.equal(sameValue(before, after), false); assert.equal(sameValue(after, before), false);
+  assert.equal(sameValue(JSON.parse('{"a":1,"__proto__":{}}'), { a: 1 }), false, '只差一个自有 __proto__ 键也算变了');
+  assert.equal(sameValue(JSON.parse('{"__proto__":{"x":1}}'), JSON.parse('{"__proto__":{"x":1}}')), true);
+  assert.equal(sameValue(JSON.parse('{"__proto__":{"x":1}}'), JSON.parse('{"__proto__":{"x":2}}')), false);
+  const m = companion(t), meeting = m.create();
+  m.capture(meeting.id, { kind: 'mark', at: 1000, text: '第一条' });
+  const x = m.load(meeting.id); x.events.push(JSON.parse(`{"seq":${x.events.at(-1).seq + 1},"kind":"mark","at":2000,"__proto__":{}}`)); m.save(x);
+  const p = page(m, meeting.id);
+  const y = m.load(meeting.id); const seq = y.events.at(-1).seq; y.events[y.events.length - 1] = { seq, kind: 'mark', at: 2000, text: 'new content' }; m.save(y);
+  const r = p.pull(); assert.ok(r.wasDelta, '走的是增量');
+  assert.equal(r.meeting.events.at(-1).text, 'new content', '增量里带上了补的正文');
+  assert.deepEqual(r.meeting, full(m, meeting.id));
+});
