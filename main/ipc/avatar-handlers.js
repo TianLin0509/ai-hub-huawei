@@ -14,7 +14,15 @@ function listAvatarBackends({ dataDir, sessionManager, env = process.env }) {
   for (const r of team.rows.filter(row => !row.personal)) rows.push({ id: r.id, label: r.label, usable: r.usable, reason: r.unavailableReason, models: r.models || [], defaultModel: r.defaultModel || '', activeSessions: r.activeSessions || 0, pool: true });
   const gateway = gatewayRow(dataDir);
   if (gateway) rows.push(gateway);
-  return { rows };
+  const codeagentAvailable = !!require('../../core/community-setup').findCommand('codeagent', env);
+  const choice = require('../../core/feature-agent-choice'), routes = require('../../core/codeagent-assistant-route');
+  let models = [];
+  try { models = routes.modelOptions(dataDir, 'personal', require('../../core/codeagent-config').resolveCodeAgentConfig(env).configDir); } catch { /* 未配置模型 */ }
+  const featureChoice = choice.resolve(dataDir, 'avatar', { backends: [
+    { kind: 'codeagent', available: codeagentAvailable, models }, { kind: 'codeagent-lite', available: codeagentAvailable, models },
+    { kind: 'api-gateway', available: !!gateway?.usable, models: (gateway?.models || []).map(id => ({ id })) },
+  ] });
+  return { rows, codeagentAvailable, featureChoice };
 }
 
 // 部门 API key（网关）这一行（R45，11-24 反馈「分身不能配自定义 API / 平台模型，只能用 CodeAgent」）：
@@ -40,8 +48,8 @@ function gatewayRow(dataDir, deps = {}) {
 function registerAvatarIpc(ipcMain, getService, { dialog = null, getWindow = () => null } = {}) {
   const id = r => String(r?.avatarId || ''), item = r => String(r?.itemId || '');
   const handlers = {
-    status: s => s.status(),
-    targets: s => s.targets(),
+    status: (s, r) => s.status({ autoCheck: r?.autoCheck === true }),
+    targets: s => s.targets({ refresh: true }),
     create: (s, r) => s.create(r || {}),
     update: (s, r) => s.update(id(r), r?.patch || {}),
     remove: (s, r) => s.remove(id(r)),
@@ -50,10 +58,11 @@ function registerAvatarIpc(ipcMain, getService, { dialog = null, getWindow = () 
     send: (s, r) => s.send(id(r), item(r), String(r?.text || ''), { ackRisk: r?.ackRisk === true }),
     recall: (s, r) => s.recall(id(r), item(r)),
     drop: (s, r) => s.drop(id(r), item(r)),
-    done: (s, r) => s.done(id(r), item(r)),
+    done: (s, r) => r?.action === 'confirm-answered' ? s.confirmAnswered(id(r), item(r)) : s.done(id(r), item(r)),
     'remind-only': (s, r) => s.remindOnly(id(r), item(r)),
     redraft: (s, r) => s.redraft(id(r), item(r)),
-    relogin: s => s.recheckLogin(),
+    relogin: (s, r) => s.recheckLogin({ retryTick: r?.retryTick === true, avatarId: id(r), itemId: item(r) }),
+    recheck: (s, r) => s.recheckLogin({ retryTick: r?.retryTick === true, avatarId: id(r), itemId: item(r) }),
     session: (s, r) => s.sessionOf(id(r)),
     'pick-source': async (s, r) => {
       const dir = r?.type === 'dir', got = await dialog.showOpenDialog(getWindow(), { title: dir ? '选择资料文件夹' : '选择资料文件', properties: [dir ? 'openDirectory' : 'openFile'] });

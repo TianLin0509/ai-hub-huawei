@@ -828,5 +828,6 @@
   "取消回退": "Cancel rollback",
   "现在不在公司网络，查不了更新。连上公司内网或 VPN 后 Hub 会自动再查，不用操作": "Not on the company network, so updates cannot be checked now. Hub will check again automatically once you connect to the company intranet or VPN; nothing to do.",
   "公司内源响应太慢，{0} 秒内没查完版本信息（内源可能正忙），稍后点旁边的「重试」再查一次": "The company internal mirror is responding slowly and did not finish the version check within {0} s (it may be busy). Click \"Retry\" next to this message to check again later.",
-  "现在不在公司网络（或本机代理没放行公司内网），查不了更新。连上公司内网或 VPN 后 Hub 会自动再查，不用操作": "Not on the company network (or the local proxy is not letting the company intranet through), so updates cannot be checked now. Hub will check again automatically once you connect to the company intranet or VPN; nothing to do."
+  "现在不在公司网络（或本机代理没放行公司内网），查不了更新。连上公司内网或 VPN 后 Hub 会自动再查，不用操作": "Not on the company network (or the local proxy is not letting the company intranet through), so updates cannot be checked now. Hub will check again automatically once you connect to the company intranet or VPN; nothing to do.",
+  "请到「设置 → 自有 API」接部门 API 网关或自己的接口": "Go to \"Settings → Own API\" to connect the department API gateway or your own endpoint"
 }

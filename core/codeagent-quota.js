@@ -322,10 +322,13 @@ function recordCredit(dataDir, key, reading, { floor = 0, retryMs = DEFAULT_RETR
     return { marked: false, cleared: false, entry: state.accounts[key] || null, stale: true };
   }
   const remaining = Number(reading.remaining);
-  state.credit[key] = { remaining, pct: Number(reading.pct), bucket: reading.bucket || '', total: reading.total || null, at: now, observedAt: seenAt, ...(sid ? { session: sid } : {}) };
+  const next = { remaining, pct: Number(reading.pct), bucket: reading.bucket || '', total: reading.total || null, at: now, observedAt: seenAt, ...(sid ? { session: sid } : {}) };
+  // 读数和上次记下的一样（屏幕没变时额度看护每 20 秒交来同一份）：不重写状态文件，避让的标记与解除照常判断
+  const same = !!prevReading && ['remaining', 'pct', 'bucket', 'total', 'observedAt', 'session'].every(k => Object.is(prevReading[k] ?? null, next[k] ?? null));
+  if (!same) state.credit[key] = next;
   const entry = state.accounts[key];
   if (remaining <= Number(floor)) {
-    writeState(dataDir, state, fsModule);
+    if (!same) writeState(dataDir, state, fsModule);
     if (entry && isActive(entry, now) && (entry.source === 'manual' || entry.source === 'credit')) return { marked: false, cleared: false, entry };
     const r = markAvoid(dataDir, key, { source: 'credit', kind: 'quota', reason: `Credit 剩 ${remaining}（${reading.bucket || '当前额度'}），不高于阈值 ${floor}`, retryMs, session }, now, fsModule);
     return { marked: r.changed, cleared: false, entry: r.entry };
@@ -335,7 +338,7 @@ function recordCredit(dataDir, key, reading, { floor = 0, retryMs = DEFAULT_RETR
     const rose = entry.creditAtMark != null && Number.isFinite(Number(entry.creditAtMark)) && remaining > Number(entry.creditAtMark);
     if (rose) { delete state.accounts[key]; cleared = true; }
   }
-  writeState(dataDir, state, fsModule);
+  if (!same || cleared) writeState(dataDir, state, fsModule);
   return { marked: false, cleared, entry: cleared ? null : entry || null };
 }
 

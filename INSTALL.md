@@ -1,10 +1,12 @@
 # 安装、登录与排障
 
+> **⚠️ 下载与更新只在公司内源：** 最新版本仅发布于公司内源平台（OpenX，搜索 **AI Hub**（项目名 AI HUB-Huawei））。GitHub 页面不再推送新版本，仅作历史版本留档（停在 v5.6.107），下面引用的 GitHub 下载地址不能装到最新版。请前往公司内源下载 `AIHubHuawei-Setup-<版本>.exe`（安装版）或 `AIHubHuawei-<版本>-win-x64.zip`（免安装版），之后在应用内一键更新；本文的离线参数仍适用于从内源或同事处拿到的离线包。
+
 ## 最快路线：便携发布版（免 Node / Git）
 
 普通用户和代装 Agent 优先使用 [AGENT-QUICKSTART.md](docs/AGENT-QUICKSTART.md) 的固定版本命令。`scripts/install-release.ps1` 自动下载 Windows x64 ZIP、SHA256 校验、按版本安装并启动，支持重复执行、JSON 回执及离线包。不要为了运行发布版先装整套开发环境。
 
-安装目录默认 `%LOCALAPPDATA%\Programs\AIHubCommunity\v5.6.114`。程序包含 `resources/scripts/install-provider.ps1` 和 `resources/guides`，可离线阅读安装/定制文档。可以手动运行其中的 `AI Hub Community.exe`。卸载便携版仅在关闭对应程序后移除该版本目录；用户数据不自动删除。
+安装目录默认 `%LOCALAPPDATA%\Programs\AIHubCommunity\v5.6.115`。程序包含 `resources/scripts/install-provider.ps1` 和 `resources/guides`，可离线阅读安装/定制文档。可以手动运行其中的 `AI Hub Community.exe`。卸载便携版仅在关闭对应程序后移除该版本目录；用户数据不自动删除。
 
 ## 路线 A：源码安装（人和 agent 均可执行）
 

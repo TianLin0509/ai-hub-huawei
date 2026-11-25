@@ -59,12 +59,12 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "部门 API key / 自有接口：「测试连接」改成按真实对话方式发一句话，测通才等于能聊；对不上时就地一句原因和按钮",
-    "装了 CodeAgent 但没有模型权限、已配部门 key 时，就地提示并一键改用 Claude Code / Codex / DSH",
-    "分身页可以直接选部门 API key 和它的模型（所有分身共用，切回 CodeAgent 账号即撤销）",
-    "一个自有接口可以配多个模型，测试连接后一键全部加入；启动中心每个模型一张卡，网关手填的模型也能选"
+    "屏幕/额度类后台刷新开销降低（读屏缓存、读数不变不写盘）",
+    "CodeAgent 账号没有可用模型（首次签名初始化没完成、模型清单为空）时，说清原因和下一步，按钮直达自有 API / 部门 key 设置",
+    "分身 Beta：首屏误报错自愈、就地扫码登录、底层更稳",
+    "安装说明置顶：下载与更新只在公司内源"
   ],
-  "version": "5.6.114",
+  "version": "5.6.115",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

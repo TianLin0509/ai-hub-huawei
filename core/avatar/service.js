@@ -90,16 +90,20 @@ class AvatarService {
     if (changed) { this.write(owner, 'state.json', st); this.changed(); }
   }
   // 通讯录查职位：每轮最多查 3 个，按后台优先级排队，查到的存 30 天；查不到的 7 天后再试。
-  async lookupTitles(owner, accounts) {
+  async lookupTitles(owner, accounts, { isCurrent = () => true } = {}) {
+    if (!isCurrent()) return false;
     const titles = this.read(owner, 'titles.json', {}), now = this.now();
     const due = t => !t || (now - (t.failAt || 0) > 3600000 && now - (t.at || 0) > (t.title ? 30 : 7) * 86400000);
     const todo = [...new Set([owner, ...accounts])].filter(a => a && !/^\d{6,}$/.test(a) && due(titles[a])).slice(0, 3);
     if (!todo.length) return false;
     const a = this.assistant(), digits = v => String(v || '').replace(/\D/g, '').replace(/^0+/, '');
     for (const account of todo) {
+      if (!isCurrent()) return false;
       let title = '', failed = false;
       try {
-        const r = await a.welink(['search', 'person', '--text', account], { priority: 'background', timeoutMs: 20000 });
+        const r = await a.welink(['search', 'person', '--text', account], { priority: 'background', timeoutMs: 20000,
+          beforeRun: () => { if (!isCurrent()) throw new Error('登录账号已改变，已停止旧查询'); } });
+        if (!isCurrent()) return false;
         const list = [], walk = (v, d) => { if (d > 5 || !v || typeof v !== 'object') return; if (Array.isArray(v)) { for (const x of v) { if (x && typeof x === 'object' && !Array.isArray(x) && (x.chineseName || x.employeeNumber)) list.push(x); else walk(x, d + 1); } return; } for (const x of Object.values(v)) walk(x, d + 1); };
         const data = welink.parseJson(r.stdout), code = data?.code ?? data?.resultCode;
         // 退出码不为 0、业务码报错、或输出里没有人员列表结构：都算查询失败，不当成「没有这个人」。
@@ -112,6 +116,7 @@ class AvatarService {
       // 查询失败：保留之前查到的职位，一小时后再试；成功但没有结果：记空，7 天后再查。
       titles[account] = failed ? { ...(titles[account] || { title: '', at: 0 }), failAt: now } : { title, at: now };
     }
+    if (!isCurrent()) return false;
     this.write(owner, 'titles.json', titles);
     return true;
   }

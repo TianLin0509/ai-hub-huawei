@@ -91,6 +91,14 @@ const KNOWN_ISSUES = [
     action: { label: '等它就绪后重试', act: 'known:proxy-wait' } },
   // 签名探测里 CodeAgent 起来后自己以非 0 退出码结束、没写签名日志（core/company-proxy/upstream-profile.mjs signerInitFailureMessage
   // 「约 N 秒后 CodeAgent 就退出了（退出码 1），未生成签名日志」；反馈 11e4dff3 等 3 人 5 条）：多半是账号本身用不了，
+  // 签名探测里 CodeAgent 说没有可用模型（signerInitFailureMessage CLI_MODEL_REJECTED）、或读模型清单时 serve 给的是空清单
+  // （main/ipc/session-handlers.js 经 codeagent-model-probe describeEmptyModels）：多半是账号没开通内置模型权限，
+  { id: 'codeagent-no-model', areas: ['company-proxy', 'session-create', 'codeagent', 'model-service', 'hub-alert', 'notice'],
+    test: /CodeAgent 认为没有可用的模型|CodeAgent 账号读不到任何可用模型/,
+    title: 'CodeAgent 账号没有可用模型',
+    fix: '这个 CodeAgent 账号现在一个可用模型都没有，最常见的原因是还没开通内置模型权限，重新启动模型通道解决不了。先在命令行打开 CodeAgent 输 /model：能看到模型就选一个正常对话一次，再重新启动模型通道；列表是空的就找本部门负责人申请模型权限。等待期间可以点「打开自有 API」接部门 API 网关或自己的接口，让 Claude Code、Codex、DSH 先用起来。',
+    action: { label: '打开自有 API', act: 'known:open-company-api' },
+    more: [{ label: '重新启动模型通道', act: 'known:proxy-restart' }] },
   { id: 'codeagent-account-unusable', areas: ['company-proxy', 'session-create', 'codeagent', 'model-service', 'hub-alert', 'notice'],
     test: /^(?![\s\S]*(?:后台进程还没确认结束|仍然没有送达))[\s\S]*首次签名初始化没完成[\s\S]{0,400}?CodeAgent 就退出了（退出码 ([1-9]\d*)），未生成签名日志/,
     title: 'CodeAgent 账号现在用不了',

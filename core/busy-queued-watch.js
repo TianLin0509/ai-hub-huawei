@@ -66,7 +66,7 @@ function createBusyQueuedWatch({
     for (const sessionId of transcriptClaims.keys()) {
       if (!items.has(sessionId) && !reported.has(sessionId)) transcriptClaims.delete(sessionId);
     }
-    if (timer && !items.size && !reported.size) { clearInterval(timer); timer = null; }
+    if (timer && !items.size && !reported.size) { clearInterval(timer); timer = null; promptTailCache.clear(); }
   }
   function dropReported(sessionId, id) {
     const list = reported.get(sessionId);
@@ -214,35 +214,89 @@ function createBusyQueuedWatch({
     if (item) dropReported(sessionId, item.clientSubmissionId);
   }
   function reportedPending(sessionId) { return [...(reported.get(sessionId)?.values() || [])].map(item => ({ ...item })); }
-  function dispose() { if (timer) clearInterval(timer); timer = null; items.clear(); reported.clear(); transcriptClaims.clear(); }
+  function dispose() { if (timer) clearInterval(timer); timer = null; items.clear(); reported.clear(); transcriptClaims.clear(); promptTailCache.clear(); }
 
   return { track, resolve, observePrompt, noteSubmitted, tick, pending, reportedPending, dispose };
 }
 
-// transcript / rollout 尾部里，发送时刻之后用户原文出现的次数。只读文件末尾 2 MB。
+// 转写尾部的增量缓存（2026-11-25 开销修复）：以前每 2 秒对每组排队消息同步重读末尾 2 MB 并逐行 JSON.parse（约 15 ms/次），
+// 文件没写新字节也照读。现在按文件记住读到的字节位置和解析好的用户消息行：
+//   - 大小、修改时间都没变：只 stat 一次，直接复用；
+//   - 追加了：只读新增字节、只解析新增的完整行（先核对上次末尾 64 字节，对不上说明被重写，整段重读）；
+//   - 变短、积压超过 2 MB：整段重读末尾 2 MB（和以前一样）。
+// 只留可能是用户消息的行（Claude user / 排队附件，Codex user_message / user 角色消息 / UserMessage），回答和工具输出不进缓存。
+const TAIL_BYTES = 2 * 1024 * 1024;
+const CHECK_BYTES = 64;
+const MAX_CACHED_FILES = 16;
+const promptTailCache = new Map(); // file -> { size, mtimeMs, end, check, entries: [{ off, entry }], tail, results }
+const maybeUserLine = line => line.includes('"user"') || line.includes('user_message') || line.includes('UserMessage') || line.includes('queued_command');
+function parseUserLines(buf, base, skipFirst, into) {
+  let pos = 0;
+  if (skipFirst) { const nl = buf.indexOf(0x0a); if (nl < 0) return { end: base, tail: null }; pos = nl + 1; }
+  for (;;) {
+    const nl = buf.indexOf(0x0a, pos);
+    if (nl < 0) break;
+    const line = buf.toString('utf8', pos, nl);
+    if (line.trim() && maybeUserLine(line)) { try { into.push({ off: base + pos, entry: JSON.parse(line) }); } catch { /* 半行 */ } }
+    pos = nl + 1;
+  }
+  // 末尾没换行的一段：能解析就这一次先用上，但不前进读取位置（可能还在写）
+  let tail = null;
+  if (pos < buf.length) {
+    const line = buf.toString('utf8', pos);
+    if (line.trim() && maybeUserLine(line)) { try { tail = JSON.parse(line); } catch { tail = null; } }
+  }
+  return { end: base + pos, tail };
+}
+function readRange(fs, file, start, length) {
+  const fd = fs.openSync(file, 'r');
+  try { const buf = Buffer.alloc(length); const n = fs.readSync(fd, buf, 0, length, start); return buf.subarray(0, n); }
+  finally { fs.closeSync(fd); }
+}
+function userPromptTail(file, fs) {
+  const stat = fs.statSync(file);
+  const size = stat.size, mtimeMs = Number(stat.mtimeMs) || 0;
+  let c = promptTailCache.get(file);
+  if (c && c.size === size && c.mtimeMs === mtimeMs) { promptTailCache.delete(file); promptTailCache.set(file, c); return c; }
+  let appended = false;
+  if (c && size > c.end && size - c.end <= TAIL_BYTES && c.end >= CHECK_BYTES) {
+    const buf = readRange(fs, file, c.end - CHECK_BYTES, size - c.end + CHECK_BYTES);
+    if (buf.length >= CHECK_BYTES && buf.subarray(0, CHECK_BYTES).equals(c.check)) {
+      const entries = c.entries.filter(x => x.off >= size - TAIL_BYTES);
+      const r = parseUserLines(buf.subarray(CHECK_BYTES), c.end, false, entries);
+      c = { size, mtimeMs, end: r.end, entries, tail: r.tail, results: new Map() };
+      appended = true;
+    }
+  }
+  if (!appended) {
+    const start = Math.max(0, size - TAIL_BYTES);
+    const buf = readRange(fs, file, start, size - start);
+    const entries = [];
+    const r = parseUserLines(buf, start, start > 0, entries);
+    c = { size, mtimeMs, end: r.end, entries, tail: r.tail, results: new Map() };
+  }
+  c.check = c.end >= CHECK_BYTES ? Buffer.from(readRange(fs, file, c.end - CHECK_BYTES, CHECK_BYTES)) : null;
+  promptTailCache.delete(file);
+  promptTailCache.set(file, c);
+  while (promptTailCache.size > MAX_CACHED_FILES) promptTailCache.delete(promptTailCache.keys().next().value);
+  return c;
+}
+function clearPromptTailCache() { promptTailCache.clear(); }
+
+// transcript / rollout 尾部里，发送时刻之后用户原文出现的次数。只看文件末尾 2 MB（增量读，见上）。
 function fileUserPromptCount(file, text, since, { kind = 'claude', fs = require('node:fs') } = {}) {
   const want = squash(text);
   if (!file || !want) return 0;
-  let raw;
-  try {
-    const stat = fs.statSync(file);
-    const size = stat.size, start = Math.max(0, size - 2 * 1024 * 1024);
-    const fd = fs.openSync(file, 'r');
-    try {
-      const buf = Buffer.alloc(size - start);
-      fs.readSync(fd, buf, 0, buf.length, start);
-      raw = buf.toString('utf8');
-    } finally { fs.closeSync(fd); }
-  } catch { return 0; }
+  let cached;
+  try { cached = userPromptTail(file, fs); } catch { return 0; }
+  const memo = kind + '\0' + Number(since || 0) + '\0' + want;
+  if (cached.results.has(memo)) return cached.results.get(memo);
   const floor = Number(since || 0);
   const { withQueuedHumanInputs } = require('./claude-queued-input');
   const textOf = content => typeof content === 'string' ? content
     : Array.isArray(content) ? content.map(block => block?.text || block?.input_text || '').join('\n') : '';
-  const entries = [];
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    try { entries.push(JSON.parse(line)); } catch { /* 尾部可能从半行开始 */ }
-  }
+  const entries = cached.entries.map(x => x.entry);
+  if (cached.tail) entries.push(cached.tail);
   const counts = new Map();
   const codex = /codex/.test(kind);
   for (const entry of codex ? entries : withQueuedHumanInputs(entries)) {
@@ -261,7 +315,12 @@ function fileUserPromptCount(file, text, since, { kind = 'claude', fs = require(
     if (observed) counts.set(source, (counts.get(source) || 0) + squash(observed).split(want).length - 1);
   }
   // Codex 同一次用户输入常有 event_msg 和 response_item 两份落盘，不能相加。
-  return Math.max(0, ...counts.values());
+  const result = Math.max(0, ...counts.values());
+  if (cached.results.size > 64) cached.results.clear();
+  cached.results.set(memo, result);
+  return result;
 }
 
-module.exports = { createBusyQueuedWatch, fileUserPromptCount, textConsumed, SETTLE_MS, LATE_WINDOW_MS };
+function promptTailCacheSize() { return promptTailCache.size; }
+
+module.exports = { createBusyQueuedWatch, fileUserPromptCount, clearPromptTailCache, promptTailCacheSize, textConsumed, SETTLE_MS, LATE_WINDOW_MS };

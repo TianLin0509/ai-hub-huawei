@@ -105,7 +105,7 @@ function itemFrom(conv, picked, list, act, extra = {}) {
   const first = picked[0], last = picked[picked.length - 1];
   const full = picked.map(m => (isText(m) ? clean(m.text) : '［非文字消息］')).filter(Boolean).join('\n');
   return { id: `${conv.id}:${first.key}`, conv: conv.id, convName: conv.name || conv.id, group: !!conv.group, account: conv.group ? last.account : conv.id, who: conv.group ? last.sender : (conv.name || last.sender),
-    firstKey: first.key, lastKey: last.key, since: first.at || 0, at: last.at || 0, count: picked.length, text: full.slice(0, 1200), action: act, atMe: picked.some(m => m.atMe),
+    firstKey: first.key, lastKey: last.key, messageKeys: picked.map(m => m.key), since: first.at || 0, at: last.at || 0, count: picked.length, text: full.slice(0, 1200), action: act, atMe: picked.some(m => m.atMe),
     sensitive: R.sensitiveHit(full), auto: picked.some(m => isOwnOutput(m.text)), hasNonText: picked.some(m => !isText(m)), onlyNonText: picked.every(m => !isText(m) || !clean(m.text)),
     senders: [...new Set(list.slice(-20).filter(m => !m.mine).map(m => m.account))], ...extra };
 }
@@ -133,15 +133,32 @@ function candidates(av, avatars, conv, list, fresh) {
   }
   return out.map(r => itemFrom(conv, r.msgs, list, r.action)).filter(item => !answeredAfter(list, item, av));
 }
-// 这件事之后本人或权威答疑人说过话，就算有人接了。
-// R36：v5.6.102 及以前存下的事项里，编号可能是四舍五入后的写法，按同一条消息认；
-// 认不出（消息已不在手上的这段里）就按时间看之后有没有人接，免得本人回过了旧事项也永不结案。
-function answeredAfter(list, item, av) {
+// 群内只有引用本题的本人/权威回复才自动结案；私聊仍按本人后续回复判断。
+// 保留旧长整数编号的兼容比较，合并题目中的任意一条消息都可作为引用目标。
+function refersToItem(replyTo, item) {
+  if (replyTo == null || replyTo === '') return false;
+  return [item.firstKey, item.lastKey, ...(item.messageKeys || [])].some(key => key != null && key !== '' && sameMsgKey(key, replyTo));
+}
+function messagesAfter(list, item) {
   const from = list.findIndex(m => sameMsgKey(m.key, item.lastKey));
-  const after = from >= 0 ? list.slice(from + 1) : list.filter(m => (m.at || 0) > (item.at || 0));
-  for (const m of after) {
-    if (m.mine) return { by: 'me', at: m.at || 0, text: clean(m.text).slice(0, 300) };
-    if (item.group && has(av.authorities, m.account)) return { by: m.sender, at: m.at || 0, text: clean(m.text).slice(0, 300) };
+  return from >= 0 ? list.slice(from + 1) : list.filter(m => (m.at || 0) > (item.at || 0));
+}
+function answeredAfter(list, item, av = {}) {
+  for (const m of messagesAfter(list, item)) {
+    if (item.group && !refersToItem(m.replyTo, item)) continue;
+    if (m.mine) return { by: 'me', at: m.at || 0, text: safeText(clean(m.text), 300) };
+    if (item.group && has(av.authorities, m.account)) return { by: m.sender || m.account, at: m.at || 0, text: safeText(clean(m.text), 300) };
+  }
+  return null;
+}
+// 没有引用的群发言只给本人判断，不把时间相邻当成已回答的证据。
+function maybeAnswered(list, item, av = {}) {
+  if (!item.group) return null;
+  const rows = messagesAfter(list, item);
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const m = rows[i];
+    if (m.replyTo || !m.mine && !has(av.authorities, m.account)) continue;
+    return { by: m.mine ? 'me' : m.sender || m.account, at: m.at || 0, snippet: safeText(clean(m.text), 300) };
   }
   return null;
 }
@@ -168,14 +185,16 @@ function applyResult(item, r, av) {
     : av.hideModel && SELF_ID.test(reply) ? '草稿提到了底层模型，已拦下'
       : LEAK.test(reply) ? '草稿里出现了路径或密钥样式的内容，已拦下' : '';
   const reply = text(r?.reply, 800).trim(), conf = Math.max(0, Math.min(100, Number(r?.confidence) || 0));
-  const out = { confidence: conf, basis: oneLine(r?.basis, 200), why: oneLine(r?.why, 200), draft: '', flags: (item.flags || []).filter(f => f !== 'commit') };
+  const out = { confidence: conf, basis: oneLine(r?.basis, 200), why: oneLine(r?.why, 200), draft: '', lowConfidenceFallback: false, flags: (item.flags || []).filter(f => f !== 'commit') };
   const remind = why => ({ ...out, state: 'remind', why: why || out.why || '需要你看一下' });
+  const unsupported = () => ({ ...remind('依据不足，转你处理'), lowConfidenceFallback: true, ...(item.asked ? { asked: false } : {}) });
   if (!r) return remind(item.asked ? '你让分身起草，但这次没拿到结果；可以再点一次，或在 WeLink 直接回复' : '这条没有得到结果');
   // 本人点了「让分身起草」：只接受草稿；没写出来就把模型给的理由说清楚，不再悄悄回到原样的提醒或跳过。
   if (item.asked) {
     const bad = r.action === 'draft' ? check(reply) : '';
     const reason = r.action !== 'draft' || bad === EMPTY_DRAFT ? (out.why || '没给原因') : bad;
     if (r.action !== 'draft' || bad) return { ...remind(`你让分身起草，但它没写出可用的草稿：${reason}。可以补充资料后再点一次，或在 WeLink 直接回复`), asked: false };
+    if (conf <= 0 && !out.basis) return unsupported();
     if (R.commitRisk(reply)) out.flags.push('commit');
     return { ...out, state: 'ready', draft: reply, why: out.why || '已按你的要求写好草稿，等你确认', asked: false };
   }
@@ -185,6 +204,7 @@ function applyResult(item, r, av) {
   if (r.action === 'remind' || item.level < 3) return remind();
   const bad = check(reply);
   if (bad) return remind(bad === EMPTY_DRAFT ? (out.why || bad) : bad);
+  if (conf <= 0 && !out.basis) return unsupported();
   if (R.commitRisk(reply)) out.flags.push('commit');
   return { ...out, state: 'ready', draft: reply, why: out.why || '已写好草稿，等你确认' };
 }
@@ -193,29 +213,64 @@ const safeText = (s, n) => (R.sensitiveHit(s) ? '［这条涉及敏感内容，�
 const bigrams = s => { const t = clean(s).replace(/[\s\p{P}]/gu, ''), set = new Set(); for (let i = 0; i + 1 < t.length; i += 1) set.add(t.slice(i, i + 2)); return set; };
 // 按字的二元组从资料行里找最相关的几条；少见的词权重高。
 function related(lines, query, k = 12) {
-  const q = bigrams(query); if (!q.size) return [];
-  const rows = lines.map(line => ({ line, g: bigrams(line) })), df = new Map();
+  const q = bigrams(query); if (!q.size || R.sensitiveHit(query)) return [];
+  const rows = lines.filter(line => !R.sensitiveHit(line)).map(line => safeText(line, 500))
+    .filter(line => line && line !== '［这条涉及敏感内容，已略去］').map(line => ({ line, g: bigrams(line) })), df = new Map();
   for (const { g } of rows) for (const w of g) if (q.has(w)) df.set(w, (df.get(w) || 0) + 1);
   const idf = w => Math.log(1 + rows.length / (1 + (df.get(w) || 0)));
   return rows.map(r => { let s = 0; for (const w of q) if (r.g.has(w)) s += idf(w); return { line: r.line, s: s / (r.g.size ** 0.3 + 1) }; })
     .filter(r => r.s > 0).sort((a, b) => b.s - a.s).slice(0, k).map(r => r.line);
 }
 
-// 从群历史里抽问答对：别人的提问 + 30 分钟内第一条别人的回答。不调用模型。
+// 去掉提问套话后比较主题词面；至少两个主题片段重合且覆盖半数问题主题，才允许旧档案无引用兜底。
+function pairTopic(s) {
+  const parts = clean(s).toLowerCase().replace(/请问|麻烦|应该|如何|怎么|什么|哪里|在哪|为什么|能不能|可不可以|有没有|是否|可以|一下|这个|那个|的问题|处理|操作|谢谢/g, ' ')
+    .match(/[\p{Script=Han}]{2,}|[a-z][a-z0-9_.+-]{2,}/gu) || [];
+  return new Set(parts.flatMap(p => /^[a-z]/.test(p) ? ['#' + p] : [...bigrams(p)]));
+}
+function pairScore(question, answer) {
+  let n = 0; for (const g of question) if (answer.has(g)) n++;
+  return n >= 2 && n * 2 >= question.size ? n + n / question.size : 0;
+}
+// 明确回复引用优先；旧归档未存 replyTo 时只认唯一的强主题关联，不认邻接关系。
 function minePairs(rows, { owner, nameOf = a => a, authorities = [], limit = 400 } = {}) {
   const auth = new Set(authorities.map(x => x.id)), pairs = [], count = new Map();
-  const isQ = r => !r.m && QUESTION.test(r.t || '') && clean(r.t).length >= 6 && !isOwnOutput(r.t);
-  for (let i = 0; i < rows.length; i += 1) {
-    const q = rows[i]; if (!isQ(q)) continue;
-    for (let j = i + 1; j < Math.min(rows.length, i + 12); j += 1) {
-      const a = rows[j];
-      if (a.at - q.at > 1800000) break;
-      if (a.a === q.a || isOwnOutput(a.t) || noise(a.t) || clean(a.t).length < 6) continue;
-      const who = a.m ? owner : a.a;
-      count.set(who, (count.get(who) || 0) + 1);
-      pairs.push({ at: q.at, q: clean(q.t).slice(0, 200), a: clean(a.t).slice(0, 300), asker: nameOf(q.a), by: who, name: a.m ? '本人' : nameOf(a.a) });
-      break;
+  const isQ = r => !r.m && QUESTION.test(r.t || '') && clean(r.t).length >= 6 && !isOwnOutput(r.t) && !R.sensitiveHit(r.t);
+  const questions = rows.filter(isQ).filter(q => q.id != null || q.key != null), byId = new Map(questions.map(q => [String(q.id ?? q.key), q])), legacyIds = new Map(), answered = new Set();
+  // 兼容旧舍入编号时只认唯一候选；准确编号始终优先，避免相邻长整数被归到同一问题。
+  for (const q of questions) {
+    const id = String(q.id ?? q.key); if (!/^\d{16,}$/.test(id)) continue;
+    const alias = String(Number(id)); legacyIds.set(alias, legacyIds.has(alias) ? null : q);
+  }
+  const answers = rows.filter(a => !isOwnOutput(a.t) && !noise(a.t) && clean(a.t).length >= 6 && !R.sensitiveHit(a.t) && !/[?？]|(?:吗|么|呢)[。.!！]?$/.test(clean(a.t)));
+  const hasReply = a => a.replyTo != null && a.replyTo !== '';
+  const eligible = (q, a) => a.a !== q.a && a.at >= q.at && a.at - q.at <= 1800000;
+  const topics = new Map(questions.map(q => [q, pairTopic(q.t)]));
+  const timeline = [...questions].sort((a, b) => a.at - b.at); let from = 0, to = 0;
+  for (const a of [...answers.filter(hasReply), ...answers.filter(a => !hasReply(a)).sort((a, b) => a.at - b.at)]) {
+    const who = a.m ? owner : a.a;
+    if (auth.size && !auth.has(who)) continue;
+    let q;
+    if (hasReply(a)) {
+      const legacy = /^\d{16,}$/.test(String(a.replyTo)) ? legacyIds.get(String(Number(a.replyTo))) : null;
+      q = byId.get(String(a.replyTo)) || (legacy && sameMsgKey(legacy.id ?? legacy.key, a.replyTo) ? legacy : null);
+      if (!q || answered.has(q) || !eligible(q, a)) continue;
+    } else {
+      if (/怎么|如何|为什么|为啥|能不能|可不可以|有没有|是不是|哪里|哪个|什么时候/.test(clean(a.t))) continue;
+      const topic = pairTopic(a.t);
+      // 归档可覆盖 90 天；只比较本条回答之前半小时的题，避免每条都扫描整份历史。
+      while (to < timeline.length && timeline[to].at <= a.at) to++;
+      while (from < to && timeline[from].at < a.at - 1800000) from++;
+      const ranked = timeline.slice(from, to).filter(q => eligible(q, a)).map(q => ({ q, score: pairScore(topics.get(q), topic) }))
+        .filter(r => r.score > 0).sort((x, y) => y.score - x.score);
+      if (!ranked.length || ranked[1]?.score === ranked[0].score) continue;
+      q = ranked[0].q;
+      // 最匹配的题已有明确答案时，不把这条改配给另一道较弱相关的题。
+      if (answered.has(q)) continue;
     }
+    count.set(who, (count.get(who) || 0) + 1);
+    pairs.push({ at: q.at, q: safeText(clean(q.t), 200), a: safeText(clean(a.t), 300), asker: nameOf(q.a), by: who, name: a.m ? '本人' : nameOf(a.a) });
+    answered.add(q);
   }
   const top = [...count.entries()].filter(([, n]) => n >= 3).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([id, n]) => ({ id, n, name: id === owner ? '本人' : nameOf(id) }));
   const trusted = auth.size ? auth : new Set([owner, ...top.map(x => x.id)]);
@@ -240,4 +295,4 @@ function rulesMarkdown(av, { memoryLines = 0, sources: known = [] } = {}) {
     'draft = 写好草稿等本人确认；remind = 需要本人亲自处理或你没把握；skip = 不用处理。allowed 只有 remind 时不要写 draft。', 'ownerAsked 为 true 的事项是本人点名要草稿：必须给 draft；资料不足就写一句稳妥的回复（如说明需要确认后答复），why 里写清缺什么。'].join('\n');
 }
 
-module.exports = { MARK, ACTIONS, LEVEL, KINDS, TEMPLATES, applyPatch, newAvatar, prefixOf, isOwnOutput, matchAvatar, routeMessage, ownerOf, noise, groupWorth, candidates, answeredAfter, gate, parseResults, applyResult, safeText, related, minePairs, rulesMarkdown };
+module.exports = { MARK, ACTIONS, LEVEL, KINDS, TEMPLATES, applyPatch, newAvatar, prefixOf, isOwnOutput, matchAvatar, routeMessage, ownerOf, noise, groupWorth, candidates, answeredAfter, maybeAnswered, gate, parseResults, applyResult, safeText, related, minePairs, rulesMarkdown };

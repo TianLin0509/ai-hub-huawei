@@ -88,6 +88,17 @@ function modelsFromPicker(picker) {
     ...(row.group ? { provider: row.group, providerLabel: row.group } : {}) })).filter(row => row.id) };
 }
 
+// 读模型清单失败时给用户看的一句话（反馈 2026-11-24/25：「serve 返回的模型清单是空的；CodeAgent 输入框没有出现（超时）」
+// 用户看不懂、也不知道下一步）。serve 连上了却一个模型都没有，读屏也没读到时，多半是这个号没开通内置模型权限：
+// 照实说原因和下一步；读屏明确要求重新登录时，登录优先。其他情况沿用原来的拼接。
+const EMPTY_MODELS_HINT = 'CodeAgent 账号读不到任何可用模型（服务返回的模型清单是空的），多半是这个号还没开通内置模型权限：'
+  + '在命令行打开 CodeAgent 输 /model 确认；也是空的就找本部门负责人申请，等待期间可在「设置 → 自有 API」接部门 API 网关先用';
+function describeModelReadFailure(serveError, menuError) {
+  const serve = String(serveError || ''), menu = String(menuError || '');
+  if (serve === require('./codeagent-serve').SERVE_EMPTY_MODELS && !NEEDS_LOGIN.test(menu) && !/重新登录/.test(menu)) return EMPTY_MODELS_HINT;
+  return [serve, menu].filter(Boolean).join('；');
+}
+
 // command/configDirEnv 来自 core/codeagent-config.js；cwd 必须是一个下面没有 .cac 凭证的目录（否则会认成别的号）。
 async function probeModels({ command, configDirEnv, configDir, cwd, dataDir, env = process.env, ptyModule = null,
   accountKey, cliVersion, versionProbe, commandsOnly = false, probeTrace, forceCommands = false, commandsTimeoutMs = COMMANDS_ONLY_TIMEOUT_MS, modelTimeoutMs = MODEL_PROBE_TIMEOUT_MS,
@@ -255,4 +266,4 @@ async function probeModels({ command, configDirEnv, configDir, cwd, dataDir, env
   }
 }
 
-module.exports = { NEEDS_LOGIN, MODELS_FILE, COMMANDS_ONLY_TIMEOUT_MS, MODEL_PROBE_TIMEOUT_MS, probeModels, readProbed, writeProbed, unavailableFromSkipped, modelsFromPicker, cleanModelId };
+module.exports = { describeModelReadFailure, EMPTY_MODELS_HINT, NEEDS_LOGIN, MODELS_FILE, COMMANDS_ONLY_TIMEOUT_MS, MODEL_PROBE_TIMEOUT_MS, probeModels, readProbed, writeProbed, unavailableFromSkipped, modelsFromPicker, cleanModelId };

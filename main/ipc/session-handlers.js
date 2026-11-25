@@ -1201,7 +1201,7 @@ function registerSessionIpc(ipcMain, deps) {
           }
         }
         if (!result) result = await queueCodeAgentProbe(() => (codeagentProbeModels || probe.probeModels)(probeOptions));
-        if (!result.ok) throw new Error([serveError, result.error].filter(Boolean).join('；'));
+        if (!result.ok) throw new Error(probe.describeModelReadFailure(serveError, result.error));
         if (result.source !== 'serve') probe.writeProbed(file, result);
         if (result.menuComplete) require('../../core/codeagent-models').recordMenu(dataDir, result.models, { key: id, complete: true });
         codeagentLastSource.set(id, result.source === 'serve' ? 'serve' : 'menu');

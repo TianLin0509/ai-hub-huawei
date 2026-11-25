@@ -155,7 +155,7 @@ test('模型结果过不了程序校验就转提醒：提到底层模型、带�
   assert.equal(F.applyResult({ ...item, level: 2 }, { action: 'draft', reply: '可以这样做' }, av).state, 'remind');
   assert.equal(F.applyResult(item, { action: 'skip' }, av).state, 'skipped');
   assert.equal(F.applyResult({ ...item, group: false }, { action: 'skip' }, av).state, 'remind');
-  assert.equal(F.applyResult(item, { action: 'draft', reply: '在设置页打开' }, av).state, 'ready');
+  assert.equal(F.applyResult(item, { action: 'draft', reply: '在设置页打开', confidence: 80, basis: '设置说明' }, av).state, 'ready');
   const asked = { ...item, asked: true };
   assert.match(F.applyResult(asked, { action: 'draft', reply: '' , why: '不确定' }, av).why, /没写出可用的草稿：不确定/);
   assert.match(F.applyResult(asked, { action: 'draft', reply: '配置在 C:\\Users\\x\\a.json' }, av).why, /没写出可用的草稿：草稿里出现了路径/);
@@ -285,7 +285,7 @@ test('暂停时点「让分身起草」直接说明原因，事项留在待确�
 
 test('点名起草：模型只给提醒或跳过时，回到待确认并写清没起草的原因', async () => {
   let mode = 'remind';
-  const h = harness({ reply: task => task.items.map(i => mode === 'draft' ? { id: i.id, action: 'draft', reply: '我确认后回复你。', why: '资料不足' } : { id: i.id, action: mode, why: '手册里没有这个问题的答案' }) });
+  const h = harness({ reply: task => task.items.map(i => mode === 'draft' ? { id: i.id, action: 'draft', reply: '我确认后回复你。', why: '资料不足', confidence: 50, basis: '稳妥确认回复' } : { id: i.id, action: mode, why: '手册里没有这个问题的答案' }) });
   try {
     const { av, item } = await readyItem(h);
     assert.equal(item.state, 'remind');
@@ -376,7 +376,7 @@ test('替身迁移：用过替身的人得到一个起草分身，待处理事�
 });
 
 test('问答提取：只留权威答疑人的回答，自动找出常答疑的人', () => {
-  const r = (id, a, t, at, m) => ({ id, a, t, at, ...(m ? { m: 1 } : {}) });
+  const r = (id, a, t, at, m) => ({ id, a, t, at, ...(['2', '4', '6', '8'].includes(id) ? { replyTo: String(Number(id) - 1) } : {}), ...(m ? { m: 1 } : {}) });
   const rows = [r('1', 'x', '导出按钮在哪里？', 1000), r('2', 'li', '在右上角的菜单里', 2000), r('3', 'y', '能不能导出 Word？', 3000), r('4', 'li', '可以，格式里选择 Word', 4000), r('5', 'z', '怎么升级到新版本？', 5000), r('6', 'li', '设置页点检查更新', 6000), r('7', 'x', '登录失败怎么办？', 7000), r('8', 'y', '我也遇到这个问题了', 8000)];
   const out = F.minePairs(rows, { owner: ME, nameOf: a => a });
   assert.equal(out.top[0].id, 'li'); assert.equal(out.pairs.length, 3); assert.ok(out.pairs.every(p => p.by === 'li'));

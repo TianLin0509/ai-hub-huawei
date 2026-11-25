@@ -287,12 +287,14 @@ async function withAccountServe(options, fn, { hostFor = configDir => require('.
   return withTempServe(options, fn);
 }
 
+// serve 连上了、但这个号一个模型都没有（core/codeagent-model-probe.js describeModelReadFailure 据此换成人话）。
+const SERVE_EMPTY_MODELS = 'serve 返回的模型清单是空的';
 async function readAccount(options, deps) {
   return withAccountServe(options, async ({ get }) => {
     const providers = await get('/api/v2/config/providers');
     if (!providers.ok) return { ok: false, error: `读模型清单失败：${providers.error}` };
     const parsed = parseProviders(providers.data);
-    if (!parsed.models.length) return { ok: false, error: 'serve 返回的模型清单是空的', skipped: parsed.skipped };
+    if (!parsed.models.length) return { ok: false, error: SERVE_EMPTY_MODELS, skipped: parsed.skipped };
     const quotas = {};
     for (const model of parsed.models) {
       const quota = await get(`/api/v2/model/${encodeURIComponent(model.id)}/quota`, { retries: 1 });
@@ -382,4 +384,4 @@ function tempServePids() { return [...activeServes.keys()]; }
 // 选模型、启动传参仍跟 serveEnabled 走，不受这里影响。
 function quotaReadEnabled(env = process.env) { return env.AI_HUB_CODEAGENT_SERVE !== '0'; }
 
-module.exports = { tempServeJobKeys: () => [...tempServeJobs.values()], spawnServe, serveEnv, prepareShadowHome, applyShadowHome, stripMcpServers, withAccountServe, tempServePids, SHADOW_DIR_NAME, killServeSync, killTree, serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };
+module.exports = { SERVE_EMPTY_MODELS, tempServeJobKeys: () => [...tempServeJobs.values()], spawnServe, serveEnv, prepareShadowHome, applyShadowHome, stripMcpServers, withAccountServe, tempServePids, SHADOW_DIR_NAME, killServeSync, killTree, serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };

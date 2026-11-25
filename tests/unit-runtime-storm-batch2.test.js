@@ -10,6 +10,8 @@ function fleetCtx(fail) {
   const ctx = {
     t: 1_000_000, hotAt: 0, live: new Map(), readError: '',
     now() { return this.t; }, myName: () => '我', merge() {},
+    owner: () => '我', accountEpoch: 0, current: () => true, stage() {}, readSucceeded() {},
+    recordFailure(e) { this.readError = String(e && e.message || e); },
     messages: () => [], hotIds: FleetService.prototype.hotIds, readOne: FleetService.prototype.readOne,
     assistant: () => ({ welink: async (args) => {
       const id = args[3]; calls.push(id);

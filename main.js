@@ -3021,6 +3021,7 @@ let appUpdateControllerRef = null;
 function companyHubAdmin() { return null; }
 // 公司版「助理」（2026-10-16）：每日简报 + 对话 + 6 条提醒，只读 WeLink，数据只留在本机 Hub 数据目录。
 let companyAssistantService = null, askAsideService = null;
+let avatarService = null;
 // 会议正本合并落盘（core/company-assistant/meeting.js）：正常收尾在 close() 里已刷盘；这里兜底没走完正常收尾的退出，把内存里还没写下的会议同步写盘。
 app.on('will-quit', () => { try { companyAssistantService?.meetings?.flush({ force: true }); } catch (_) { /* 退出时写不了就算了，下次启动按 .tmp/.bak 恢复 */ } });
 const teamAccess = { assert() { throw new Error('该功能未启用'); } };
@@ -3323,7 +3324,7 @@ try {
         return { codeagent: has('codeagent'), claude: has('claude') ? viaConfig(cfg.claudeBackend) : null, codex: has('codex') ? viaConfig(cfg.codexBackend) : null };
       },
       nodeExecutable: process.execPath,
-      onChanged: () => sendToRenderer('company-assistant:changed', {}),
+      onChanged: () => { sendToRenderer('company-assistant:changed', {}); avatarService?.onAuthChanged(); },
       // 手机对话（2026-10-18，core/company-assistant/phone.js 与 hub-tools.js）：助理用这些看会话、推进会话、卡住时替用户按键。
       getAllSessions: () => sessionManager.getAllSessions(),
       listKnownSessions: () => lastPersistedSessions.map(meta => ({ ...meta, id: meta.hubId || meta.id })),
@@ -3332,7 +3333,7 @@ try {
         const entry = sessionManager.sessions?.get?.(id);
         const text = sessionManager.getSessionBuffer(id);
         if (text == null) return null;
-        return { text, cols: Number(entry?.pty?.cols) || 120, rows: Number(entry?.pty?.rows) || 30 };
+        return { text, cols: Number(entry?.pty?.cols) || 120, rows: Number(entry?.pty?.rows) || 30, outputChars: entry?.outputChars };
       },
       sessionKeys: (id, data) => {
         if (!sessionManager.getSession(id)) throw new Error('会话未打开');
@@ -3419,7 +3420,6 @@ if (webSessions) {
 }
 let companyWebAi = null;
 // 分身 Beta（接替「替身」，2026-11-19 起公开版也带）：每个分身一个常驻 CodeAgent 会话，提醒和起草，本人点了才发；数据只在本机。
-let avatarService = null;
 try {
   if (companyAssistantService) {
     const avatarIpc = require('./main/ipc/avatar-handlers');
@@ -3621,7 +3621,9 @@ if (require('./core/distribution').featureEnabled('leadTeam')) try {
 claudeQuotaResume.start();
 claudeAccountSwitch.start();
 // 红线（2026-10-26）：专用出口账号的配置目录每分钟核对一次，被任何程序改回共享代理就立刻改回专线并留痕。
-{
+// 发行版关掉了多账号（features.accounts:false，公司版）时不起这两个定时器（2026-11-25 开销修复）：
+// 那里配不出专用出口账号，核对只是每分钟同步重读全部会话运行目录，出口自查还要每 5 分钟经代理访问外网。
+if (require('./core/distribution').featureEnabled('accounts')) {
   const guardLog = path.join(getHubDataDir(), 'claude-egress-guard.jsonl');
   // 2026-11-20：这份日志原来每 5 分钟每个账号记一行、从不切分（本机实测已 19 MB/13 万行）。
   // 现在出口自查只记状态变化；纠正事件照记；超过 4 MB 改名留一份旧的再重新开始。
@@ -5458,6 +5460,9 @@ async function scanAgentSessions(opts = {}) {
     }
     sendToRenderer('status-event', payload);
   }
+  // 额度条、多账号页都关着（公司版）：只有开着 Codex 会话时才汇总 Codex 用量（首页「5h 配额接近耗尽」提醒要用），
+  // 否则不再每 5 秒读用量缓存文件、扫 Codex 记录（2026-11-25 开销修复）。
+  if (!force && !subscriptionUsageShown() && !allSessions.some(s => (s.kind === 'codex' || s.kind === 'codex-resume') && s.status !== 'dormant')) return {};
   // Expire stale CLI quota entries (no fresh CLI data for >10 min).
   const now = Date.now();
   if (_agentQuota.gemini && _agentQuota.gemini._ts && now - _agentQuota.gemini._ts > 10 * 60 * 1000) {
@@ -5596,10 +5601,20 @@ function refreshKimiUsageIfDue(force = false) {
   return _kimiUsageRefreshInFlight;
 }
 
+// 订阅额度条或多账号页开着时才需要后台刷新各家订阅额度（2026-11-25 开销修复）：公司版两者都关，
+// 以前这些每 5 秒的刷新照样在跑。上下文环、模型名等会话状态（scanAgentSessions 的逐会话部分）不受影响；
+// DeepSeek 余额（首页低余额提醒）和 Token Plan 用量（用完自动改走 DeepSeek API）是功能本身要的，照旧刷新。
+const CLAUDE_QUOTA_HINT_REFRESH_MS = 5 * 60_000;
+let _claudeQuotaHintInterval = null;
+function subscriptionUsageShown() {
+  const distribution = require('./core/distribution');
+  return distribution.featureEnabled('quotaBar') || distribution.featureEnabled('accounts');
+}
 function startAgentScanner() {
   if (_agentScanInterval) return;
+  const usageShown = subscriptionUsageShown();
   const run = () => {
-    if (!process.env.CLAUDE_HUB_HOME_DIR || process.env.AI_HUB_ANTIGRAVITY_COMMAND) {
+    if (usageShown && (!process.env.CLAUDE_HUB_HOME_DIR || process.env.AI_HUB_ANTIGRAVITY_COMMAND)) {
       void refreshAntigravityUsage().catch(error => console.warn('[antigravity-usage]', error.message));
     }
     if (_agentScanInFlight) return _agentScanInFlight;
@@ -5609,21 +5624,31 @@ function startAgentScanner() {
     return _agentScanInFlight;
   };
   void run();
-  void claudeAccountRefresh.tick();
-  void refreshCodexUsageIfDue(true).catch(() => null);
+  if (usageShown) {
+    void claudeAccountRefresh.tick();
+    void refreshCodexUsageIfDue(true).catch(() => null);
+    refreshKimiUsageIfDue(true);
+  }
   refreshDeepSeekBalanceIfDue(true);
-  refreshKimiUsageIfDue(true);
   void refreshTokenPlanUsage().catch(() => {});
   _agentScanInterval = setInterval(() => {
     void run();
-    void claudeAccountRefresh.tick();
-    const codexRefresh = refreshCodexUsageIfDue(false);
-    if (codexRefresh) void codexRefresh.catch(() => null);
+    if (usageShown) {
+      void claudeAccountRefresh.tick();
+      const codexRefresh = refreshCodexUsageIfDue(false);
+      if (codexRefresh) void codexRefresh.catch(() => null);
+      refreshKimiUsageIfDue(false);
+    }
     refreshDeepSeekBalanceIfDue(false);
-    refreshKimiUsageIfDue(false);
     // The service publishes errors in its snapshot and bounds read-only polling.
     void refreshTokenPlanUsage().catch(() => {});
   }, 5000);
+  // 额度条和多账号页都关着（公司版）时，首页「Claude 5h 配额接近耗尽」提醒仍要有数：保留每 5 分钟一次的低频后台刷新，
+  // 加上窗口获焦时的刷新（browser-window-focus）。单次只读一份用量，开销很小，低开销模式下也保留这一档。
+  if (!usageShown && !_claudeQuotaHintInterval) {
+    _claudeQuotaHintInterval = setInterval(() => { void claudeAccountRefresh.tick(); }, CLAUDE_QUOTA_HINT_REFRESH_MS);
+    _claudeQuotaHintInterval.unref?.();
+  }
 }
 
 app.whenReady().then(async () => {

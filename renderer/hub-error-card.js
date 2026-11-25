@@ -467,6 +467,11 @@ async function runKnownAction(act, button, { doc, win, ipcRenderer, closeOverlay
       return done(label, 0);
     }
     if (act === 'known:open-proxy-settings') { await require('electron').shell.openExternal('ms-settings:network-proxy'); return done(label, 0); }
+    // CodeAgent 账号没有可用模型（core/known-issues.js codeagent-no-model）：打开「自有 API」，接部门网关或自己的接口。
+    if (act === 'known:open-company-api') {
+      if (typeof win?.__companyApiOpen !== 'function') return done('请到「设置 → 自有 API」接部门 API 网关或自己的接口', 6000);
+      closeOverlays(); await win.__companyApiOpen('claude'); return done(label, 0);
+    }
     if (act === 'known:open-accounts') { closeOverlays(); doc.getElementById('btn-rail-accounts')?.click(); return done(label, 0); }
     if (act === 'known:welink-login') {
       closeOverlays();

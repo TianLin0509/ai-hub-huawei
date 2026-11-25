@@ -14,6 +14,11 @@ const RULES = [
     action: { label: '重启会话', act: 'known:session-restart' } },
   // 「后台进程还没确认结束」「仍然没有送达」时 Hub 已经停止重试、要求一键反馈（与 core/known-issues.js company-proxy-failed 同一排除），
   // 这里不认，落到兜底的「一键反馈（带日志）」，不诱导再次启动探测（Codex 复审 P2）。
+  { kind: 'codeagent-no-model', test: /CodeAgent 认为没有可用的模型|CodeAgent 账号读不到任何可用模型/,
+    title: 'CodeAgent 账号没有可用模型',
+    cause: '这个 CodeAgent 账号一个可用模型都没有，多半是还没开通内置模型权限。在命令行打开 CodeAgent 输 /model：列表是空的就找本部门负责人申请；等待期间可以在「自有 API」接部门 API 网关或自己的接口先用起来。',
+    steps: [],
+    action: { label: '打开自有 API', act: 'known:open-company-api' } },
   { kind: 'signer-init', test: /^(?![\s\S]*(?:后台进程还没确认结束|仍然没有送达))[\s\S]*(?:首次签名初始化没完成|签名初始化所需的测试输入)/,
     title: '公司模型的签名还没准备好',
     cause: 'Hub 要先在后台启动一次 CodeAgent 取签名信息，这一步没做完，所以公司模型暂时用不了。点「重新启动模型通道」再取一次。',

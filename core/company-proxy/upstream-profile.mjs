@@ -455,9 +455,18 @@ export function signerInitReason(tried, version) {
 /** Plain-words reason and fix when the first-time initialization did not produce a cache. */
 export function signerInitFailureMessage(code, { version, timeoutMs, detail, report } = {}) {
   if (detail === 'CLI_MODEL_REJECTED') {
+    // 反馈 2026-11-24/25（3 人 + 1 条日志）：Hub 指定的模型都被拒、同一台电脑 serve 的模型清单也是空的，
+    // 多半是这个 CodeAgent 账号没开通任何内置模型权限；只说「用 /model 选一个」时，用户打开 /model 看到的也是空的。
+    // 只有重试真的换了模型才说「换了一个模型」（候选只有一个时重试用的是同一个）。
+    const tried = [...new Set([...(Array.isArray(report?.attempts) ? report.attempts.map(a => a?.model) : []), report?.model]
+      .map(m => text(m)).filter(Boolean))];
+    const triedText = tried.length > 1 ? `Hub 探测时先后指定了模型 ${tried.join('、')}，都被拒绝。\n`
+      : `Hub 探测时已指定模型${tried[0] ? ' ' + tried[0] : ''}${report?.retried ? '，又重试了一次' : ''}，仍被拒绝。\n`;
     return '公司模型暂时用不了：首次签名初始化没完成（CodeAgent 认为没有可用的模型，提示用 --model 指定后就退出了，签名日志没有生成）。\n' +
-      `Hub 探测时已指定模型${report?.model ? ' ' + report.model : ''}${report?.retried ? '，并换了一个模型重试' : ''}，仍被拒绝。\n` +
-      '处理办法：在命令行打开 CodeAgent，用 /model 选一个自己能用的模型并正常对话一次，然后到「设置 → 自有 API」点「重新启动模型通道」；还不行点「一键反馈」附带诊断。';
+      triedText +
+      '最常见的原因是这个 CodeAgent 账号还没开通内置模型权限（在 CodeAgent 里输 /model，列表也是空的）。\n' +
+      '处理办法：在命令行打开 CodeAgent 输 /model：能看到模型，就选一个正常对话一次，再到「设置 → 自有 API」点「重新启动模型通道」；' +
+      '列表是空的，就是账号没有模型权限，Hub 代办不了，请找本部门负责人申请。等待期间可以在「设置 → 自有 API」接部门 API 网关或自己的接口，让 Claude Code、Codex、DSH 先用起来。';
   }
   if (detail === 'CLI_INPUT_MISSING') {
     const next = report?.retrySuppressed === 'cleanup-unconfirmed'
