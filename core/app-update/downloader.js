@@ -14,6 +14,20 @@ const IDLE_TIMEOUT_MS = 20000;
 const CONNECT_TIMEOUT_MS = 15000;
 const MANIFEST_TIMEOUT_MS = 10000;
 
+// 内源成功下载后的轻量观察钩子（2026-11-25）：主进程用来异步触发无感内源下载记录，覆盖所有组件包。
+// 严格只在下载完成且 SHA-256 校验通过后触发，任何监听异常一律吞掉，绝不影响下载本身。
+const openxDownloadListeners = new Set();
+function onOpenxDownloadSuccess(fn) {
+  if (typeof fn !== 'function') return () => {};
+  openxDownloadListeners.add(fn);
+  return () => { openxDownloadListeners.delete(fn); };
+}
+function notifyOpenxDownloadSuccess(payload) {
+  for (const fn of openxDownloadListeners) {
+    try { fn(payload); } catch (_) { /* 后台记账钩子出错绝不影响正常下载 */ }
+  }
+}
+
 function fmtBytes(n) {
   if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -281,7 +295,25 @@ async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, 
         connectTimeoutMs: Math.min(connectTimeoutMs, openxSource.REACH_TIMEOUT_MS), redirect: 'error' });
       Object.assign(attempt, { status: 'ok', bytes: r.bytes, ms: r.ms });
       onAttempt && onAttempt(attempts.map(a => ({ ...a })));
-      return { ok: true, source, attempts, openx: { status: 'ok', releaseVersion: hit.releaseVersion, ms: r.ms } };
+      const openxInfo = {
+        status: 'ok',
+        releaseId: hit.releaseId != null ? hit.releaseId : null,
+        releaseVersion: hit.releaseVersion,
+        packageId: hit.packageId != null ? hit.packageId : null,
+        packageTag: hit.packageTag || '',
+        projectName: hit.projectName || '',
+        file: expect.file || '',
+        ms: r.ms,
+      };
+      if (!(openx && openx.skipRecordHook)) {
+        notifyOpenxDownloadSuccess({ ...openxInfo, version: version || '' });
+      }
+      return {
+        ok: true,
+        source,
+        attempts,
+        openx: openxInfo,
+      };
     } catch (error) {
       attempts.pop();
       if (signal && signal.aborted) return { ok: false, cancelled: true, attempts };
@@ -336,4 +368,4 @@ async function downloadFromSources({ sources, version, expect, dest, fetchImpl, 
   return { ok: false, cancelled: !!(signal && signal.aborted), attempts };
 }
 
-module.exports = { friendlySourceName, alreadyComplete, promote, checkManifests, downloadWithFallback, fileUrl, looksLikeWebPage, reasonOf, fmtBytes };
+module.exports = { friendlySourceName, alreadyComplete, promote, checkManifests, downloadWithFallback, fileUrl, looksLikeWebPage, reasonOf, fmtBytes, onOpenxDownloadSuccess, notifyOpenxDownloadSuccess };

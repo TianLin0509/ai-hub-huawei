@@ -38,7 +38,7 @@ const UNKNOWN_BUDGET_MS = REACH_TIMEOUT_MS;
 
 let state = freshState();
 function freshState() {
-  return { unreachableUntil: 0, list: null, listAt: 0, listing: null, details: new Map(), bad: new Set(), lastReason: '' };
+  return { unreachableUntil: 0, list: null, listAt: 0, listing: null, projectName: '', details: new Map(), bad: new Set(), lastReason: '' };
 }
 
 // 2026-11-18 用户定：成员版下载组件也优先走内源（只下载、按 sha256 核对，不上传任何东西）。
@@ -143,7 +143,16 @@ async function find({ file, version, release, strict = false, fetchImpl, signal,
       }
     }
     const hit = packages.find(p => p && String(p.originalFileName || '').toLowerCase() === key && safeUrl(p.url));
-    if (hit) return { url: safeUrl(hit.url), releaseId: rec.id, releaseVersion: String(rec.version || '') };
+    if (hit) {
+      return {
+        url: safeUrl(hit.url),
+        releaseId: rec.id,
+        releaseVersion: String(rec.version || ''),
+        packageId: hit.id != null ? hit.id : null,
+        packageTag: String(hit.tag || ''),
+        projectName: state.projectName || '',
+      };
+    }
     // 分片（r24）：内源单个附件有大小上限（600 MB 的 PPT Doctor 被拒），大文件按 <文件名>.000、.001… 放在同一个版本里。
     const parts = [];
     for (let i = 0; i < 100; i++) {
@@ -152,7 +161,7 @@ async function find({ file, version, release, strict = false, fetchImpl, signal,
       if (!p) break;
       parts.push(safeUrl(p.url));
     }
-    if (parts.length) return { url: parts[0], urls: parts, releaseId: rec.id, releaseVersion: String(rec.version || '') };
+    if (parts.length) return { url: parts[0], urls: parts, releaseId: rec.id, releaseVersion: String(rec.version || ''), projectName: state.projectName || '' };
   }
   return miss('内源上没有这个文件');
 }
@@ -164,6 +173,7 @@ async function loadList({ fetchImpl, api, projectId, timeoutMs, now }) {
     state.listing = (async () => {
       const data = await getJson(fetchImpl, `${api}by_project_id?projectId=${projectId}&currentPage=1&pageSize=${LIST_PAGE_SIZE}`, null, timeoutMs);
       if (!Array.isArray(data.records)) throw new Error('openx 版本列表格式不对');
+      if (typeof data.name === 'string' && data.name.trim()) state.projectName = data.name.trim();
       state.list = data.records.filter(r => r && r.id != null);
       state.listAt = now();
       return state.list;
@@ -411,7 +421,12 @@ async function findLatestFull({ fetchImpl, portable = false, currentVersion = ''
       const file = String((p && p.originalFileName) || '');
       const m = pattern.exec(file);
       const url = m && m[1] === rec.appVersion ? safeUrl(p.url) : '';
-      if (url) return { ok: true, url, file, version: m[1], releaseId: rec.id, releaseVersion: String(rec.version || '') };
+      if (url) {
+        return {
+          ok: true, url, file, version: m[1], releaseId: rec.id, releaseVersion: String(rec.version || ''),
+          packageId: p.id != null ? p.id : null, packageTag: String(p.tag || ''), projectName: state.projectName || '',
+        };
+      }
     }
   }
   return miss(releases.length ? '内源上较新的版本里没找到完整安装包' : '内源上没有比当前更新的版本');
@@ -421,6 +436,21 @@ const releaseName = (kind, version) => `${kind}-${normVersion(version)}`;
 const MEMBER_PREFIX = 'member-';
 const memberReleaseName = version => `${MEMBER_PREFIX}v${normVersion(version)}`;
 const isMemberRelease = name => String(name || '').trim().toLowerCase().startsWith(MEMBER_PREFIX);
+// 内源项目下载页地址：项目名从 by_project_id 返回的 data.name 动态取得，不写死。
+function projectName() { return state.projectName || ''; }
+function downloadPageUrl(name = state.projectName) {
+  const slug = String(name || '').trim();
+  if (!slug || !CONFIG || !CONFIG.fileSite) return '';
+  try { return safeUrl(new URL(`${encodeURIComponent(slug)}/download`, CONFIG.fileSite).href); } catch (_) { return ''; }
+}
+async function resolveDownloadPageUrl({ fetchImpl, api = DEFAULT_API, projectId = PROJECT_ID, timeoutMs = REACH_TIMEOUT_MS, env = process.env, now = Date.now } = {}) {
+  const existing = downloadPageUrl(state.projectName);
+  if (existing) return existing;
+  if (!enabled(env) || !api || !projectId || typeof fetchImpl !== 'function') return '';
+  try { await loadList({ fetchImpl, api, projectId, timeoutMs, now }); } catch (_) { return ''; }
+  return downloadPageUrl(state.projectName);
+}
+
 function _reset() { state = freshState(); }
 
-module.exports = { active, userReason, NETWORK_HINT, findLatestFull, fetchManifest, MANIFEST_BUDGET_MS, diagnostics, clearDown, EDITION_ON, releaseName, memberReleaseName, isMemberRelease, find, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };
+module.exports = { active, userReason, NETWORK_HINT, findLatestFull, fetchManifest, MANIFEST_BUDGET_MS, diagnostics, clearDown, EDITION_ON, releaseName, memberReleaseName, isMemberRelease, find, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, projectName, downloadPageUrl, resolveDownloadPageUrl, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };

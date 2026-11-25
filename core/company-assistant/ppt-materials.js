@@ -110,7 +110,20 @@ async function teamPackFromOpenx(fetch, manifest, opts = {}) {
     if (response.status >= 300 && response.status < 400) throw new Error(`HTTP ${response.status}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const archive = await readBody(response, opts && opts.onProgress, { id: 'openx', name: '公司内源' }, manifest.archive.size);
-    if (sha256(archive) === manifest.archive.hash) return archive;
+    if (sha256(archive) === manifest.archive.hash) {
+      try {
+        require('../app-update/downloader').notifyOpenxDownloadSuccess({
+          releaseId: hit.releaseId != null ? hit.releaseId : null,
+          releaseVersion: hit.releaseVersion || `ppt-materials-${manifest.version}`,
+          packageId: hit.packageId != null ? hit.packageId : null,
+          packageTag: hit.packageTag || '',
+          projectName: hit.projectName || '',
+          file,
+          version: manifest.version || '',
+        });
+      } catch (_) {}
+      return archive;
+    }
   } catch (_) { /* 内源不可用：调用方报原因 */ }
   if (hit) openxSource.markBad(file);
   return null;

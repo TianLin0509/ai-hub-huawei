@@ -5,7 +5,8 @@
 const sourceStatus = require('../core/app-update/source-status');
 
 // 各下载点的 spec 由组件模块自己登记到 core/app-update/download-points.js（编号或以「:」结尾的前缀）。
-function registerDownloadSourceIpc(ipcMain, { fetchImpl, env = process.env } = {}) {
+function registerDownloadSourceIpc(ipcMain, { fetchImpl, env = process.env, openxRecorder = null, getOpenxRecorder = null } = {}) {
+  const resolveRecorder = () => openxRecorder || (typeof getOpenxRecorder === 'function' ? getOpenxRecorder() : null);
   const lookup = point => require('../core/app-update/download-points').lookup(point);
   // r59：进度总线 → 所有窗口（界面按 point 认领自己的进度条）。
   require('../core/app-update/progress-bus').on(progress => {
@@ -54,6 +55,19 @@ function registerDownloadSourceIpc(ipcMain, { fetchImpl, env = process.env } = {
     const hit = await openxSource.find({ file: item.file, version: item.version, release: item.release, strict: !!spec.strict, fetchImpl: fetch, env });
     if (!hit || hit.urls) return { ok: false, reason: hit ? '内源上是分片包，请用一键更新' : openxSource.userReason(openxSource.lastReason(), { file: item.file }) };
     await require('electron').shell.openExternal(hit.url);
+    const recorder = resolveRecorder();
+    if (point === 'app-installer' && recorder && typeof recorder.record === 'function' && recorder.isEnabled?.()) {
+      void recorder.record({
+        version: item.version,
+        releaseId: hit.releaseId != null ? hit.releaseId : null,
+        releaseVersion: hit.releaseVersion || '',
+        packageId: hit.packageId != null ? hit.packageId : null,
+        packageTag: hit.packageTag || '',
+        projectName: hit.projectName || '',
+        file: item.file,
+        kind: 'manual-installer',
+      }).catch(() => {});
+    }
     return { ok: true, via: 'openx', url: hit.url };
   }
   // r60：「复制排错信息」——这个下载点的状态、原因、内源最近一次失败的原因和时间。不含地址与凭据。
@@ -63,6 +77,11 @@ function registerDownloadSourceIpc(ipcMain, { fetchImpl, env = process.env } = {
     let version = '';
     try { version = require('electron').app.getVersion(); } catch (_) {}
     const at = ms => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '');
+    const recorder = resolveRecorder();
+    const recDiag = recorder && typeof recorder.diagnostics === 'function' ? recorder.diagnostics() : null;
+    const recLine = recDiag && recDiag.active
+      ? `内源下载记录：${recDiag.enabled ? '已开启' : '已关闭'} · 成功 ${recDiag.stats.succeeded}/${recDiag.stats.attempted}${recDiag.stats.lastStatus ? ` · 最近 v${recDiag.stats.lastVersion} ${recDiag.stats.lastStatus === 'recorded' ? '已计入' : '未计入'}${recDiag.stats.lastReason ? `（${recDiag.stats.lastReason}）` : ''}` : ''}`
+      : '';
     return [
       `AI Hub ${version} · 下载点 ${point} · ${new Date().toLocaleString('zh-CN', { hour12: false })}`,
       `状态：${s.status} · ${s.text || ''}`,
@@ -70,6 +89,7 @@ function registerDownloadSourceIpc(ipcMain, { fetchImpl, env = process.env } = {
       `公司内源：${o.reachability === 'up' ? '连得上' : o.reachability === 'down' ? '连不上' : '还没探测'}${o.listAgeSec != null ? `（${o.listAgeSec} 秒前读到过版本列表）` : ''}`,
       o.down ? `内源最近一次失败：${o.down.reason}（${at(o.down.at)}）` : '',
       o.lastReason ? `内源最近一次查找：${o.lastReason}` : '',
+      recLine,
     ].filter(Boolean).join('\n');
   }
   ipcMain.handle('download-source:diagnostics', (_event, request = {}) => diagnostics(String(request.point || '')));

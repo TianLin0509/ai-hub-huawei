@@ -19,6 +19,7 @@ const QUIET_OFF_FILE = 'quiet-updates-off.flag';
 // 上一轮升级留下的进度与标记，多久没动过算残留（r43）。
 const STALE_UPGRADE_MS = 10 * 60 * 1000;
 const openxSource = require('../core/app-update/openx-source');
+const { createOpenxDownloadRecorder } = require('./openx-download-recorder');
 
 function resolveFetch(fetchImpl) {
   if (typeof fetchImpl === 'function') return fetchImpl;
@@ -67,7 +68,9 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   // 设置图标挂小点、底栏一行「已就绪，重启生效」，关 Hub 时换上、下次打开生效；更新窗里可关。设 AI_HUB_QUIET_UPDATE=0 整体关掉。
   quietDelivery = env.AI_HUB_QUIET_UPDATE !== '0',
   // 本机是不是免安装版（zip 解压即用，目录里没有卸载程序）：完整安装包会装到另一处，原目录仍是旧版（O②）。测试可注入。
-  portableCopy = null }) {
+  portableCopy = null,
+  // 内源无感下载记录器（2026-11-25）：真正下载并校验通过后在后台同步计入内源社区下载量；测试可注入。
+  openxRecorder = null }) {
   const productName = () => { try { return (config && config.productName) || (isPackaged && app && typeof app.getName === 'function' && app.getName()) || 'AI Hub'; } catch (_) { return 'AI Hub'; } };
   // R29/R35（2026-11-24 用户定）：程序更新只走公司内源，版本清单只从内源读（签名清单，fetchManifest）；
   // 只有测试（纯 Node 单测、AI_HUB_UPDATE_SOURCES 注入本机服务）才用 sources。
@@ -140,6 +143,28 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   if (lastResult) state.lastResult = lastResult;
   state.quietEnabled = quietEnabled();
   state.quietFeature = !!quietDelivery;
+  let fullPackageMeta = null;
+  const applyOpenxRecordChange = info => {
+    if (!info || !info.version) return;
+    const curTarget = manifest && manifest.version ? openxSource.normVersion(manifest.version) : '';
+    if (curTarget && info.version !== curTarget) return;
+    if (state.openxRecord && state.openxRecord.version === info.version && state.openxRecord.status === info.status) return;
+    if (info.status === 'recorded') {
+      emit({ openxRecord: { version: info.version, status: 'recorded', at: info.at || new Date().toISOString() } });
+    } else if (info.status === 'failed' || info.status === 'skipped') {
+      emit({ openxRecord: { version: info.version, status: info.status } });
+    }
+  };
+  const recorder = openxRecorder || createOpenxDownloadRecorder({
+    dataDir,
+    env,
+    fetchImpl: resolveFetch(fetchImpl),
+    logger,
+    onChange: applyOpenxRecordChange,
+  });
+  state.openxRecordFeature = !!recorder.isActive();
+  state.openxRecordEnabled = !!recorder.isEnabled();
+  state.openxRecord = null;
   const isPortable = () => {
     if (typeof portableCopy === 'boolean') return portableCopy;
     // 测试与隔离模拟：AI_HUB_UPDATE_PORTABLE=1/0 指定；用 AI_HUB_UPDATE_RESOURCES 模拟安装目录时默认按安装版。
@@ -164,7 +189,18 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     fullTriedAt = Date.now();
     fullLookup = openxSource.findLatestFull({ fetchImpl: resolveFetch(fetchImpl), portable: isPortable(), currentVersion, env })
       .then(r => {
-        if (r && r.ok) emit({ fullPackage: { url: r.url, file: r.file, version: r.version, releaseId: r.releaseId } });
+        if (r && r.ok) {
+          fullPackageMeta = {
+            version: r.version,
+            file: r.file,
+            releaseId: r.releaseId,
+            releaseVersion: r.releaseVersion || '',
+            packageId: r.packageId != null ? r.packageId : null,
+            packageTag: r.packageTag || '',
+            projectName: r.projectName || '',
+          };
+          emit({ fullPackage: { url: r.url, file: r.file, version: r.version, releaseId: r.releaseId } });
+        }
         else logger.info?.('[app-update] 内源完整安装包未找到：' + (r && r.reason));
       })
       .catch(error => logger.warn?.('[app-update] 查内源完整安装包出错：', error.message))
@@ -347,6 +383,16 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     } catch (error) { logger.warn?.('[app-update] 保存自动更新开关失败：', error.message); }
     return emit({ quietEnabled: quietEnabled(), ...(quietEnabled() ? {} : { quietPending: false }) });
   }
+  function setOpenxRecordEnabled(on) {
+    const enabled = recorder.setEnabled(on !== false);
+    return emit({ openxRecordEnabled: !!enabled });
+  }
+  function recordManualDownload(raw = {}) {
+    const meta = (raw && raw.version ? raw : null) || fullPackageMeta || (state.fullPackage ? { ...state.fullPackage } : null);
+    if (!meta || !meta.version || !recorder.isEnabled()) return Promise.resolve({ status: 'skipped' });
+    return recorder.record({ ...meta, kind: 'manual-full' });
+  }
+  function openxRecordDiagnostics() { return recorder.diagnostics(); }
 
   async function download(_afterRecheck = false) {
     if (!manifest || !plan || plan.kind === 'none') throw new Error('还没有可下载的新版本，请先检查更新');
@@ -360,7 +406,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     let lastEmit = 0;
     // 程序更新包只从公司内源下（R29/R35），文件名、大小、sha256 都按清单核对；测试时按注入的源下。
     const runDownload = () => downloadWithFallback({ sources, version: manifest.version, expect: asset, dest, fetchImpl: resolveFetch(fetchImpl), signal: abort.signal,
-      openx: { ...appOpenxOptions(manifest.version), env },
+      openx: { ...appOpenxOptions(manifest.version), env, skipRecordHook: true },
       onAttempt: attempts => emit({ attempts }),
       onProgress: progress => { const now = Date.now(); if (now - lastEmit > 200 || progress.received === progress.total) { lastEmit = now; emit({ progress }); } } });
     const result = await runDownload();
@@ -405,7 +451,23 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       return emit({ phase: 'error', attempts: result.attempts, error: `更新包解开或校验失败：${error.message}` });
     }
     // 装在 Program Files 这类目录时，重启那一步 Windows 会弹一次管理员确认框：界面提前说一声（2026-10-30）。
-    return emit({ phase: 'ready', attempts: result.attempts, readySource: result.source.name, needsAdmin: !!(staged && staged.needsAdmin) });
+    const openxRecordInit = recorder.isEnabled() ? (recorder.statusFor(manifest.version) || { version: openxSource.normVersion(manifest.version), status: 'pending' }) : null;
+    const readyState = emit({ phase: 'ready', attempts: result.attempts, readySource: result.source.name, needsAdmin: !!(staged && staged.needsAdmin), openxRecord: openxRecordInit });
+    // 双轨无感：大版本、小版本、后台静默更新在下载校验通过后异步同步内源下载量，不阻塞就绪状态。
+    if (recorder.isEnabled()) {
+      const ox = result.openx || {};
+      void Promise.resolve(recorder.record({
+        version: manifest.version,
+        releaseId: ox.releaseId != null ? ox.releaseId : null,
+        releaseVersion: ox.releaseVersion || `v${openxSource.normVersion(manifest.version)}`,
+        packageId: ox.packageId != null ? ox.packageId : null,
+        packageTag: ox.packageTag || '',
+        projectName: ox.projectName || openxSource.projectName() || '',
+        file: ox.file || asset.file,
+        kind: state.quiet ? 'quiet-update' : 'manual-update',
+      })).then(applyOpenxRecordChange).catch(() => {});
+    }
+    return readyState;
   }
 
   function downloadComplete(reason) {
@@ -508,6 +570,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     return emit({ phase: 'idle', internalSource: initialInternalSource(), checks: [], attempts: [], latest: null, plan: null, error: null });
   }
   function startBackgroundChecks() {
+    if (recorder.isEnabled()) void recorder.resumePending();
     if (!sources.length && !only()) return;
     timer = setTimeout(function tick() {
       void check({ silent: true });
@@ -562,8 +625,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       return spec(manifest.version, isPortable() ? portableZipName(manifest.installer.file, manifest.version) : manifest.installer.file);
     });
   }
-  return { check, probeSources, download, cancel, apply, applyCancelled, applyOnQuit, setQuietEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
-    dispose: () => { clearTimeout(timer); clearInterval(applyWatch); if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); } };
+  return { check, probeSources, download, cancel, apply, applyCancelled, applyOnQuit, setQuietEnabled, setOpenxRecordEnabled, recordManualDownload, openxRecordDiagnostics, openxRecorder: recorder, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
+    dispose: () => { clearTimeout(timer); clearInterval(applyWatch); if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); recorder.dispose?.(); } };
 }
 
 // { mode:'auto' } 有在途问题时回 needsConfirm；'wait' 答完再重启；'now' 立即重启（在途的记下、重启后接着做）；'cancel' 取消等待。
@@ -581,6 +644,9 @@ function registerAppUpdateIpc(ipcMain, controller, { gate = null } = {}) {
   });
   ipcMain.handle('app-update:dismiss-result', () => controller.dismissLastResult());
   ipcMain.handle('app-update:set-quiet', (_e, on) => controller.setQuietEnabled(on !== false));
+  ipcMain.handle('app-update:set-openx-record', (_e, on) => controller.setOpenxRecordEnabled(on !== false));
+  ipcMain.handle('app-update:record-manual', (_e, meta) => controller.recordManualDownload(meta));
+  ipcMain.handle('app-update:openx-record-diagnostics', () => controller.openxRecordDiagnostics());
 }
 
 module.exports = { createAppUpdateController, registerAppUpdateIpc, resolveSources, appOpenxOptions, portableZipName };

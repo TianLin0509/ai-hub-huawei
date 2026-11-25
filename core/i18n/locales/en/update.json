@@ -796,5 +796,7 @@
   "内源 · 未生效": "Intranet · Inactive",
   "正在连接…": "Connecting…",
   "公司内源上只有完整基线 v{0}，比本机已装的 v{1} 旧，Hub 不会装回旧版": "The company intranet source only has full baseline v{0}, older than the installed v{1}; Hub will not downgrade",
-  "DSH 运行环境 {0} 没能从公司内源装上（{1}）。Hub 只从内源下载，不改走 npm；可先在终端手动安装：{2}，装好后点「重新检测」": "DSH runtime {0} could not be installed from the company internal source ({1}). Hub downloads only from the internal source and does not fall back to npm; you can install it manually in a terminal: {2}, then click \"Check again\""
+  "DSH 运行环境 {0} 没能从公司内源装上（{1}）。Hub 只从内源下载，不改走 npm；可先在终端手动安装：{2}，装好后点「重新检测」": "DSH runtime {0} could not be installed from the company internal source ({1}). Hub downloads only from the internal source and does not fall back to npm; you can install it manually in a terminal: {2}, then click \"Check again\"",
+  "已为你同步计入内源社区下载记录，感谢支持 AI HUB！": "Synced to the inner-source community download count. Thank you for supporting AI HUB!",
+  "更新下载后自动计入内源社区下载量（后台无感完成，不影响下载速度）": "Count update downloads in the inner-source community automatically (runs silently in the background without slowing downloads)"
 }

@@ -5135,6 +5135,11 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
         onApplyCancelled: reason => { try { Promise.resolve(companyHubAdmin()?.quitCancelled?.(reason)).catch(() => {}); } catch (_) {} } });
       registerAppUpdateIpc(ipcMain, appUpdate, { gate: { apply: opts => { const admin = companyHubAdmin(); return admin && typeof admin.localApply === 'function' ? admin.localApply(opts) : null; } } });
       appUpdateControllerRef = appUpdate;
+      const unsubOpenxDownloadHook = require('./core/app-update/downloader').onOpenxDownloadSuccess(evt => {
+        if (appUpdate.openxRecorder?.isEnabled?.()) {
+          void appUpdate.openxRecorder.record({ ...evt, kind: 'component' }).catch(() => {});
+        }
+      });
       // CLI 一键安装（2026-11-07）：组件目录和一键更新放在同一台自家主机，被放行页拦住时共用同一个放行器。
       try {
         const { createCliInstaller } = require('./core/cli-tools/installer');
@@ -5249,7 +5254,7 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
       app.whenReady().then(() => {
         appUpdate.startBackgroundChecks();
       });
-      app.on('will-quit', () => { try { appUpdate.applyOnQuit(); } catch (error) { console.warn('[app-update] 退出时替换出错：', error && error.message); } appUpdate.dispose(); });
+      app.on('will-quit', () => { try { unsubOpenxDownloadHook?.(); } catch (_) {} try { appUpdate.applyOnQuit(); } catch (error) { console.warn('[app-update] 退出时替换出错：', error && error.message); } appUpdate.dispose(); });
     } catch (e) {
       console.warn('[app-update] 一键更新初始化失败：', e && e.message);
     }
@@ -5273,7 +5278,7 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
 }
 // r58：所有下载点的「下载源：公司内源」标识（download-source:status），各组件在 core/app-update/download-points.js 登记。
 require('./main/download-points-register').registerStaticDownloadPoints({});
-require('./main/download-source-ipc').registerDownloadSourceIpc(ipcMain, {});
+require('./main/download-source-ipc').registerDownloadSourceIpc(ipcMain, { getOpenxRecorder: () => appUpdateControllerRef?.openxRecorder || null });
 require('./main/ipc/capability-handlers').registerCapabilityIpc(ipcMain,
   capabilityService);
 
@@ -5992,7 +5997,7 @@ async function runFinalShutdownCleanup() {
   capture('company-web-ai', () => companyWebAi?.close());
   capture('company-forum', () => { companyForumService?.close(); companyForumBrowser?.close(); });
   capture('company-attendance', () => { companyAttendanceService?.close(); if (companyAttendanceBrowser !== companyForumBrowser) companyAttendanceBrowser?.close(); });
-  capture('company-w3', () => { companyW3Service?.close(); companyW3Browser?.close(); require('./main/company-edge-capture').killAll(); });
+  capture('company-w3', () => { companyW3Service?.close(); companyW3Browser?.close(); require('./main/company-edge-capture').killAll(); require('./main/openx-download-recorder').killAll(); });
   capture('hub-orchestration', () => global.__orchestrationService?.stop());
   capture('hub-team', () => global.__teamService?.stop());
   capture('hub-phone', () => phoneService?.close());

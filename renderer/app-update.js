@@ -191,6 +191,7 @@
       + '</div>';
     let body = versions, foot = '';
     const quietBox = s.quietFeature ? `<label class="au-quiet"><input type="checkbox" data-au="quiet"${s.quietEnabled === false ? '' : ' checked'}> 自动更新：小版本在后台下好；下好的更新在关闭 Hub 时换上，下次打开生效，不打断工作</label>` : '';
+    const openxRecordBox = s.openxRecordFeature ? `<label class="au-quiet"><input type="checkbox" data-au="openx-record"${s.openxRecordEnabled === false ? '' : ' checked'}> 更新下载后自动计入内源社区下载量（后台无感完成，不影响下载速度）</label>` : '';
     if (s.phase === 'checking') {
       body += '<div class="au-msg info">正在向公司内源查询最新版本…</div>';
       foot = '<button class="au-btn" data-au="close">关闭</button>';
@@ -217,6 +218,10 @@
       if (s.applyCancelled) body += `<div class="au-msg warn" data-au-cancelled>${esc(s.applyCancelled.reason)}</div>`;
       body += `<div class="au-msg ok">新版本已从「${esc(s.readySource)}」下载并校验通过。${plan && plan.kind === 'incremental' ? '点「立即重启」后先保存会话、关闭窗口，屏幕中间会出现升级进度小窗（第几步、已等多久），换好后自动打开新版，通常 10–40 秒；期间不用再点图标。替换失败会自动恢复旧版本，可在小窗里一键重试。' : '点「立即安装」会打开安装程序，并关闭当前窗口。'}${plan && plan.kind === 'incremental' && s.needsAdmin ? '<br>程序装在受保护的目录里，重启时 Windows 会弹出确认框，请点「是」授权这一次替换；Hub 本身仍以普通权限运行。' : ''}</div>`;
       if (plan && plan.kind === 'incremental' && !s.needsAdmin && s.quietEnabled !== false) body += '<div class="au-msg info" data-au-onquit>不急的话点「稍后」：关闭 Hub 时会自动换上，下次打开就是新版。</div>';
+      const rec = s.openxRecord;
+      if (rec && rec.status === 'recorded' && (!latest || String(rec.version) === String(latest.version))) {
+        body += '<div class="au-msg ok" data-au-openx-recorded>已为你同步计入内源社区下载记录，感谢支持 AI HUB！</div>';
+      }
       const manualR = s.needsAdmin ? manualDownload() : null;
       foot = `${manualR ? `<button class="au-btn" data-au="manual">${esc(manualR.label)}</button>` : ''}<button class="au-btn" data-au="close">稍后</button><button class="au-btn primary" data-au="apply">${plan && plan.kind === 'incremental' ? '立即重启' : '立即安装'}</button>`;
     } else if (s.phase === 'applying') {
@@ -240,7 +245,7 @@
     if (manualError) body += `<div class="au-msg bad" data-au-manual-error>${esc(manualError)}</div>`;
     dialog.innerHTML = `<div class="au-head"><img src="../claude-wx.ico" alt=""><div class="au-title"><strong>软件更新</strong><span>${esc(subtitle)}</span></div>`
       + '<button class="au-close" data-au="close" aria-label="关闭">×</button></div>'
-      + `<div class="au-body">${body}${quietBox}</div><div class="au-foot">${foot}</div>`;
+      + `<div class="au-body">${body}${quietBox}${openxRecordBox}</div><div class="au-foot">${foot}</div>`;
   }
 
   function openDialog() {
@@ -260,6 +265,7 @@
     if (!action) return;
     try {
       if (action === 'quiet') { await ipcRenderer.invoke('app-update:set-quiet', event.target.checked); return; }
+      if (action === 'openx-record') { await ipcRenderer.invoke('app-update:set-openx-record', event.target.checked); return; }
       if (action === 'notes-more' || action === 'notes-less') { notesOpenFor = action === 'notes-more' ? String(state?.latest?.version || '') : ''; render(); return; }
       if (action !== 'manual') manualError = '';
       if (action === 'close') { confirmInfo = null; dialog?.close(); }
@@ -278,7 +284,13 @@
       }
       else if (action === 'manual') {
         // r58：在浏览器里打开公司内源上的安装包；内源没有或连不上时说明原因。
-        if (manualDownload()) await openManual();
+        const target = manualDownload();
+        if (target) {
+          const opened = await openManual();
+          if (opened && target.direct && state?.fullPackage) {
+            void ipcRenderer.invoke('app-update:record-manual', state.fullPackage).catch(() => {});
+          }
+        }
       }
     } catch (error) {
       state = { ...state, phase: 'error', error: error.message };
