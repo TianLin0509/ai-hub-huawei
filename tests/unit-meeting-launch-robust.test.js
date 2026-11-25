@@ -162,7 +162,7 @@ test('页面就地显示安装入口，旧错误码也显示中文；开录后�
     async open(_source, audio) { audio.mic = false; this.warning = '没找到麦克风，本场只录电脑声音'; this.video = { srcObject: {} }; }
     start() { this.running = true; } displayMs() { return 0; }
   }
-  const code = fs.readFileSync(path.join(__dirname, '../renderer/company-meeting-page.js'), 'utf8').replace('return { open, close:', 'return { message, action, questionCard, configure: (r, s) => { root = r; state = s; }, open, close:');
+  const code = fs.readFileSync(path.join(__dirname, '../renderer/company-meeting-page.js'), 'utf8').replace('return { open, close:', 'return { message, action, questionCard: q => chatCardHtml(q), configure: (r, s) => { root = r; state = s; }, open, close:');
   vm.runInNewContext(code, { module, Buffer, require: name => name === './meeting-capture' ? { MeetingCapture: Capture } : require(name.startsWith('./') ? '../renderer/' + name.slice(2) : name) });
   const window = { addEventListener() {}, HubErrorCard: require('../renderer/hub-error-card') };
   const page = module.exports.createCompanyMeetingPage({ document: {}, window, markdown: s => s, call: async (op, r) => { payloads.push([op, r]); return { meeting: { id: randomUUID() } }; } });

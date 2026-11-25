@@ -1,27 +1,23 @@
 'use strict';
 
-// Capture time includes pauses. Question timestamps use the same wall-clock origin.
+// 时间流只放会议本身：截图、原话、重点。问答 2026-11-24 起移到右栏「助手对话」，不再夹进时间流被新转写推走。
 function flowEntries(meeting) {
   const events = (meeting?.events || []).filter(e => ['slide', 'transcript', 'mark'].includes(e.kind));
   const entries = events.map(event => ({ key: `event-${event.seq}`, kind: event.kind, at: event.at, event }));
-  const pending = (meeting?.answers || []).filter(q => ['queued', 'running'].includes(q.state));
-  const active = pending.find(q => q.id === meeting?.questionJob?.questionId && meeting.questionJob.state !== 'error')
-    || pending.find(q => q.state === 'running');
-  // A retried older card keeps its timestamp, but cannot jump ahead of the claimed request.
-  const queue = active ? [active, ...pending.filter(q => q !== active)] : pending;
-  for (const question of meeting?.answers || []) {
-    const asked = question.queuedAt ?? question.at;
-    const at = Number.isFinite(asked) && Number.isFinite(meeting.startedAt) ? Math.max(0, asked - meeting.startedAt) : null;
-    entries.push({ key: `question-${question.id}`, kind: 'question', at, question,
-      queueAhead: question.state === 'queued' ? queue.indexOf(question) : null,
-      afterMeeting: ['ended', 'interrupted'].includes(meeting.state) && at !== null && at > meeting.capturedMs });
-  }
   return entries.sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity) || (a.event?.seq || 0) - (b.event?.seq || 0));
+}
+
+// 每条的版本号：只拼会影响显示的字段，不整条 JSON 序列化（长会议几千条，每 2.5 秒一轮）。
+function entryVersion(entry) {
+  if (!entry) return '';
+  const e = entry.event || {};
+  return [entry.kind, entry.at, e.seq, e.text, e.speaker, e.track, e.revisit ? 1 : 0, e.forced ? 1 : 0, e.audioSeq].join('\u0001');
 }
 
 // 发言人名字存在会议上、不在事件里，要算进指纹，否则改名后时间流不重画。
 function flowStamp(id, meeting, entries) {
-  return JSON.stringify([id, entries, (meeting?.speakers?.list || []).map(s => [s.id, s.name])]);
+  const speakers = (meeting?.speakers?.list || []).map(s => s.id + ':' + s.name).join(',');
+  return [id, speakers, entries.length, ...entries.map(entryVersion)].join('\u0002');
 }
 
 // Only index topics grounded by an existing event; never invent topics from timestamps.
@@ -50,4 +46,4 @@ function meetingNavigation(meeting) {
   return { kind: 'time', items: anchors.map(e => ({ seq: e.seq, at: e.at, title: e.kind === 'mark' ? e.text || '会议重点' : '共享画面' })) };
 }
 
-module.exports = { flowEntries, flowStamp, meetingNavigation };
+module.exports = { flowEntries, flowStamp, entryVersion, meetingNavigation };

@@ -1,0 +1,44 @@
+{
+  "description": "Normalized protocol shapes from two real subscription runs on synthetic eval meetings; thought bodies omitted.",
+  "sources": [
+    "20261124-real-cli-haiku-baseline",
+    "20261124-real-cli-sonnet-thinking-sample"
+  ],
+  "thinkingEvents": [
+    {
+      "type": "system",
+      "subtype": "thinking_tokens"
+    },
+    {
+      "type": "system",
+      "subtype": "thinking_tokens"
+    },
+    {
+      "type": "system",
+      "subtype": "thinking_tokens"
+    },
+    {
+      "type": "system",
+      "subtype": "thinking_tokens"
+    },
+    {
+      "type": "system",
+      "subtype": "thinking_tokens"
+    }
+  ],
+  "assistantEvents": [
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_011ChMVkuG6rvVoQ1sgthJjT",
+        "content": [
+          {
+            "type": "text",
+            "index": 0,
+            "text": "📌 **最后确定了 6 条结论：调查期间不改参数、统一高负载用例、欧拉步长定 0.4、王磊主讲汇报、调度器改动推迟、先做固定秩四仿真定位；吞吐下降主因没有结论。**\n\n1. **不改参数，只查原因。** 周涛说\"先别改参数，只查原因\"[事件 59]，刘洋确认仿真出来前不改，周涛答\"对\"[事件 80-81]。王磊提的改 PI 权重没有采纳[事件 39-40]。\n2. **高负载对比统一用 32 用户、3 小区**[事件 74]。\n3. **欧拉步长定为 0.4。** 前面先定过回退到 0.5[事件 92]，后来李娜认为 0.5 会来回摆[事件 132]，周涛明确\"改成零点四，推翻前面的零点五\"[事件 134]，并再次确认[事件 139]。刘洋的回归改用 0.4，下周二前完成[事件 135-136]。\n4. **先做固定秩四对比仿真。** 张伟负责，周三前出结论[事件 67-68]，仿真先不管欧拉步长[事件 103]。\n5. **下周一部门汇报由王磊主讲**，初稿周五前发群里[事件 109-111]，各人材料周五前给他[事件 112-115]。\n6. **调度器新改动推迟到下个迭代**，这个迭代聚焦问题定位[事件 118、121]。\n\n**没有结论的两件事：**\n- 吞吐下降主因是调度还是链路自适应，要等固定秩四仿真结果再判断[事件 140-142]。\n- 实网数据能否拿到，周涛要问运维，但还没定谁问[事件 146]，先挂起[事件 150]。\n\n**白话解读：** 这场会定了\"怎么查\"和\"各自交什么\"，没有查出原因。步长以 0.4 为准，前面的 0.5 已作废。以上只依据已有的会议内容，没有调用工具。"
+          }
+        ]
+      }
+    }
+  ]
+}

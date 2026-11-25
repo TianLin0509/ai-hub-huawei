@@ -10,12 +10,30 @@ function similar(a, b) {
   return clean(a).length >= 4 && clean(a) === clean(b);
 }
 // names：发言人编号 → 名字（core/company-assistant/meeting-speakers.js）；分出了发言人就写名字，否则写音轨。
+// 双音轨去重：找「最后一条」时间相差 2.5 秒内、另一音轨、内容相同的转写。原来每条都把已有行整份复制再倒序找（两小时 6000 条约 250 ms），
+// 现在按 2.5 秒分桶，只看前后相邻三个桶、桶内倒序（同一输入结果与原实现逐条一致，见 tests/unit-meeting-storage-memory.test.js）。
+const WINDOW_MS = 2500;
 function compactEvents(events, names = {}) {
-  const rows = [];
-  for (const e of events.filter(e => ['transcript', 'mark', 'slide'].includes(e.kind))) {
-    const duplicate = e.kind === 'transcript' && [...rows].reverse().find(r => r.event.kind === 'transcript' && r.event.track !== e.track && Math.abs(r.event.at - e.at) <= 2500 && Math.min(r.event.end ?? r.event.at + 1000, e.end ?? e.at + 1000) >= Math.max(r.event.at, e.at) && similar(normalize(r.event.text), normalize(e.text)));
+  const rows = [], buckets = new Map();
+  for (const e of events) {
+    if (e.kind !== 'transcript' && e.kind !== 'mark' && e.kind !== 'slide') continue;
+    let duplicate = null;
+    if (e.kind === 'transcript' && Number.isFinite(e.at)) {
+      const k = Math.floor(e.at / WINDOW_MS), text = normalize(e.text);
+      for (let b = k - 1; b <= k + 1; b++) {
+        const list = buckets.get(b); if (!list) continue;
+        for (let i = list.length - 1; i >= 0; i--) {
+          const r = list[i]; if (duplicate && r.index < duplicate.index) break;
+          if (r.event.track !== e.track && Math.abs(r.event.at - e.at) <= WINDOW_MS && Math.min(r.event.end ?? r.event.at + 1000, e.end ?? e.at + 1000) >= Math.max(r.event.at, e.at) && similar(r.norm ??= normalize(r.event.text), text)) {
+            if (!duplicate || r.index > duplicate.index) duplicate = r;
+            break;
+          }
+        }
+      }
+    }
     if (duplicate) { duplicate.refs.push(e.seq); continue; }
-    rows.push({ event: e, refs: [e.seq] });
+    const row = { event: e, refs: [e.seq], index: rows.length }; rows.push(row);
+    if (e.kind === 'transcript' && Number.isFinite(e.at)) { const k = Math.floor(e.at / WINDOW_MS); if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(row); }
   }
   return rows.map(({ event: e, refs }) => `[${refs.join(',')}] ${time(e.at)} ${e.kind === 'slide' ? '截图' : e.kind === 'mark' ? '重点' : names[e.speaker] || (e.track === 'mic' ? '麦克风' : '系统声音')} ${String(e.kind === 'slide' ? e.file : e.text).replace(/[\r\n]+/g, ' ')}`).join('\n');
 }

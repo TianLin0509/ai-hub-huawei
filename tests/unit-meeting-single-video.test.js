@@ -6,14 +6,14 @@ const { MeetingCompanion } = require('../core/company-assistant/meeting');
 const { MeetingRecorder } = require('../renderer/meeting-recorder');
 const { MeetingTools } = require('../core/company-assistant/meeting-tools');
 
-const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(12)]);
+const mp4 = require('./helpers/meeting-media-fixtures').mp4Fixture();
 const webm = Buffer.from('1a45dfa3801853806701ffffffffffffff1549a966872ad7b1830f42401f43b67584a3820102', 'hex');
 const MP4 = 'video/mp4;codecs=avc1.42E01F,mp4a.40.2';
 
 function setup(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'meeting-single-'));
   const m = new MeetingCompanion({ dir: root, workspace: root, changed() {}, sessionBusy: () => false, lastFinal: () => null }, { meetingAsr: { status: () => ({ ready: false }), close() {} } });
-  t.after(() => { m.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(async () => { await Promise.all(m.recording.repairs.values()); m.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const meeting = m.create({ title: '周会 / 方案:评审' }); clearInterval(m.timer); m.timer = 1;
   return { m, id: meeting.id };
 }
@@ -23,7 +23,7 @@ function record(m, id, mime, bytes) {
   m.capture(id, { kind: 'recording-chunk', key, at: 1000, durationMs: 1000, offset: 0, data: bytes.toString('base64') });
 }
 
-test('MP4 存成一个 recording-full.mp4，不走 WebM 时长修复', async t => {
+test('MP4 存成一个 recording-full.mp4，并补齐时长与随机访问索引', async t => {
   const { m, id } = setup(t);
   record(m, id, MP4, mp4);
   m.capture(id, { kind: 'recording-finish', key, at: 9000, durationMs: 9000 });
@@ -31,7 +31,8 @@ test('MP4 存成一个 recording-full.mp4，不走 WebM 时长修复', async t =
   const rec = m.load(id).recording;
   assert.equal(rec.full.file, 'recording-full.mp4'); assert.equal(rec.full.status, 'ready');
   assert.equal(rec.segments.length, 0); assert.ok(!rec.full.durationError);
-  assert.ok(fs.readFileSync(m.recording.full(id).file).equals(mp4));
+  assert.equal(rec.full.seekIndexVersion, 1); assert.equal(rec.full.durationFixed, true);
+  assert.ok(!fs.readFileSync(m.recording.full(id).file).equals(mp4));
   assert.deepEqual(fs.readdirSync(m.dir(id)).filter(f => f.startsWith('recording')), ['recording-full.mp4']);
 });
 
@@ -40,11 +41,12 @@ test('MP4 文件头不对时拒收', (t) => {
   assert.throws(() => record(m, id, MP4, webm), /文件头/);
 });
 
-test('暂停后会议时间和视频时间按缺口换算', (t) => {
+test('暂停后会议时间和视频时间按缺口换算', async (t) => {
   const { m, id } = setup(t);
   record(m, id, MP4, mp4);
   m.capture(id, { kind: 'recording-gap', at: 5000, end: 9000, reason: '暂停' });
   m.capture(id, { kind: 'recording-finish', key, at: 14000, durationMs: 10000 });
+  await m.recording.repairs.get(id);
   assert.equal(m.recording.locate(id, 3000).offsetMs, 3000);
   const after = m.recording.locate(id, 12000);
   assert.equal(after.offsetMs, 8000, '会议第 12 秒是视频第 8 秒');
@@ -53,7 +55,7 @@ test('暂停后会议时间和视频时间按缺口换算', (t) => {
   assert.throws(() => m.recording.locate(id, 7000), /缺口/);
 });
 
-test('异常退出的 MP4 也能回放，且不尝试修时长', async t => {
+test('异常退出但有完整片段的 MP4 也能补齐索引后回放', async t => {
   const { m, id } = setup(t);
   record(m, id, MP4, mp4);
   const cur = m.load(id); m.recording.recover(cur); m.save(cur); await m.recording.repairs.get(id);
@@ -150,8 +152,10 @@ test('删录像只删视频，纪要和截图保留，再删提示没有录像',
   assert.throws(() => m.recording.deleteVideo(id), /还在保存|没结束/);
   m.capture(id, { kind: 'recording-finish', key, at: 9000, durationMs: 9000 });
   const cur = m.load(id); cur.state = 'ended'; cur.summary = '纪要正文'; m.save(cur);
-  assert.equal(m.list().find(x => x.id === id).videoBytes, mp4.length);
-  assert.equal(m.recording.deleteVideo(id).freed, mp4.length);
+  assert.throws(() => m.recording.deleteVideo(id), /正在补索引|还在保存/); await m.recording.repairs.get(id);
+  const indexedBytes = m.load(id).recording.bytes;
+  assert.equal(m.list().find(x => x.id === id).videoBytes, indexedBytes);
+  assert.equal(m.recording.deleteVideo(id).freed, indexedBytes);
   const left = m.load(id);
   assert.equal(left.recording.full, null); assert.equal(left.recording.bytes, 0); assert.equal(left.summary, '纪要正文');
   assert.ok(left.events.some(e => e.kind === 'slide'));

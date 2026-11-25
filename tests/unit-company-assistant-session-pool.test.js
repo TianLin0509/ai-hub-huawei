@@ -8,12 +8,12 @@ const os = require('node:os');
 const path = require('node:path');
 const D = require('../core/company-assistant/data');
 const B = require('../core/company-assistant/brief');
-const { CompanyAssistant, DESK_RULES, PHONE_RULES, PPT_RULES, PREWARM_TTL_MS } = require('../core/company-assistant/service');
+const { CompanyAssistant, DESK_RULES, MEETING_SEARCH_RULE, PHONE_RULES, PPT_RULES, PREWARM_TTL_MS, TOOLS_VERSION } = require('../core/company-assistant/service');
 const { HubTools } = require('../core/company-assistant/hub-tools');
 const { TOOLSETS, toolsFor, allTools } = require('../core/company-assistant/mcp');
 const AC = require('../core/company-assistant/answer-context');
 // 5.5.14 起默认按「作答手册 + Hub 备好的材料」提问：固定规则换成新版。
-const GUIDED_RULES = AC.ASK_RULES.replace('{{TOOLS}}', AC.WELINK_TOOLS);
+const GUIDED_RULES = AC.ASK_RULES.replace('{{TOOLS}}', AC.WELINK_TOOLS) + '\n' + MEETING_SEARCH_RULE;
 
 const NOW = Date.parse('2026-11-05T15:20:00+08:00');
 const DAY = '2026-11-05';
@@ -336,6 +336,67 @@ test('CLI 提交仍在等待时，90 秒轮询不得回收或重发；提交成�
   assert.equal(f.a.chat().find(c => c.id === item.id).answeringAt, NOW + 91000);
   f.answer(id, '今天没有会议'); await f.a.collectJob('chat');
   assert.equal(f.a.chat().find(c => c.id === item.id).state, 'done');
+});
+
+test('默认guided与classic的电脑/手机实际提问都带会议搜索规则，且只附一次', t => {
+  const f = fixture(t, { prewarm: false });
+  assert.equal(f.a.guided(), true, '全新助理默认guided');
+  assert.match(MEETING_SEARCH_RULE, /以前哪次会议说过什么、谁说过什么时先用 meeting_search/);
+  for (const style of ['guided', 'classic']) {
+    f.a.setSettings({ answerStyle: style });
+    for (const toolset of ['desk', 'phone']) {
+      const prompt = f.a.composePrompt({ prompt: '以前哪次会议说过分档门限？' }, toolset);
+      assert.equal(prompt.split(MEETING_SEARCH_RULE).length - 1, 1, `${style}/${toolset}只附一份共享规则`);
+      assert.match(prompt, /meetingId 与 seq 或 itemId/);
+      assert.ok(prompt.startsWith(style === 'guided' ? GUIDED_RULES : DESK_RULES));
+    }
+  }
+});
+
+test('工具v6或无版本的旧预开会话退役，新会话挂meeting_search，当前版本继续预热复用', async t => {
+  assert.equal(TOOLS_VERSION, 7, '新增会议检索工具升级为v7');
+  for (const legacyVersion of [6, undefined]) {
+    const f = fixture(t);
+    f.a.tools = new HubTools(f.a, {});
+    const launchTools = new Map(), create = f.a.deps.createSession;
+    f.a.deps.createSession = async (kind, opts) => {
+      // 在实际建会话的挂载时机检查：openPooled必须先登记工具用途。
+      const plan = f.a.sessionPlan({ opts });
+      launchTools.set(opts.id, toolsFor(plan.mcp.env.HUB_COMPANY_TOOLSET).map(tool => tool.name));
+      return create(kind, opts);
+    };
+    f.a.prewarm('desk'); await f.settle();
+    const old = f.a.warm.desk;
+    if (legacyVersion === undefined) delete f.a.pool.get(old).toolsVersion;
+    else f.a.pool.get(old).toolsVersion = legacyVersion;
+    const next = await f.a.takeSession('desk'); await f.settle();
+    assert.notEqual(next, old);
+    assert.ok(f.closed.includes(old), `旧版本${legacyVersion}会话已关闭`);
+    assert.equal(f.a.pool.has(old), false);
+    assert.equal(f.a.pool.get(next).toolsVersion, TOOLS_VERSION);
+    assert.ok(launchTools.get(next).includes('meeting_search'), '新会话启动时可见会议搜索工具');
+    f.a.keepWarm('desk', next);
+    assert.equal(await f.a.takeSession('desk'), next, '同版本预热会话正常复用');
+    assert.equal(launchTools.size, 2, '复用不额外建会话');
+    assert.equal(f.closed.includes(next), false);
+  }
+});
+
+test('工具升级不关闭正在回答或已被问题占用的旧会话，空闲后才换新', async t => {
+  for (const ownership of ['running', 'job']) {
+    const f = fixture(t); f.a.prewarm('desk'); await f.settle();
+    const old = f.a.warm.desk; f.a.pool.get(old).toolsVersion = 6;
+    if (ownership === 'running') f.sessions.get(old).status = 'running';
+    else f.a.lanes.chat.job = { sessionId: old };
+    const next = await f.a.takeSession('desk'); await f.settle();
+    assert.notEqual(next, old);
+    assert.equal(f.closed.includes(old), false, '升级不得打断旧会话');
+    assert.equal(f.a.warm.desk, old);
+    assert.equal(f.a.pool.has(old), true);
+    f.sessions.get(old).status = 'idle'; f.a.lanes.chat.job = null;
+    assert.notEqual(await f.a.takeSession('desk'), old); await f.settle();
+    assert.ok(f.closed.includes(old), '归还且空闲后旧版本退役');
+  }
 });
 
 test('预热会话已确认退出时，新问题用新会话', async t => {

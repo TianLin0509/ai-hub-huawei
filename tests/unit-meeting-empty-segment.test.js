@@ -28,11 +28,12 @@ test('0 字节分段结束不抛错，标记 empty 并记缺口', () => {
   assert.ok(rec.gaps.some(g => /没有录到内容/.test(g.reason)));
 });
 
-test('完整录像 0 字节也允许结束', () => {
+test('完整录像 0 字节在排空写入后也允许结束', async () => {
   const { m, id } = setup();
   const key = randomUUID();
   m.capture(id, { kind: 'recording-start', key, full: true, at: 0, mime: 'video/webm', width: 100, height: 60 });
   m.capture(id, { kind: 'recording-finish', key, at: 300 });
+  await m.recording.repairs.get(id);
   const rec = m.load(id).recording;
   assert.equal(rec.full.status, 'empty');
   assert.ok(rec.gaps.some(g => /完整录像没有录到内容/.test(g.reason)));

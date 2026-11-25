@@ -1,0 +1,53 @@
+'use strict';
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+const { isSafeModelId } = require('../../core/model-id');
+const harness = value => value === 'codeagent-lite' ? 'codeagent' : value === 'api-gateway' ? 'claude' : value;
+function freshTarget({ session = {}, entry, selection = '', model = '', cwd = '', resolveConfig, accountDir,
+  findCommand = () => '', hubDataDir, baseEnv = process.env, resolveClaudeProfile, gatewayRoute = false, inheritModel = true,
+  applyGatewayEnv = (env, options) => require('../../core/company-model-proxy').applyClaudeEnv(env, options) } = {}) {
+  const sourceKind = String(session.kind || '').replace(/-resume$/, '');
+  const [wanted, selectedModel] = String(selection || sourceKind || 'codeagent').split('|');
+  const engine = harness(wanted), gateway = engine === 'claude' && (gatewayRoute || wanted === 'api-gateway' || session.apiGatewayRoute);
+  if (!['codeagent', 'claude', 'codex'].includes(engine)) throw Object.assign(Error('所选会议问答引擎不可用'), { errorKind: 'engine-not-ready' });
+  const same = harness(sourceKind) === engine;
+  let env = same && entry?.askAsideEnv ? { ...entry.askAsideEnv } : { ...baseEnv };
+  if (same && !entry?.askAsideEnv) Object.assign(env, session.claudeNetworkEnv || session.claudeSharedNetworkEnv || {});
+  let pickedModel = [selectedModel, model, same && inheritModel ? session.currentModel?.id : ''].find(isSafeModelId) || '';
+  const work = cwd || session.cwd;
+  if (!work || !fs.existsSync(work)) throw Object.assign(Error('会议问答工作目录不存在'), { errorKind: 'spawn-failed' });
+  if (engine === 'codeagent') {
+    let config = resolveConfig();
+    if (same && session.codeagentPoolAccount) config = { ...config, configDir: accountDir(session.codeagentPoolAccount) };
+    if (!config.configDir || !fs.existsSync(config.configDir)) throw Object.assign(Error('原会议账号目录已不可用'), { errorKind: 'spawn-failed' });
+    const knownModel = pickedModel;
+    return { supported: true, engine, config, cwd: work, env, model: isSafeModelId(knownModel) ? knownModel : '', mode: 'fresh' };
+  }
+  if (engine === 'codex') {
+    return { supported: true, engine, env, cwd: work, model: pickedModel, mode: 'fresh',
+      session: { ...(same ? session : {}), cwd: work, currentModel: { id: pickedModel } } };
+  }
+  let configDir = gateway ? path.join(hubDataDir, 'meeting-question-claude') : same ? entry?.askAsideEnv?.CLAUDE_CONFIG_DIR || session.claudeConfigDir || session.claudeRuntimeHome : '';
+  if (gateway) {
+    fs.mkdirSync(configDir, { recursive: true }); env = { ...baseEnv };
+    // Reuse Hub's local proxy route, never the understanding process or the encrypted department key.
+    try { const routed = applyGatewayEnv(env, { dataDir: hubDataDir, sessionId: 'meeting-question-' + require('node:crypto').randomUUID(), model: pickedModel, gateway: true }); if (isSafeModelId(routed)) pickedModel = routed; }
+    catch (error) { throw Object.assign(Error('会议网关连接未就绪：' + error.message), { errorKind: 'engine-not-ready', errorHint: '等待本机网关服务就绪后重试，或换引擎重答。' }); }
+  }
+  if (!gateway && !inheritModel && !selectedModel && !model) {
+    for (const name of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']) delete env[name];
+  }
+  if (!configDir) {
+    const profile = resolveClaudeProfile?.(same ? session : {});
+    if (profile) { configDir = profile.home; env = { ...env, ...profile.networkEnv }; }
+    else configDir = path.join(os.homedir(), '.claude');
+  }
+  if (!fs.existsSync(configDir)) throw Object.assign(Error('会议 Claude 账号目录已不可用'), { errorKind: 'spawn-failed' });
+  env.CLAUDE_CONFIG_DIR = configDir;
+  let command = ''; try { command = findCommand('claude', env) || ''; } catch {}
+  const settingsEnv = gateway ? require('../../core/claude-connection-settings').connectionEnv({ COMPANY_CLI: true, CLAUDE_BACKEND: 'proxy' }, env, pickedModel) : null;
+  return { supported: true, engine, env, cwd: work, model: pickedModel, mode: 'fresh', config: {
+    command: command || 'claude', flavor: 'claude', configDirEnv: 'CLAUDE_CONFIG_DIR', configDir,
+    ...(settingsEnv ? { settingsEnv, settingsDir: path.join(hubDataDir, 'native-agent-settings') } : {}),
+  } };
+}
+module.exports = { freshTarget, harness };

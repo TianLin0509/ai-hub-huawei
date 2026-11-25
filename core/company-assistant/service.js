@@ -39,7 +39,7 @@ const isDirectory = dir => { try { return fs.statSync(dir).isDirectory(); } catc
 const PURPOSE = 'company-assistant';
 const QUERY_DIAGNOSTIC_SEEN = new Set();
 // 助理会话的工具或说明有变化时加 1：旧会话启动时没挂这些工具，下一次提问时换一个新会话（旧会话留在历史里）。
-const TOOLS_VERSION = 6;
+const TOOLS_VERSION = 7;
 // 会话工具的接通判定（v3.1.1）：助理会话起来这么久还没收到工具进程的接通信号，就算「未接上」。
 const TOOLS_HELLO_GRACE_MS = 90000;
 const PREWARM_TTL_MS = 5 * 60000;
@@ -65,11 +65,13 @@ const BUILTIN_CHIPS = Object.freeze([
 // 5.5.11（2026-11-05 用户拍板）：每个问题一个干净的 CodeAgent 会话。规则一字不变放在提问开头（各会话的固定前缀相同，能命中缓存），
 // 当前时间、今天摘要、记忆和最近两轮问答放在规则后面。旧第 6 条（管其他会话）只给手机入口，旧第 8 条（PPT）搬到 PPT 页，
 // 旧第 9 条（抢会议室）移出助理（会议室页已有）；「照抄覆盖行」去掉，查询范围由页面显示。
+const MEETING_SEARCH_RULE = '问到以前哪次会议说过什么、谁说过什么时先用 meeting_search，查询本机已保存的会议材料，并带回 meetingId 与 seq 或 itemId 方便回看。';
 const DESK_RULES = [
   '你是我在公司电脑上的工作助理，帮我看 WeLink 里的会议、日程、消息和邮件。请遵守：',
   '1. 只读：用本会话的 welink_* 工具查数据。发消息、回邮件、建会议、建日程都不做；要发的内容写成草稿给我，我自己发。',
   '2. 提问里附了「今天摘要」（Hub 后台快照，10 分钟一更）：今天的会、等我回复、答应的事、和我相关、重要邮件。只涉及这些时直接用摘要回答，不调工具；要更早、更细或摘要里没有的再查。',
   '3. 找某人说了什么、谁提到某事用 welink_find；某段时间的私聊和@我用 welink_inbox（现场取，较慢）；读全文和前后文用 welink_message；会议和日程用 welink_meetings；邮件用 welink_mail。nextCursor 非空且确实需要更多时才翻页。',
+  MEETING_SEARCH_RULE,
   '4. 回答先给结论，写短：会议 300 字内，优先级 400 字内，总结 600 字内，草稿 200 字内。提到具体的消息、会议、邮件，在句末附出处编号，如 [msg:…]，页面会变成可点的标签；时间和主题照数据写。查询范围由页面自动显示，不要在回答里照抄。',
   '5. 没取全、失败或时间待核对时，用一句话说明影响；没查到就说没查到，不能把「没取到」当成「没有」，不猜。',
   '6. 草稿单独成段，以「草稿：」开头。称呼统一用「私聊」「群」。',
@@ -697,7 +699,7 @@ class CompanyAssistant {
   instructions(toolset = 'desk') {
     if (toolset === 'ppt') return PPT_RULES;
     if (toolset === 'brief') return BRIEF_RULES;
-    const desk = this.guided() ? AC.ASK_RULES.replace('{{TOOLS}}', AC.WELINK_TOOLS) : DESK_RULES;
+    const desk = this.guided() ? AC.ASK_RULES.replace('{{TOOLS}}', AC.WELINK_TOOLS) + '\n' + MEETING_SEARCH_RULE : DESK_RULES;
     return toolset === 'phone' ? desk + '\n' + PHONE_RULES : this.tools ? desk + '\n' + SESSION_RULE : desk;
   }
   // 5.5.14（2026-11-07）：默认按「作答手册 + Hub 备好的材料」作答；设置里 answerStyle='classic' 回到 5.5.13 的写法。
@@ -1645,7 +1647,7 @@ class CompanyAssistant {
     if (this.toolsReady) await this.toolsReady;
     const id = randomUUID();
     // 先登记：建会话时 extraMcpProvider 就要按用途挂工具。
-    this.pool.set(id, { toolset, featureAgent, cwd: this.workspaceFor(toolset), createdAt: this.now() });
+    this.pool.set(id, { toolset, featureAgent, toolsVersion: TOOLS_VERSION, cwd: this.workspaceFor(toolset), createdAt: this.now() });
     let created;
     // 助理问答的思考档（2026-11-07）：公司 GLM 一问要 45–60 秒，大半花在想上；设置 answerEffort（low/medium/high/max）时开会话带 --effort，空 = 账号默认。
     const effort = toolset === 'desk' || toolset === 'phone' ? this.settings().answerEffort : '';
@@ -1664,9 +1666,9 @@ class CompanyAssistant {
     const warm = this.warm[toolset];
     if (warm) {
       // 初始化或其他工作仍在运行的预热会话留给清扫器，不能为取下一问把它关掉。
-      if (this.sessionBusy(warm)) return this.openPooled(toolset, featureAgent);
+      if (this.sessionBusy(warm) || Object.values(this.lanes).some(lane => lane.job?.sessionId === warm)) return this.openPooled(toolset, featureAgent);
       delete this.warm[toolset];
-      if (!this.warmUnavailable(warm) && this.toolsetFor(warm) === toolset && (!featureAgent || this.pool.get(warm)?.featureAgent === featureAgent) && !this.staleModel(warm)
+      if (this.pool.get(warm)?.toolsVersion === TOOLS_VERSION && !this.warmUnavailable(warm) && this.toolsetFor(warm) === toolset && (!featureAgent || this.pool.get(warm)?.featureAgent === featureAgent) && !this.staleModel(warm)
         && (toolset !== 'ppt' || this.pool.get(warm)?.cwd === this.pptWorkspace)) return warm;
       this.retire(warm);
     }
@@ -2308,4 +2310,4 @@ class CompanyAssistant {
   }
 }
 
-module.exports = { CompanyAssistant, changedConversationIds, conversationOrderChanges, PURPOSE, TOOLS_VERSION, TOOLS_HELLO_GRACE_MS, PREWARM_TTL_MS, DEFAULT_SETTINGS, BUILTIN_CHIPS, INSTRUCTIONS, DESK_RULES, PHONE_RULES, PPT_RULES, MESSAGE_REFRESH_MAX_MS, MESSAGE_ROTATION_LIMIT, MESSAGE_FULL_CHECK_MS };
+module.exports = { CompanyAssistant, changedConversationIds, conversationOrderChanges, PURPOSE, TOOLS_VERSION, TOOLS_HELLO_GRACE_MS, PREWARM_TTL_MS, DEFAULT_SETTINGS, BUILTIN_CHIPS, INSTRUCTIONS, DESK_RULES, MEETING_SEARCH_RULE, PHONE_RULES, PPT_RULES, MESSAGE_REFRESH_MAX_MS, MESSAGE_ROTATION_LIMIT, MESSAGE_FULL_CHECK_MS };

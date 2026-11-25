@@ -99,6 +99,15 @@ function buildIsolatedHubEnv(dataDir, extraEnv = {}, baseEnv = process.env, {
   windowMode = 'background',
 } = {}) {
   windowMode = effectiveWindowMode(windowMode, baseEnv);
+  // 真实订阅专项只复用Claude配置目录，其余状态继续隔离；true保留旧专项的显式全放开语义。
+  if (Array.isArray(allowExternalState) && allowExternalState.some(key => key !== 'CLAUDE_CONFIG_DIR')) {
+    throw new Error('isolated Hub external-state allowlist only supports CLAUDE_CONFIG_DIR');
+  }
+  if (allowExternalState != null && typeof allowExternalState !== 'boolean' && !Array.isArray(allowExternalState)) {
+    throw new Error('isolated Hub external-state option must be boolean or an allowlist');
+  }
+  const allExternal = allowExternalState === true;
+  const externalClaude = allExternal || Array.isArray(allowExternalState) && allowExternalState.includes('CLAUDE_CONFIG_DIR');
   const resolvedDataDir = path.resolve(dataDir);
   const testRoot = path.dirname(resolvedDataDir);
   const requestedDataDir = extraEnv.CLAUDE_HUB_DATA_DIR;
@@ -110,7 +119,7 @@ function buildIsolatedHubEnv(dataDir, extraEnv = {}, baseEnv = process.env, {
   const requestedCodexHome = extraEnv.CODEX_HOME;
   const requestedClaudeConfigDir = extraEnv.CLAUDE_CONFIG_DIR;
   const requestedKey = extraEnv.DEEPSEEK_API_KEY;
-  if (!allowExternalState) {
+  if (!allExternal) {
     const tempRoot = path.resolve(os.tmpdir());
     if (resolvedDataDir === tempRoot || !_isPathInside(tempRoot, resolvedDataDir)) {
       throw new Error('isolated Hub requires dataDir inside a dedicated OS temp subdirectory');
@@ -136,7 +145,7 @@ function buildIsolatedHubEnv(dataDir, extraEnv = {}, baseEnv = process.env, {
     if (requestedCodexHome && !_isPathInside(testRoot, requestedCodexHome)) {
       throw new Error('isolated Hub requires CODEX_HOME inside the test root');
     }
-    if (requestedClaudeConfigDir && !_isPathInside(testRoot, requestedClaudeConfigDir)) {
+    if (!externalClaude && requestedClaudeConfigDir && !_isPathInside(testRoot, requestedClaudeConfigDir)) {
       throw new Error('isolated Hub requires CLAUDE_CONFIG_DIR inside the test root');
     }
     if (requestedKey) throw new Error('isolated Hub forbids a non-empty DEEPSEEK_API_KEY');
@@ -152,7 +161,7 @@ function buildIsolatedHubEnv(dataDir, extraEnv = {}, baseEnv = process.env, {
   const env = {
     ...cleanBaseEnv,
     ...safeExtraEnv,
-    CLAUDE_HUB_DATA_DIR: allowExternalState && requestedDataDir ? requestedDataDir : resolvedDataDir,
+    CLAUDE_HUB_DATA_DIR: allExternal && requestedDataDir ? requestedDataDir : resolvedDataDir,
     CLAUDE_HUB_HOME_DIR: requestedHomeDir || path.join(resolvedDataDir, 'isolated-home'),
     XRESEARCH_AGENT_LEAGUE_DIR: requestedAgentLeagueDir || path.join(resolvedDataDir, 'agent-league'),
     // 2026-09-08：学习任务的产物目录也必须隔离。合并位撞到过 —— 测试 Hub 起来后
@@ -166,7 +175,7 @@ function buildIsolatedHubEnv(dataDir, extraEnv = {}, baseEnv = process.env, {
     // 测试实例默认不定时检查、接入包目录圈进临时目录；要测它的用例显式传 CLAUDE_HUB_WIRELESS_HOME。
     CLAUDE_HUB_WIRELESS_TIMER: safeExtraEnv.CLAUDE_HUB_WIRELESS_TIMER || '0',
     CLAUDE_HUB_WIRELESS_HOME: safeExtraEnv.CLAUDE_HUB_WIRELESS_HOME || path.join(resolvedDataDir, 'wireless-home'),
-    DEEPSEEK_API_KEY: allowExternalState && requestedKey ? requestedKey : '',
+    DEEPSEEK_API_KEY: allExternal && requestedKey ? requestedKey : '',
     CLAUDE_HUB_E2E_WINDOW_MODE: windowMode,
   };
   if (windowMode === 'hidden') env.CLAUDE_HUB_E2E = '1';

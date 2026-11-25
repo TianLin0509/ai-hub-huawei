@@ -288,7 +288,7 @@ function describe(summary) {
   const l = summary.load;
   if (l) {
     const start = `开跑时全机 CPU ${l.atStart.total}%${l.atStart.excluded ? `，扣除发版自身后 ${l.atStart.others}%` : ''}`;
-    const wait = (l.gaveUp || l.waitedSec >= 5) ? (l.gaveUp ? `；高于 ${l.threshold}%，等了 ${l.waitedSec} 秒仍忙，照常跑` : `；高于 ${l.threshold}%，先等了 ${l.waitedSec} 秒`) : '';
+    const wait = (l.gaveUp || l.waitedSec >= 5) ? (l.gaveUp ? `；高于 ${l.threshold}%，等了 ${l.waitedSec} 秒仍忙，照常跑` : `；采样等机器低于 ${l.threshold}% 用了 ${l.waitedSec} 秒`) : '';
     const dur = l.during ? `；冒烟期间平均 ${l.during.avg}%、最高 ${l.during.max}%` : '';
     lines.push(`  机器负载：${start}${wait}${dur}`);
     if (!summary.ok && (l.gaveUp || (l.during && l.during.avg > l.threshold))) lines.push('  ⚠ 冒烟时机器满载，失败可能是环境原因：先看失败项日志，或等机器空下来重跑 node scripts/release-smoke.js 确认');

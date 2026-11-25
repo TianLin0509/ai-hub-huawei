@@ -198,6 +198,8 @@ test('选中的会议读不了：状态请求照常返回列表和材料位置�
   const a = oldMeeting(defaultDir, '好的'), b = oldMeeting(defaultDir, '坏的');
   const { m } = boot(t, defaultDir); m.list();
   const bad = path.join(defaultDir, 'workspace', 'meetings', b), real = fs.readFileSync;
+  // 会议正本常驻内存（2026-11-24）：文件没变时直接用内存那份；这里让文件在外面被改过、又读不了，才需要重读。
+  const later = new Date(Date.now() + 10000); fs.utimesSync(path.join(bad, 'meeting.json'), later, later);
   t.mock.method(fs, 'readFileSync', (p, ...r) => { if (path.resolve(String(p)).startsWith(bad)) throw Object.assign(new Error('denied'), { code: 'EACCES' }); return real(p, ...r); });
   const st = m.status(b);
   assert.equal(st.meeting, null); assert.match(st.meetingError, /denied/);

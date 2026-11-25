@@ -1,7 +1,7 @@
 'use strict';
 
 function meetingAsrState(asr = {}, meeting = null) {
-  const audio = (meeting?.events || []).filter(event => event.kind === 'audio' && event.asr !== 'done');
+  const audio = (meeting?.events || []).filter(event => event.kind === 'audio' && event.asr !== 'done' && event.asr !== 'skipped');
   const failed = audio.filter(event => event.asr === 'error').length;
   const installing = !!asr.phase;
   const size = asr.sizeText || '300 MB';

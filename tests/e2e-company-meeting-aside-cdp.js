@@ -110,6 +110,7 @@ function installAsideFixture() {
     result.checks.push('question-session entry is hidden with zero layout width for idle/new meetings; legacy session id restores a visible enabled entry; no session-opening click issued');
     assert.equal(await c.eval(`${q('[data-m="question"]')}.placeholder`),'问一下这场会议，不打断纪要');
     await click('[data-act="understand"]');
+    await click('[data-aside-tab="chat"]');
     const questions=['35% 是按哪个周期算的？','高速用户的门限有没有人提过具体数？','上周评审的结论是什么？'];
     for(let i=0;i<questions.length;i++){
       if(i===0)await c.eval('m3Fixture.holdNextAsk=true');
@@ -120,7 +121,7 @@ function installAsideFixture() {
         for(const type of ['keyDown','keyUp'])await c.send('Input.dispatchKeyEvent',{type,key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
         await c.send('Input.insertText',{text:questions[1]});await c.eval('m3Fixture.releaseAsk()');
       }
-      await until(`document.querySelectorAll('[data-answer]').length===${i+1}`,'question '+(i+1)+' in timeline');
+      await until(`document.querySelectorAll('[data-m="chat-list"] [data-answer]').length===${i+1}`,'question '+(i+1)+' in chat tab');
       assert.equal(await c.eval(`${q('[data-m="question"]')}.value`),i===0?questions[1]:'');await minutes('while question '+(i+1)+' queued/running');
     }
     assert.deepEqual(await c.eval(`m3Fixture.current.answers.map(q=>q.q)`),questions);
@@ -129,17 +130,18 @@ function installAsideFixture() {
     assert.match(await c.eval(`${q(card('aside-1'))}.textContent`),/回答中|正在/);
     assert.equal(await c.eval(`document.querySelectorAll('[data-question-state="running"] .meeting-question-dots').length`),1,'only the running question has activity dots');
     assert.equal(await c.eval(`document.querySelectorAll('[data-question-state="queued"] .meeting-question-dots').length`),0,'queued questions have no activity dots');
-    const queueTexts=()=>c.eval(`['aside-2','aside-3'].map(id=>document.querySelector('[data-answer="'+id+'"] .meeting-question-thinking')?.textContent.trim())`);
+    const queueTexts=()=>c.eval(`['aside-2','aside-3'].map(id=>document.querySelector('[data-answer="'+id+'"] .meeting-chat-label')?.textContent.trim())`);
     const assertQueueAhead=async(expected,label)=>{
-      const texts=expected.map(n=>'排队中 · 前面还有 '+n+' 个问题，可继续提问');
-      await until(`JSON.stringify(['aside-2','aside-3'].map(id=>document.querySelector('[data-answer="'+id+'"] .meeting-question-thinking')?.textContent.trim()))===${JSON.stringify(JSON.stringify(texts))}`,label);
+      const texts=expected.map(n=>n?'已送达 · 前面还有 '+n+' 题':'已送达 · 下一个就是它');
+      await until(`JSON.stringify(['aside-2','aside-3'].map(id=>document.querySelector('[data-answer="'+id+'"] .meeting-chat-label')?.textContent.trim()))===${JSON.stringify(JSON.stringify(texts))}`,label);
       assert.deepEqual(await queueTexts(),texts);
       assert.equal(await c.eval(`Array.from(document.querySelectorAll('[data-question-state="queued"]')).some(el=>el.textContent.includes('等待回答'))`),false,'queued cards never say waiting for answer');
       (result.queueProgress ||= []).push({label,ahead:expected,texts:await queueTexts()});
     };
     await assertQueueAhead([1,2],'initial second/third queue positions');
-    assert.equal(await c.eval(`Array.from(document.querySelectorAll('[data-m="timeline"] [data-answer]')).map(e=>e.dataset.answer).join(',')`),'aside-1,aside-2,aside-3');
-    await until(`${q('[data-m="question-pending"]')}?.textContent.includes('3')`,'pending count 3');
+    assert.equal(await c.eval(`Array.from(document.querySelectorAll('[data-m="chat-list"] [data-answer]')).map(e=>e.dataset.answer).join(',')`),'aside-1,aside-2,aside-3');
+    assert.equal(await c.eval(`document.querySelectorAll('[data-m="timeline"] [data-answer]').length`),0,'questions stay out of the timeline');
+    await until(`${q('[data-m="chat-busy"]')}?.textContent.includes('3 题在答')`,'in-flight count 3 on the tab');
     result.checks.push('three real input submissions remain in timeline with running/queued states; input typed while delayed IPC waits is preserved; minutes revisions advance during recording');await allScreens('01-queued');
     const answer='按 20 ms 周期核对，王工负责补测方案 B。 [事件 5] [画面 00:13]';
     const pendingBefore=await c.eval('JSON.stringify(m3Fixture.current.answers.slice(1))');
@@ -169,7 +171,7 @@ function installAsideFixture() {
     await until(`m3Fixture.calls.some(x=>x.channel==='company-assistant:meeting-playback'&&x.args.at===13000)`,'frame timestamp dispatch');
     // The synthetic live recording may not have a completed replay segment yet; verify exact V7 dispatch without inventing a video.
     result.checks.push('copy success/failure stays in mock clipboard without raw bracket citations; follow-up prefills original question; V7 event jumps and frame timestamp dispatch preserved');
-    const animations=()=>c.eval(`(()=>{const roots=[document.querySelector('[data-m="question-pending"]'),document.querySelector('[data-answer="aside-2"]')].filter(Boolean),a=[];for(const root of roots)for(const el of [root,...root.querySelectorAll('*')])for(const pseudo of [null,'::before','::after']){const s=getComputedStyle(el,pseudo);if(s.animationName!=='none')a.push({tag:el.tagName,cls:el.className,pseudo,name:s.animationName,duration:s.animationDuration,playState:s.animationPlayState});}return a;})()`);
+    const animations=()=>c.eval(`(()=>{const roots=[document.querySelector('[data-answer="aside-2"] .meeting-chat-status')].filter(Boolean),a=[];for(const root of roots)for(const el of [root,...root.querySelectorAll('*')])for(const pseudo of [null,'::before','::after']){const s=getComputedStyle(el,pseudo);if(s.animationName!=='none')a.push({tag:el.tagName,cls:el.className,pseudo,name:s.animationName,duration:s.animationDuration,playState:s.animationPlayState});}return a;})()`);
     result.motionNormal=await animations();assert.ok(result.motionNormal.some(a=>parseFloat(a.duration)>0&&a.playState!=='paused'),'question progress animates normally');
     await c.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});
     result.motionReduced=await animations();assert.ok(result.motionReduced.every(a=>a.duration.split(',').every(d=>parseFloat(d)<=0.001)||a.playState==='paused'),'question dots/spinner stop for reduced motion');await shot('03-reduced-motion');
@@ -178,12 +180,12 @@ function installAsideFixture() {
     assert.equal(await c.eval('m3Fixture.current.answers.length'),3);assert.equal(await c.eval(`${q(card('aside-3'))}.dataset.answer`),'aside-3');
     await c.eval(`m3Fixture.setQuestion(1,'done','门限尚未明确。 [事件 2]');m3Fixture.setQuestion(2,'running');`);await minutes('retry while minutes continue');
     await c.eval(`m3Fixture.setQuestion(2,'done','旧评审结论仍需核对。 [事件 5]');`);
-    await until(`!!${q('[data-copy-answer="aside-3"]')}&&(!${q('[data-m="question-pending"]')}||${q('[data-m="question-pending"]')}.hidden||!${q('[data-m="question-pending"]')}.offsetHeight)`,'retry completion clears pending');
+    await until(`!!${q('[data-copy-answer="aside-3"]')}&&${q('[data-m="chat-busy"]')}.hidden`,'retry completion clears pending');
     assert.equal(await c.eval(`document.querySelectorAll('[data-answer]').length`),3);assert.deepEqual(await c.eval('m3Fixture.current.answers.map(q=>q.state)'),['done','done','done']);
-    await click(card('aside-1')+' summary');assert.equal(await c.eval(`${q(card('aside-1'))}.open`),false);await minutes('collapsed answer persists across minute refresh');assert.equal(await c.eval(`${q(card('aside-1'))}.open`),false);
+    await minutes('answers persist across minute refresh');assert.equal(await c.eval(`document.querySelectorAll('[data-m="chat-list"] [data-answer]').length`),3);
     assert.ok(await c.eval(`m3Fixture.calls.filter(x=>x.channel==='company-assistant:meeting-control').every(x=>!['pause','stop'].includes(x.args.op))`));
     assert.deepEqual(await c.eval(`ipcRenderer.invoke('get-sessions')`),initialSessions);
-    result.checks.push('partial answer and error reason coexist; truncated answer warns; question-only does not animate minutes; retry uses original card/id; all done clears pending; details collapse survives refresh; reduced motion stops indicators; recording and minutes never stopped');
+    result.checks.push('partial answer and error reason coexist; truncated answer warns; question-only does not animate minutes; retry uses original card/id; all done clears pending; answers persist across minutes refresh; reduced motion stops indicators; recording and minutes never stopped');
     await allScreens('04-all-done');audit();result.calls=await c.eval(`m3Fixture.calls.filter(x=>!x.channel.endsWith('meeting-status')&&!x.channel.endsWith('meeting-capture'))`);result.passed=true;
   } catch(error){result.error=error.stack;process.exitCode=1;if(c)try{const image=await c.send('Page.captureScreenshot',{format:'png'});fs.writeFileSync(path.join(out,'failure.png'),Buffer.from(image.data,'base64'));}catch{}}
   finally{

@@ -67,13 +67,27 @@ function meetingTemplate() {
           <div class="meeting-replay"><div class="meeting-replay-row"><button class="meeting-play" data-act="play" disabled aria-label="回放">${icon(ICONS.play,14)}</button><span class="meeting-play-time"><span data-m="play-time">00:00</span> / <span data-m="duration">00:00</span></span><select class="meeting-rate" data-m="rate" aria-label="回放速度">${[1,1.25,1.5,2].map(v=>`<option value="${v}">${v}×</option>`).join('')}</select><button class="ca-btn" data-act="extract" disabled>${icon(ICONS.camera,14)}<span>截取此帧</span></button></div><input data-m="seek" type="range" min="0" max="0" value="0" step="0.1" aria-label="会议时间轴"><input data-m="seek-seconds" type="number" min="0" value="0" step="1" hidden aria-label="跳转到会议秒数"><p class="meeting-gaps" data-m="gaps"></p></div>
         </div>
       </section>
-      <div class="meeting-flow-heading"><h3>时间流</h3><span data-m="flow-count">截图、原话与问答</span><button class="ca-link" data-act-local="latest" hidden>回到最新</button></div>
-      <div class="meeting-flow" data-m="timeline" aria-label="截图、原话、重点与问答时间流"></div>
+      <div class="meeting-flow-heading"><h3>时间流</h3><span data-m="flow-count">截图、原话与重点</span><button class="ca-link" data-act-local="latest" hidden>回到最新</button></div>
+      <div class="meeting-flow" data-m="timeline" aria-label="截图、原话与重点时间流"></div>
     </main>
-    <aside class="meeting-understanding"><div class="meeting-review-hero" data-m="review-hero"></div><div class="meeting-summary-heading"><h3>纪要</h3><span class="meeting-speed" role="radiogroup" aria-label="理解速度">${[['fast','快速'],['normal','中等'],['deep','深入']].map(([v,l])=>`<button type="button" role="radio" data-speed="${v}">${l}</button>`).join('')}</span><button class="ca-btn" data-act="understand" disabled title="更新理解">${icon(ICONS.spark,14)}<span>更新</span></button><button class="ca-btn" data-act="export" title="导出纪要" aria-label="导出纪要">${icon(ICONS.export,14)}<span hidden>导出纪要</span></button></div>
-      <div class="meeting-understanding-status" role="status" data-m="understanding-status">开始采集后，再逐步整理讨论内容</div>
-      <div class="meeting-summary-scroll"><article data-m="summary"></article></div>
-      <div class="meeting-chat"><div class="meeting-question-pending" data-m="question-pending" role="status" hidden></div><div class="meeting-ask-box"><textarea id="meeting-question" data-m="question" rows="2" placeholder="问一下这场会议，不打断纪要" aria-label="会议问题"></textarea><button class="meeting-send" data-act="ask" disabled title="问 CodeAgent（Ctrl+Enter）" aria-label="问 CodeAgent">${icon(ICONS.send,16)}</button></div></div>
+    <aside class="meeting-understanding"><div class="meeting-review-hero" data-m="review-hero"></div>
+      <div class="meeting-aside-tabs" role="tablist" aria-label="右栏">
+        <button type="button" role="tab" data-aside-tab="minutes" aria-selected="true" aria-controls="meeting-panel-minutes">会议理解</button>
+        <button type="button" role="tab" data-aside-tab="chat" aria-selected="false" aria-controls="meeting-panel-chat">助手对话<small data-m="chat-busy" hidden></small><i class="meeting-tab-badge" data-m="chat-badge" hidden></i></button>
+      </div>
+      <section class="meeting-aside-panel" id="meeting-panel-minutes" role="tabpanel" data-aside-panel="minutes">
+        <div class="meeting-summary-heading"><h3>纪要</h3><span class="meeting-speed" role="radiogroup" aria-label="纪要理解速度">${[['fast','快速'],['normal','中等'],['deep','深入']].map(([v,l])=>`<button type="button" role="radio" data-speed="${v}">${l}</button>`).join('')}</span><button class="ca-btn" data-act="understand" disabled title="更新理解">${icon(ICONS.spark,14)}<span>更新</span></button><button class="ca-btn" data-act="export" title="导出纪要" aria-label="导出纪要">${icon(ICONS.export,14)}<span hidden>导出纪要</span></button></div>
+        <div class="meeting-understanding-status" role="status" data-m="understanding-status">开始采集后，再逐步整理讨论内容</div>
+        <small class="meeting-engine-line" data-m="engine-line" hidden></small>
+        <div class="meeting-und-alert" data-m="und-alert" role="alert" hidden><p data-m="und-alert-text"></p><small data-m="und-alert-sub"></small><div class="meeting-und-ops" data-m="und-alert-ops"></div></div>
+        <div class="meeting-summary-scroll"><article data-m="summary"></article></div>
+      </section>
+      <section class="meeting-aside-panel meeting-chat-panel" id="meeting-panel-chat" role="tabpanel" data-aside-panel="chat" hidden>
+        <div class="meeting-lane-alert" data-m="lane-alert" role="alert" hidden><p data-m="lane-alert-text"></p><div><button type="button" class="ca-btn" data-act-local="lane-engine">换引擎</button><button type="button" class="ca-btn" data-act-local="lane-backstage">看后台</button></div></div>
+        <div class="meeting-chat-list" data-m="chat-list" aria-label="和会议助手的对话"><div class="meeting-chat-empty" data-m="chat-empty"><strong>问会议助手</strong><p>只放你和会议助手的问答。提问后这里会写清：已送达、第几步、卡在哪、为什么没答上；不打断纪要。</p></div></div>
+        <div class="meeting-chat"><div class="meeting-chat-speed"><span>回答档位</span><span class="meeting-speed" role="radiogroup" aria-label="问答档位（与纪要档位互不影响）">${[['fast','快速'],['normal','中等'],['deep','深入']].map(([v,l])=>`<button type="button" role="radio" data-qspeed="${v}">${l}</button>`).join('')}</span><small data-m="qspeed-hint">快速：只带纪要和最近原话，先出字</small></div><div class="meeting-ask-box"><textarea id="meeting-question" data-m="question" rows="2" placeholder="问一下这场会议，不打断纪要" aria-label="会议问题"></textarea><button class="meeting-send" data-act="ask" disabled title="问会议助手（Ctrl+Enter）" aria-label="问会议助手">${icon(ICONS.send,16)}</button></div></div>
+      </section>
+      <div class="meeting-backstage" data-m="backstage" role="dialog" aria-label="这题的后台记录" hidden></div>
     </aside>
   </div>
   <footer class="meeting-footer"><span class="meeting-footer-state"><i data-m="footer-dot"></i><span data-m="progress">尚未开始采集</span></span><span class="meeting-agent-state" data-m="agent-state"><i></i><span>CodeAgent 未启动</span></span><span data-m="recording-status">材料仅保存到本机</span></footer>`;

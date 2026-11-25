@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn: spawnDefault } = require('node:child_process');
 const { withDeadline, waitForProcess } = require('./help-ask/request-lifecycle');
+const { AnswerStream } = require('../main/ask-aside/answer-stream');
 const PREFIX = '请简短回答（10 行以内）：';
 
 const SIDE_RULES = '【旁支提问】这是用户在主线程工作期间插入的旁支提问。这段问答结束后即丢弃，不会写回主线程。'
@@ -45,8 +46,8 @@ function configuredMcpNames(files, readFile = file => fs.readFileSync(file, 'utf
 
 const quotedConfigs = text => [...String(text || '').matchAll(/-c '([^']+)'/g)].map(m => m[1]);
 
-function buildCodexSideArgs({ session, outputFile, mcpNames = [] }) {
-  if (!SID.test(session.codexSid || '')) throw new Error('Codex 原生会话编号无效');
+function buildCodexSideArgs({ session, outputFile, mcpNames = [], fresh = false }) {
+  if (!fresh && !SID.test(session.codexSid || '')) throw new Error('Codex 原生会话编号无效');
   const effort = EFFORTS.has(String(session.effort || '').toLowerCase()) ? String(session.effort).toLowerCase() : DEFAULT_EFFORT;
   const args = ['exec', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', '--json', '-o', outputFile,
     '--disable', 'hooks', '--disable', 'daemon_auto_start', '--disable', 'memories', '--disable', 'multi_agent',
@@ -58,7 +59,7 @@ function buildCodexSideArgs({ session, outputFile, mcpNames = [] }) {
   for (const config of quotedConfigs(require('./codex-speed-tier').buildCodexSpeedTierArg(session.codexSpeedTier))) args.push('-c', config);
   for (const name of mcpNames) args.push('-c', `mcp_servers.${name}.enabled=false`);
   // 问题走 stdin：中文、引号和换行都不经过命令行转义。
-  args.push('fork', session.codexSid, '-');
+  args.push(...(fresh ? ['-'] : ['fork', session.codexSid, '-']));
   return args;
 }
 
@@ -80,7 +81,8 @@ function friendlyError(raw) {
 }
 
 async function askCodexSide({ session, question, context = '', responseHint = '', env: baseEnv = process.env, spawn = spawnDefault, now = Date.now,
-  timeoutMs = 300000, idleMs = 90000, signal, onActivity = () => {}, resolveCommand, applyNetwork, tmpRoot = os.tmpdir(), profiles }) {
+  timeoutMs = 300000, idleMs = 90000, signal, onActivity = () => {}, resolveCommand, applyNetwork, tmpRoot = os.tmpdir(), profiles,
+  fresh = false, effort = '', onChunk = () => {}, onEvent = () => {}, onThinking = () => {}, onProcess = () => {} }) {
   const q = String(question || '').trim();
   if (!q) throw new Error('请先填写问题');
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(q)) throw new Error('问题含有终端控制字符');
@@ -95,16 +97,20 @@ async function askCodexSide({ session, question, context = '', responseHint = ''
   const dir = fs.mkdtempSync(path.join(tmpRoot, 'hub-btw-codex-'));
   const outputFile = path.join(dir, 'answer.md');
   const mcpNames = configuredMcpNames([path.join(home, 'config.toml'), ...(session.cwd ? [path.join(session.cwd, '.codex', 'config.toml')] : [])]);
-  const args = [...(launch.args || []), ...buildCodexSideArgs({ session, outputFile, mcpNames })];
+  const args = [...(launch.args || []), ...buildCodexSideArgs({ session: effort ? { ...session, effort } : session, outputFile, mcpNames, fresh })];
   const started = now();
+  const decoder = new AnswerStream({ onText: onChunk, onEvent, onThinking, maxAnswer: MAX_ANSWER });
   try {
     const result = await withDeadline(({ signal: requestSignal, onActivity: activity }) => new Promise((resolve, reject) => {
       let child, buffer = '', stderr = '', failure = '', usage = null;
       try {
         child = spawn(launch.command, args, { cwd: session.cwd || dir, env: launch.env || env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
       } catch (error) { resolve({ code: -3, spawnError: error.message }); return; }
+      onProcess({ pid: child.pid, command: launch.command, args, cwd: session.cwd || dir, contextChars: context.length });
       const completion = waitForProcess(child, { signal: requestSignal, onActivity: () => { activity(); onActivity(); } });
+      child.stdout.setEncoding?.('utf8'); child.stderr.setEncoding?.('utf8');
       child.stdout.on('data', chunk => {
+        decoder.write(chunk);
         buffer += chunk.toString('utf8');
         let index;
         while ((index = buffer.indexOf('\n')) >= 0) {
@@ -115,18 +121,23 @@ async function askCodexSide({ session, question, context = '', responseHint = ''
           if (event.type === 'turn.failed') failure = event.error?.message || failure;
         }
       });
-      child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString('utf8')).slice(-4000); });
+      child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString('utf8')).slice(-4000); onEvent('stderr', chunk.toString('utf8')); });
       completion.then(code => resolve({ code, failure, stderr, usage }), reject);
       child.stdin.on('error', () => {});
       child.stdin.end(sidePrompt(q, { context, responseHint }), 'utf8');
     }), { signal, timeoutMs, idleMs });
-    let answer = '';
+    const decoded = decoder.end(); let answer = '';
     try { answer = fs.readFileSync(outputFile, 'utf8').trim(); } catch { /* 下面按失败处理 */ }
-    if (result.spawnError) throw new Error('无法启动 Codex：' + result.spawnError);
-    if (!answer) throw new Error(friendlyError(result.failure || result.stderr));
+    if (result.spawnError) throw Object.assign(new Error('无法启动 Codex：' + result.spawnError), { errorKind: 'spawn-failed' });
+    if (!answer) answer = decoded.answer;
+    if (result.code !== 0 || result.failure || decoded.error) throw Object.assign(new Error(friendlyError(result.failure || decoded.error || result.stderr)), { answer, truncated: decoded.truncated, exitCode: result.code });
+    if (!answer) throw Object.assign(new Error(friendlyError(result.failure || result.stderr)), { errorKind: 'empty-answer' });
+    onChunk(answer);
     const truncated = answer.length > MAX_ANSWER;
     return { answer: truncated ? answer.slice(0, MAX_ANSWER) : answer, truncated,
       wall_s: Math.round((now() - started) / 100) / 10, usage: result.usage };
+  } catch (error) {
+    const parsed = decoder.end(); throw Object.assign(error, { answer: error.answer || parsed.answer, truncated: !!error.truncated || parsed.truncated });
   } finally {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }

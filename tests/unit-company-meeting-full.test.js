@@ -6,8 +6,8 @@ const { MeetingCompanion } = require('../core/company-assistant/meeting');
 const { MeetingRecorder } = require('../renderer/meeting-recorder');
 const { MeetingCapture } = require('../renderer/meeting-capture');
 const { durationHeader, element, fixWebmDuration } = require('../core/company-assistant/meeting-webm-duration');
-const fixture = () => Buffer.from('1a45dfa3801853806701ffffffffffffff1549a966872ad7b1830f42401f43b67584a3820102', 'hex');
-function duration(buffer) { let seg = element(buffer, element(buffer, 0).end), info = element(buffer, seg.start); for (let p = info.start; p < info.end;) { const e = element(buffer, p); if (e.id === 0x4489) return buffer.readDoubleBE(e.start); p = e.end; } }
+const fixture = require('./helpers/meeting-media-fixtures').webmFixture;
+function duration(buffer) { const seg = element(buffer, element(buffer, 0).end); let info; for (let at = seg.start; at < buffer.length;) { const e = element(buffer, at); if (e.id === 0x1549a966) { info = e; break; } at = e.end; } for (let p = info.start; p < info.end;) { const e = element(buffer, p); if (e.id === 0x4489) return buffer.readDoubleBE(e.start); p = e.end; } }
 async function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'meeting-full-unit-'));
   const m = new MeetingCompanion({ dir: root, workspace: root, changed() {}, sessionBusy: () => false, lastFinal: () => null }, { meetingAsr: { status: () => ({ ready: false }), close() {} } });
@@ -16,13 +16,13 @@ async function main() {
     const original = fixture(), header = durationHeader(original, 120000), fixed = Buffer.concat([header.prefix, original.subarray(header.offset)]);
     assert.equal(duration(fixed), 120000); assert.ok(fixed.subarray(-8).equals(original.subarray(-8)));
     assert.throws(() => durationHeader(original.subarray(0, 22), 1), /完整/);
-    const file = path.join(root, 'truncated.webm'); fs.writeFileSync(file, original.subarray(0, -2)); await fixWebmDuration(file, 1000); assert.equal(duration(fs.readFileSync(file)), 1000);
+    const file = path.join(root, 'truncated.webm'); fs.writeFileSync(file, original.subarray(0, -2)); await assert.rejects(() => fixWebmDuration(file, 1000)); assert.deepEqual(fs.readFileSync(file), original.subarray(0, -2));
     const invalid = path.join(root, 'invalid.webm'); fs.writeFileSync(invalid, original.subarray(0, 8)); await assert.rejects(() => fixWebmDuration(invalid, 1000)); assert.equal(fs.readFileSync(invalid).length, 8, 'invalid header never overwrites preserved recording');
     let now = 0; const saved = [], instances = [];
     class FakeRecorder {
       constructor() { this.state = 'inactive'; this.first = true; instances.push(this); }
       start() { this.state = 'recording'; }
-      requestData() { const b = this.first ? fixture() : Buffer.from([0xa3, 0x81, 0]); this.first = false; queueMicrotask(() => this.ondataavailable({ data: { size: b.length, arrayBuffer: async () => b } })); }
+      requestData() { const b = this.first ? fixture() : Buffer.from([0xa3, 0x85, 0x81, 0, 1, 0x80, 0]); this.first = false; queueMicrotask(() => this.ondataavailable({ data: { size: b.length, arrayBuffer: async () => b } })); }
       pause() { this.state = 'paused'; queueMicrotask(() => this.onpause?.()); }
       resume() { assert.equal(this.state, 'paused'); this.state = 'recording'; }
       stop() { this.requestData(); this.state = 'inactive'; queueMicrotask(() => this.onstop()); }
@@ -41,6 +41,7 @@ async function main() {
     assert.equal(ended.recording.segments.length, 0); assert.equal(m.recording.locate(meeting.id, 1000).segment.file, 'recording-full.webm');
     assert.equal(saved.filter(r => r.kind === 'recording-start' && r.full).length, 1); assert.equal(saved.filter(r => r.kind === 'recording-finish' && r.key === full.key).length, 1);
     const interrupted = m.load(meeting.id); interrupted.recording.full.status = 'writing'; interrupted.recording.full.durationFixed = false; m.save(interrupted);
+    m.recording.attempted.clear(); // Simulate a fresh process recovering the saved interrupted state.
     m.recording.recover(interrupted); m.save(interrupted); await m.recording.repairs.get(meeting.id); assert.equal(m.load(meeting.id).recording.full.status, 'interrupted'); assert.equal(m.load(meeting.id).recording.full.durationFixed, true);
     const stopped = m.load(meeting.id); stopped.state = 'ended'; stopped.recording.full.status = 'ready'; stopped.recording.full.durationFixed = false; m.save(stopped);
     const restart = new MeetingCompanion(m.a, m.deps);

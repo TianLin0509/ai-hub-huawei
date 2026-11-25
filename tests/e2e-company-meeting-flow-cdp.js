@@ -285,12 +285,12 @@ function installFixture() {
     assert.ok(await c.eval(`!document.querySelector('[data-m=more]').open`));
     await click('[data-speed=fast]');await until('m3Fixture.current.speed==="fast"','speed');await click('[data-speed=normal]');await click('[data-speed=deep]');
     await click('[data-act=understand]');await until('document.querySelector(".company-meeting").dataset.thinking==="true"','thinking');
-    await c.eval(`document.querySelector('[data-m=question]').value='下一步谁负责？'`);await click('[data-act=ask]');await until('!!document.querySelector("[data-answer]")','question in stream');await shot('04-thinking');
+    await click('[data-aside-tab=chat]');await c.eval(`document.querySelector('[data-m=question]').value='下一步谁负责？'`);await click('[data-act=ask]');await until('!!document.querySelector("[data-m=chat-list] [data-answer]")','question in chat tab');await shot('04-thinking');
+    assert.equal(await c.eval('document.querySelectorAll("[data-m=timeline] [data-answer]").length'),0,'questions stay out of the timeline');
     assert.ok(await c.eval('m3Fixture.current.job.kind==="understand" && m3Fixture.current.questionJob.kind==="question"'));
     await c.eval(`m3Fixture.current.answers[0].state='error';m3Fixture.current.answers[0].error='回答失败夹具';m3Fixture.current.questionJob.state='error';`);
     await until('!!document.querySelector("[data-retry-question]")','retry');await click('[data-retry-question]');await until('document.querySelector("[data-answer]").textContent.includes("王工")','retried answer');
     result.checks.push('More controls, Escape, transcript visibility, three speeds, parallel question UI and retry');
-    await click('[data-answer] summary');
     await c.eval(`(()=>{m3Fixture.current.events.push(...Array.from({length:45},(_,n)=>({seq:200+n,kind:'transcript',at:30000+n*1000,track:'system',text:'回看位置验收 '+n})));m3Fixture.current.job=null;})()`);
     await until('document.querySelectorAll(".meeting-flow-event").length>45','long stream');
     await c.eval(`document.querySelector('[data-m=timeline]').scrollTop=100;window.m3Anchor=document.querySelector('[data-flow-key="event-200"]');window.m3AnchorTop=m3Anchor.getBoundingClientRect().top;`);
@@ -298,11 +298,10 @@ function installFixture() {
     await until('!!document.querySelector("[data-flow-key=event-300]")','append');
     result.scroll = await c.eval(`({before:m3AnchorTop,after:m3Anchor.getBoundingClientRect().top,scrollTop:document.querySelector('[data-m=timeline]').scrollTop,scrollHeight:document.querySelector('[data-m=timeline]').scrollHeight,clientHeight:document.querySelector('[data-m=timeline]').clientHeight})`);
     assert.ok(Math.abs(result.scroll.after-result.scroll.before)<2,'preserve reading position: '+JSON.stringify(result.scroll));
-    assert.ok(await c.eval(`!document.querySelector('[data-answer]').open`),'preserve closed answer on append');
     await click('[data-act-local=latest]');
     await c.eval('m3Fixture.current.events=m3Fixture.current.events.filter(e=>e.seq<200)');
     await until('document.querySelectorAll(".meeting-flow-event").length<20','remove scroll stress fixture');
-    await click('[data-answer] summary');
+    await click('[data-aside-tab=minutes]');
     await click('[data-act=pause]');await until('document.querySelector(".company-meeting").dataset.recording==="false"','pause animation');await shot('05-paused');
     await click('[data-act=pause]');await until('document.querySelector(".company-meeting").dataset.recording==="true"','resume animation');
     await click('[data-act=stop]');await until('document.querySelector(".company-meeting").dataset.phase==="review"','review');await click('[data-act-local=dismiss]');

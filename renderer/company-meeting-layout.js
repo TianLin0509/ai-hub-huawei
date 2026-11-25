@@ -10,7 +10,15 @@ function createMeetingLayout({ document, window, ipcRenderer, closeOtherPanels, 
   const markdown = text => require('dompurify').sanitize(require('marked').marked.parse(String(text || ''), { breaks: true }));
   // 打开会议专属的 CodeAgent 会话：先收起会议页，再切到会话（采集在后台继续）。
   const openAgent = openSession ? async sessionId => { close(); await openSession(sessionId); } : null;
-  const meeting = require('./company-meeting-page').createCompanyMeetingPage({ document, window, call, markdown, openSession: openAgent });
+  // 「打开理解会话后台」：先收起会议页（采集在后台继续），再切到会话并打开后台终端。
+  const openBackstage = async sessionId => {
+    if (typeof window.__hubOpenBackstage !== 'function') return { ok: false };
+    // 先试着打开；成功时 __hubOpenBackstage 已经收起了各页面（含会议页），失败就留在会议页说明原因。
+    const r = await window.__hubOpenBackstage(sessionId);
+    if (r?.ok && host && !host.hidden) close();
+    return r;
+  };
+  const meeting = require('./company-meeting-page').createCompanyMeetingPage({ document, window, call, markdown, openSession: openAgent, openBackstage });
   const nav = document.createElement('button');
   nav.type = 'button'; nav.id = 'btn-company-meeting'; nav.className = 'btn-shell-nav';
   nav.title = '会议 · 采集、回放与会议理解'; nav.setAttribute('aria-label', '会议');
@@ -38,7 +46,8 @@ function createMeetingLayout({ document, window, ipcRenderer, closeOtherPanels, 
   }
   function close() {
     if (!host) return;
-    host.hidden = true; meeting.close();
+    // 先让会议页记下各列表的滚动位置，再隐藏外壳（隐藏后读到的 scrollTop 都是 0）。
+    meeting.close(); host.hidden = true;
     document.body.classList.remove('company-meeting-page-open'); nav.classList.remove('active');
     window.removeEventListener('resize', place);
   }

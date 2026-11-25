@@ -9,7 +9,7 @@ class MeetingTools {
     this.m = m; this.tokens = new Map(); this.bridge = new AssistantBridge(r => this.invoke(r), { resolveIdentity: auth => this.tokens.get(auth) || null });
   }
   endpoint(id, question = false) { return path.join(this.m.dir(id), question ? 'meeting-question-tools-endpoint.json' : 'meeting-tools-endpoint.json'); }
-  start() { this.closed=false; return this.ready ||= this.bridge.start().then(() => { if(this.closed){this.bridge.close();return;} for (const id of this.m.ids()) { const m=this.m.load(id); if(m.sessionId)this.bind(m); } }).catch(e => { this.ready=null; throw e; }); }
+  start() { this.closed=false; return this.ready ||= this.bridge.start().then(() => { if(this.closed){this.bridge.close();return;} for (const id of this.m.ids()) { const m=this.m.peek(id); if(m.sessionId)this.bind(m); } }).catch(e => { this.ready=null; throw e; }); }
   bind(m) {
     for (const [sid, question] of [[m.sessionId, false], [m.questionSessionId, true]]) {
     if (!sid) continue;
@@ -21,10 +21,11 @@ class MeetingTools {
     }
   }
   unbind(m) { for (const [token, sid] of [...this.tokens]) if (sid === m.sessionId || sid === m.questionSessionId) this.tokens.delete(token); }
-  entry(sessionId) { const id=this.m.ids().find(id=>{const m=this.m.load(id);return m.sessionId===sessionId||m.questionSessionId===sessionId;}); if(!id)throw new Error('会议会话不存在');return {name:'meeting',command:this.m.deps.nodeExecutable||process.execPath,args:[path.join(__dirname,'meeting-mcp.js')],env:{ELECTRON_RUN_AS_NODE:'1',HUB_MEETING_ENDPOINT:this.endpoint(id,this.m.load(id).questionSessionId===sessionId)}}; }
+  // 会话 → 会议走内存索引（core/company-assistant/meeting.js meetingOfSession），不再逐场解析全部历史会议；会议正本只读（peek）。
+  entry(sessionId) { const id=this.m.meetingOfSession(sessionId); if(!id)throw new Error('会议会话不存在');return {name:'meeting',command:this.m.deps.nodeExecutable||process.execPath,args:[path.join(__dirname,'meeting-mcp.js')],env:{ELECTRON_RUN_AS_NODE:'1',HUB_MEETING_ENDPOINT:this.endpoint(id,this.m.peek(id).questionSessionId===sessionId)}}; }
   async invoke(r) {
-    const id=this.m.ids().find(id=>{const m=this.m.load(id);return m.sessionId===r.callerSessionId||m.questionSessionId===r.callerSessionId;});if(!id||!r.callerSessionId)throw new Error('工具仅供所属会议会话使用');
-    const a=r.arguments||{},m=this.m.load(id);
+    const id=this.m.meetingOfSession(r.callerSessionId);if(!id||!r.callerSessionId)throw new Error('工具仅供所属会议会话使用');
+    const a=r.arguments||{},m=this.m.peek(id);
     if (r.name === 'meeting_index') {
       const index=this.m.recording.index(id),offset=Number(a.offset||0);if(!Number.isInteger(offset)||offset<0)throw new Error('分页位置无效');
       const pages=m.events.filter(e=>e.kind==='slide');

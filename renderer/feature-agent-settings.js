@@ -233,6 +233,9 @@
       const f = state?.features.find(f => f.id === id.split(',')[0]);
       const label = f?.choice ? `⚙ ${state.backends.find(b => b.kind === f.choice.kind)?.label || f.choice.kind}` : '⚙ Agent';
       if (b.textContent !== label) b.textContent = label;
+      // 窄处（如会议准备页右上角）按钮文字可能被省略，悬停时看全名。
+      const tip = `${label.replace(/^⚙\s*/, '')} · 选择这个功能使用的 Agent 与模型`;
+      if (b.title !== tip) b.title = tip;
       for (const f of state?.features.filter(f => id.split(',').includes(f.id)) || []) {
         const header = head.closest('header') || head;
         let hint = header.parentElement.querySelector(`[data-fa-unavailable="${f.id}"]`);

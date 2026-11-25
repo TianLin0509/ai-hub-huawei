@@ -2612,6 +2612,7 @@ sessionAutoSuspendScheduler = createSessionAutoSuspendScheduler({
     loopEngine: global.__loopEngine,
     meetingManager,
     studyBridge,
+    getCompanyMeetings: () => companyAssistantService && companyAssistantService.meetings,
   }),
   // 休眠记录同时写进日志文件（2026-10-16）：以前只打在控制台，公司那边查日志以为 Hub 没有自动休眠。
   logger: (() => {
@@ -3018,6 +3019,8 @@ let appUpdateControllerRef = null;
 function companyHubAdmin() { return null; }
 // 公司版「助理」（2026-10-16）：每日简报 + 对话 + 6 条提醒，只读 WeLink，数据只留在本机 Hub 数据目录。
 let companyAssistantService = null, askAsideService = null;
+// 会议正本合并落盘（core/company-assistant/meeting.js）：正常收尾在 close() 里已刷盘；这里兜底没走完正常收尾的退出，把内存里还没写下的会议同步写盘。
+app.on('will-quit', () => { try { companyAssistantService?.meetings?.flush({ force: true }); } catch (_) { /* 退出时写不了就算了，下次启动按 .tmp/.bak 恢复 */ } });
 const teamAccess = { assert() { throw new Error('该功能未启用'); } };
 // 可选功能（2026-10-30，core/optional-features.js）：助理、论坛、桌宠默认关，设置菜单「可选功能」与各自页面里开关。
 // 关着时助理、论坛的服务照样建好（页面能显示「未开启」和开关），但不调 start()，后台不取数、不开窗口。
@@ -3202,6 +3205,7 @@ lowOverheadController = require('./main/low-overhead-controller.js').createLowOv
   getPetController: () => hubPetController,
   getProtectedSessionIds: () => collectProtectedSessionIds({
     agentLeagueBridge, groupChatDispatcher, loopEngine: global.__loopEngine, meetingManager, studyBridge,
+    getCompanyMeetings: () => companyAssistantService && companyAssistantService.meetings,
   }),
   // 组队负责人与成员由组队流程自己休眠和唤醒，软上限不碰。
   isExemptSession: sessionId => !!(global.__teamService?.teamOfMember?.(sessionId) || global.__teamService?.teamOfLead?.(sessionId)),

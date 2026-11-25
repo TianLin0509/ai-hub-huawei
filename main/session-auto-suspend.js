@@ -35,8 +35,16 @@ function rankMemoryPressureCandidates(items, perTick) {
     .slice(0, Math.max(0, perTick));
 }
 
-function collectProtectedSessionIds({ agentLeagueBridge, groupChatDispatcher, loopEngine, meetingManager, studyBridge } = {}) {
+function collectProtectedSessionIds({ agentLeagueBridge, groupChatDispatcher, loopEngine, meetingManager, studyBridge, getCompanyMeetings } = {}) {
   const protectedIds = new Set();
+
+  // 公司助理「会议」：录制中或有在途理解/问答的会议会话（core/company-assistant/meeting.js protectedSessionIds）。
+  // 助理会话在内存紧张时排最先休眠，不保护的话会议开到一半理解会话被收走，纪要停住。
+  try {
+    const companyMeetings = typeof getCompanyMeetings === 'function' ? getCompanyMeetings() : null;
+    const ids = companyMeetings && typeof companyMeetings.protectedSessionIds === 'function' ? companyMeetings.protectedSessionIds() : null;
+    if (ids && typeof ids[Symbol.iterator] === 'function') for (const sessionId of ids) if (sessionId) protectedIds.add(String(sessionId));
+  } catch {}
 
   try {
     const watchers = groupChatDispatcher

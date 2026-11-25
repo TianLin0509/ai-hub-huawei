@@ -4,10 +4,10 @@
 
 #btn-company-meeting .btn-icon svg{display:block}
 .company-meeting-page-open #session-sidebar,.company-meeting-page-open #toolbar-actions,.company-meeting-page-open #toolbar-crumb,.company-meeting-page-open #btn-expand-sidebar{visibility:hidden}
-.company-meeting-page{position:fixed;right:0;z-index:880;overflow:hidden;background:var(--hw-bg);-webkit-app-region:no-drag}
+.company-meeting-page{position:fixed;right:0;z-index:880;overflow:clip;background:var(--hw-bg);-webkit-app-region:no-drag}
 .company-meeting-page[hidden],.company-meeting[hidden],.company-meeting [hidden]{display:none!important}
 
-.company-meeting{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;color:var(--hw-text-1);background:var(--hw-bg);font-family:var(--hw-font);font-size:var(--hw-fs-14);line-height:var(--hw-lh)}
+.company-meeting{position:absolute;inset:0;display:flex;flex-direction:column;overflow:clip;color:var(--hw-text-1);background:var(--hw-bg);font-family:var(--hw-font);font-size:var(--hw-fs-14);line-height:var(--hw-lh)}
 .company-meeting *{box-sizing:border-box}
 .company-meeting h2,.company-meeting h3,.company-meeting p{margin:0}
 .company-meeting h3{font-size:16px;font-weight:600;color:var(--hw-text-1)}
@@ -54,7 +54,7 @@
 .meeting-session-name>[data-m=source-label]{font-size:var(--hw-fs-13);color:var(--hw-text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px}
 .company-meeting[data-phase=idle] .meeting-session-name{display:none}
 .company-meeting[data-phase=idle] .meeting-topbar{position:absolute;top:24px;right:30px;margin:0;padding:0;min-height:0}
-.company-meeting[data-phase=idle] .meeting-setup-sources-head{padding-right:40px}
+.company-meeting[data-phase=idle] .meeting-setup-sources-head{padding-right:160px}
 .meeting-record-state{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border-radius:var(--hw-r-pill);background:var(--hw-surface);box-shadow:var(--hw-e1);font-size:var(--hw-fs-12);color:var(--hw-text-2);white-space:nowrap;flex:none}
 .meeting-record-state strong{font-weight:600}
 .meeting-record-state>span{font-family:var(--hw-font-num);font-variant-numeric:tabular-nums;font-size:var(--hw-fs-13);color:var(--hw-text-1)}
@@ -150,14 +150,15 @@
 .meeting-topic>span{display:block}.meeting-topic small{display:block;margin-top:3px;color:var(--hw-text-3);font-family:var(--hw-font-num);font-size:var(--hw-fs-12);font-weight:400}
 .meeting-topic:hover{background:var(--hw-surface-2)}
 .meeting-topic.is-active{background:var(--hw-brand-soft);color:var(--hw-brand)}
-.meeting-evidence-pane{grid-area:evid;display:flex;flex-direction:column;overflow:hidden}
+/* 外层一律 overflow:clip：不是滚动容器，脚本（scrollIntoView、focus）也滚不动它，页面不会再被整块顶走（2026-11-24 用户截图）。 */
+.meeting-evidence-pane{grid-area:evid;display:flex;flex-direction:column;overflow:clip}
 
 /* 未开始：左卡准备、右卡选窗口 */
 .company-meeting[data-phase=idle] .meeting-columns{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);grid-template-areas:"evid"}
 .company-meeting[data-phase=idle] .meeting-topic-pane,.company-meeting[data-phase=idle] .meeting-understanding{display:none}
 .company-meeting[data-phase=idle] .meeting-evidence-pane{background:none;box-shadow:none;overflow:visible}
 .meeting-setup-card{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:12px;flex:1;min-height:0}
-.meeting-setup-main{display:flex;flex-direction:column;padding:32px 36px;border-radius:var(--hw-r-lg);background:var(--hw-surface);box-shadow:var(--hw-e1);overflow:hidden;min-height:0}
+.meeting-setup-main{display:flex;flex-direction:column;padding:32px 36px;border-radius:var(--hw-r-lg);background:var(--hw-surface);box-shadow:var(--hw-e1);overflow:clip;min-height:0}
 .meeting-setup-fields{flex:1;min-height:0;overflow:auto;scrollbar-width:thin}
 .meeting-setup-fields>h3{font-size:var(--hw-fs-28);font-weight:600;line-height:1.3}
 .meeting-setup-fields>p{font-size:var(--hw-fs-13);color:var(--hw-text-2);margin:6px 0 26px}
@@ -189,7 +190,7 @@
 .meeting-source-grid:empty::before{content:"还没有可共享的窗口，点「刷新」再找一次";display:block;padding:14px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);font-size:var(--hw-fs-13);color:var(--hw-text-3)}
 
 /* 共享画面区：左画面、右说明，下方一行记重点；会后变回放器 */
-.meeting-viewer{display:grid;grid-template-columns:minmax(0,44%) minmax(0,1fr);gap:12px 16px;padding:16px 18px 14px;border-bottom:1px solid var(--hw-line);flex:none;min-width:0}
+.meeting-viewer{display:grid;grid-template-columns:minmax(0,44%) minmax(0,1fr);gap:12px 16px;padding:16px 18px 14px;border-bottom:1px solid var(--hw-line);flex:none;min-width:0;max-height:calc(100% - 200px);overflow-y:auto;scrollbar-width:thin}
 .meeting-viewer-controls{min-width:0;display:flex;flex-direction:column;gap:10px}
 .meeting-section-heading{display:flex;align-items:center;gap:6px;min-width:0}
 .meeting-section-heading>h3{flex:1;font-size:var(--hw-fs-14);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -216,10 +217,10 @@
 .meeting-stage>[data-m=evidence]:has(.meeting-slide)>.meeting-ppt-results{grid-column:1/-1}
 .meeting-stage>[data-m=evidence] audio{max-width:100%}
 .meeting-stage>[data-m=evidence]>.ca-btn{height:28px;min-height:28px;font-size:var(--hw-fs-12);flex:none;background:var(--hw-surface)}
-.meeting-viewer.is-expanded{grid-template-columns:minmax(0,1fr);gap:10px;max-height:62%;min-height:240px;overflow:auto}
+.meeting-viewer.is-expanded{grid-template-columns:minmax(0,1fr);gap:10px;max-height:min(62%,calc(100% - 200px));overflow:auto}
 .meeting-viewer.is-expanded .meeting-stage{aspect-ratio:auto;height:clamp(180px,30vh,330px);min-height:180px;align-self:stretch}
 .meeting-viewer.is-expanded .meeting-viewer-controls{flex:none}
-.meeting-viewer.is-expanded:has(>.meeting-ppt-results){max-height:75%}
+.meeting-viewer.is-expanded:has(>.meeting-ppt-results){max-height:min(75%,calc(100% - 200px))}
 .meeting-viewer:has(>.meeting-ppt-results) .meeting-stage{height:240px}
 .meeting-viewer>.meeting-ppt-results{grid-column:1/-1}
 .meeting-mark-bar{display:flex;gap:6px;align-items:center;min-width:0}
@@ -241,7 +242,7 @@
 .meeting-flow-heading>h3{flex:none;white-space:nowrap}
 .company-meeting[data-phase=review] .meeting-flow-heading{flex-wrap:wrap;row-gap:6px}
 .company-meeting[data-phase=review] .meeting-flow-heading>span{order:3;flex-basis:100%;width:fit-content;max-width:fit-content}
-.meeting-flow{flex:1;min-height:0;overflow:auto;padding:0 18px 16px;scrollbar-width:thin;scrollbar-gutter:stable;overflow-anchor:none}
+.meeting-flow{flex:1;min-height:160px;overflow:auto;padding:0 18px 16px;scrollbar-width:thin;scrollbar-gutter:stable;overflow-anchor:none}
 .meeting-flow-event{display:grid;grid-template-columns:44px minmax(0,1fr);gap:12px;padding:6px 0}
 .meeting-flow-event>time{font-family:var(--hw-font-num);font-variant-numeric:tabular-nums;font-size:var(--hw-fs-12);color:var(--hw-text-3);text-align:right;padding-top:5px}
 .meeting-flow-content{min-width:0}
@@ -297,7 +298,7 @@
 @media (prefers-reduced-motion:reduce){[data-question-state=running] .meeting-question-dots i,.meeting-question-pending>i{animation:none}}
 
 /* 纪要栏 */
-.meeting-understanding{grid-area:notes;display:flex;flex-direction:column;position:relative;overflow:hidden}
+.meeting-understanding{grid-area:notes;display:flex;flex-direction:column;position:relative;overflow:clip}
 .meeting-summary-heading{display:flex;align-items:center;gap:8px;flex:none;padding:16px 14px 6px 18px}
 .meeting-summary-heading>h3{margin-right:2px}
 .meeting-summary-heading>[data-act=understand]{margin-left:auto}
@@ -405,9 +406,139 @@
   .meeting-levels{display:none}
   .meeting-viewer{grid-template-columns:minmax(0,1fr)}
   .meeting-stage{height:130px;aspect-ratio:auto}
-  .meeting-footer .meeting-agent-state{display:none}
+  .meeting-footer .meeting-agent-state:not([data-state=error]){display:none}
+  .meeting-footer [data-m=progress]{overflow:hidden;text-overflow:ellipsis}
 }
 .meeting-rename-btn{flex:none;border:0;background:transparent;color:var(--hw-text-3);font-size:var(--hw-fs-13);line-height:1.4;cursor:pointer;padding:0 4px;border-radius:var(--hw-r-xs)}
 .meeting-rename-btn:hover{color:var(--hw-brand);background:var(--hw-brand-soft)}
 .meeting-rename-input{flex:none;width:min(360px,40vw);height:28px;padding:0 8px;border:1px solid var(--hw-brand);border-radius:var(--hw-r-xs);background:var(--hw-surface);color:var(--hw-text-1);font:inherit;font-size:var(--hw-fs-16);font-weight:600}
 .meeting-glossary-hints{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px 0 10px;font-size:var(--hw-fs-12);color:var(--hw-text-2)}
+
+/* 提示条：长错误（含「未找到 CodeAgent」帮助卡）不再竖排挤爆整页——文字一行、帮助卡独占第二行，最高 40% 内部滚动（2026-11-24 m4 走查） */
+.meeting-notice{flex-wrap:wrap;align-items:flex-start;max-height:min(180px,40%);overflow:auto;scrollbar-width:thin}
+.meeting-notice>.meeting-message{min-width:min(240px,100%)}
+.meeting-notice>[data-m=agent-help]{order:3;flex:1 0 100%;min-width:0}
+.meeting-notice>[data-m=agent-help]:empty{display:none}
+.meeting-footer-state{overflow:hidden}
+
+/* 画面区单列（放大、会后、窄窗）时：画面按剩余空间收缩，「返回实时 / 收起 / 截图 / 记重点」等控件始终在可视区，不被挤进内部滚动条外 */
+.meeting-viewer.is-expanded,.company-meeting[data-phase=review] .meeting-viewer{display:flex;flex-direction:column}
+.meeting-viewer.is-expanded .meeting-stage{flex:0 1 clamp(180px,30vh,330px);height:auto;min-height:48px;aspect-ratio:auto}
+.company-meeting[data-phase=review] .meeting-stage{flex:0 1 clamp(200px,32vh,290px);height:auto;min-height:48px}
+.meeting-viewer:has(>.meeting-ppt-results) .meeting-stage{flex-basis:240px}
+.meeting-viewer .meeting-viewer-controls,.meeting-viewer>.meeting-ppt-results{flex:none}
+@media(max-width:1100px){
+  .meeting-viewer{display:flex;flex-direction:column}
+  .meeting-stage{flex:0 1 130px;height:auto;min-height:48px}
+}
+.meeting-viewer.is-expanded .meeting-viewer-hint{display:none}
+.meeting-viewer.is-expanded .meeting-viewer-controls{gap:8px}
+@media(max-width:1100px){.meeting-viewer-hint{display:none}.meeting-viewer{gap:8px}.meeting-viewer-controls{gap:8px}}
+@media(max-height:700px){.meeting-viewer{padding-top:10px;padding-bottom:10px}}
+
+/* 提示条：关闭钮始终在第一行可点（内容内滚时也不被滚走） */
+.meeting-notice>.meeting-notice-close{position:sticky;top:0;flex:none}
+/* 准备页右上角「功能使用的 Agent」入口：后端名再长（如「部门 API key（网关）」）也不压「刷新」，超出省略，悬停看全名 */
+.company-meeting .meeting-actions .fa-entry{max-width:120px;overflow:hidden;text-overflow:ellipsis}
+/* ---------- 右栏两个 tab：会议理解 / 助手对话（2026-11-24）。每个 tab 一屏，只有列表自己滚，外层不滚 ---------- */
+.meeting-aside-tabs{display:flex;gap:2px;flex:none;margin:12px 14px 0;padding:3px;border-radius:var(--hw-r-pill);background:var(--hw-surface-3)}
+.meeting-aside-tabs>button{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:4px;height:28px;border:0;border-radius:var(--hw-r-pill);background:none;color:var(--hw-text-2);font-size:var(--hw-fs-13);white-space:nowrap;position:relative;transition:background var(--hw-t-base) var(--hw-ease)}
+.meeting-aside-tabs>button:hover{color:var(--hw-text-1)}
+.meeting-aside-tabs>button[aria-selected=true]{background:var(--hw-surface);color:var(--hw-text-1);font-weight:600;box-shadow:var(--hw-e1)}
+.meeting-aside-tabs small{font-size:var(--hw-fs-12);font-weight:400;color:var(--hw-brand)}
+.meeting-tab-badge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:var(--hw-r-pill);background:var(--hw-red);color:var(--hw-text-on);font-size:11px;font-style:normal;font-weight:600;line-height:1}
+.meeting-aside-panel{display:flex;flex-direction:column;flex:1;min-height:0;overflow:clip}
+.company-meeting[data-phase=review] .meeting-aside-tabs{margin:8px 26px 0;max-width:360px}
+
+/* 助手对话 */
+.meeting-chat-panel{padding-top:8px}
+.meeting-lane-alert{flex:none;margin:0 12px 8px;padding:10px 12px;border-radius:var(--hw-r-item);background:var(--hw-red-soft);color:var(--hw-red);font-size:var(--hw-fs-13);line-height:1.6}
+.meeting-lane-alert>div{display:flex;gap:6px;margin-top:6px}
+.meeting-lane-alert .ca-btn{height:28px;background:var(--hw-surface);color:var(--hw-text-1)}
+.meeting-chat-list{flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;padding:4px 14px 12px;scrollbar-width:thin;overflow-anchor:none;display:flex;flex-direction:column;gap:14px}
+.meeting-chat-empty{padding:18px 4px;color:var(--hw-text-2);font-size:var(--hw-fs-13);line-height:1.7}
+.meeting-chat-empty strong{display:block;font-size:16px;color:var(--hw-text-1);margin-bottom:4px}
+.meeting-chat-card{display:flex;flex-direction:column;gap:6px;min-width:0;font-size:var(--hw-fs-14);line-height:1.65;overflow-wrap:anywhere}
+.meeting-chat-q{align-self:flex-end;max-width:88%;padding:8px 12px;border-radius:var(--hw-r-md) var(--hw-r-md) 4px var(--hw-r-md);background:var(--hw-brand);color:var(--hw-text-on)}
+.meeting-chat-q p{white-space:pre-wrap}
+.meeting-chat-q time{display:block;text-align:right;font-size:11px;opacity:.75;font-family:var(--hw-font-num)}
+.meeting-chat-a{align-self:flex-start;width:100%;padding:10px 12px;border-radius:var(--hw-r-md) var(--hw-r-md) var(--hw-r-md) 4px;background:var(--hw-surface-2);border-left:3px solid var(--hw-line-strong)}
+.meeting-chat-card[data-question-state=done] .meeting-chat-a{border-left-color:var(--hw-brand)}
+.meeting-chat-card[data-question-state=error] .meeting-chat-a{border-left-color:var(--hw-amber)}
+.meeting-chat-card[data-phase=cancelled] .meeting-chat-a{border-left-color:var(--hw-line-strong)}
+.meeting-chat-status{display:flex;align-items:center;flex-wrap:wrap;column-gap:4px;font-size:var(--hw-fs-13);color:var(--hw-text-2)}
+.meeting-chat-status[data-tone=run]{color:var(--hw-brand)}
+.meeting-chat-status[data-tone=done]{color:var(--hw-text-3);font-size:var(--hw-fs-12)}
+.meeting-chat-status[data-tone=error]{color:var(--hw-amber)}
+.meeting-chat-card[data-phase=error] .meeting-chat-status{display:none}
+.meeting-chat-status [data-wait-since]{font-family:var(--hw-font-num);font-variant-numeric:tabular-nums}
+.meeting-chat-hint{display:block;width:100%;font-size:var(--hw-fs-12);color:var(--hw-text-3)}
+.meeting-chat-partial{margin-top:6px;white-space:pre-wrap;color:var(--hw-text-1)}
+.meeting-chat-status[data-tone=run] .meeting-question-dots i{animation:meeting-question-think var(--hw-think-period) infinite}
+.meeting-chat-status[data-tone=run] .meeting-question-dots i:nth-child(2){animation-delay:.2s}
+.meeting-chat-status[data-tone=run] .meeting-question-dots i:nth-child(3){animation-delay:.4s}
+.meeting-chat-a .meeting-answer-body{color:var(--hw-text-1);font-size:var(--hw-fs-14)}
+.meeting-chat-a .meeting-question-tools{flex:1 1 auto;min-width:0;flex-wrap:wrap;justify-content:flex-end}
+.meeting-chat-a{min-width:0}
+.meeting-engine-menu{position:relative}
+.meeting-engine-menu>summary{list-style:none}
+.meeting-engine-menu>summary::-webkit-details-marker{display:none}
+.meeting-engine-list{position:absolute;right:0;bottom:calc(100% + 4px);z-index:3;display:flex;flex-direction:column;gap:2px;min-width:180px;padding:6px;border-radius:var(--hw-r-sm);background:var(--hw-surface);box-shadow:var(--hw-e3)}
+.meeting-engine-list>button{justify-content:flex-start}
+.meeting-chat-history{margin-top:8px;font-size:var(--hw-fs-12);color:var(--hw-text-2)}
+.meeting-chat-history>summary{cursor:pointer}
+.meeting-chat-old{margin-top:6px;padding:6px 10px;border-radius:var(--hw-r-sm);background:var(--hw-surface)}
+.meeting-chat-speed>span:first-child{flex:none;white-space:nowrap}
+.meeting-chat-speed{display:flex;align-items:center;gap:8px;margin:0 4px 6px;font-size:var(--hw-fs-12);color:var(--hw-text-2);min-width:0}
+.meeting-chat-speed>small{color:var(--hw-text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.meeting-chat-speed .meeting-speed button{height:22px}
+@media (prefers-reduced-motion:reduce){.meeting-chat-status[data-tone] .meeting-question-dots i{animation:none}}
+
+/* 看后台：右栏内抽屉，盖住助手对话，不跳页 */
+.meeting-backstage{position:absolute;inset:52px 8px 8px;z-index:5;display:flex;flex-direction:column;gap:8px;padding:12px 14px;border-radius:var(--hw-r-md);background:var(--hw-surface);box-shadow:var(--hw-e3);overflow:clip;font-size:var(--hw-fs-13)}
+.meeting-backstage>header{display:flex;align-items:center;gap:8px;flex:none}
+.meeting-backstage>header strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meeting-backstage-state{flex:none;color:var(--hw-text-2)}
+.meeting-backstage-state[data-tone=run]{color:var(--hw-brand)}.meeting-backstage-state[data-tone=error]{color:var(--hw-amber)}
+.meeting-backstage-note{flex:none;padding:6px 10px;border-radius:var(--hw-r-sm);background:var(--hw-amber-soft);color:var(--hw-amber);font-size:var(--hw-fs-12)}
+.meeting-backstage-facts{flex:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 12px;margin:0;font-size:var(--hw-fs-12)}
+.meeting-backstage-facts>div{display:flex;gap:6px;min-width:0}
+.meeting-backstage-facts dt{flex:none;color:var(--hw-text-3)}
+.meeting-backstage-facts dd{margin:0;min-width:0;overflow-wrap:anywhere;color:var(--hw-text-1)}
+.meeting-backstage-lines{flex:1;min-height:80px;overflow:auto;margin:0;padding:8px 10px;list-style:none;border-radius:var(--hw-r-sm);background:var(--hw-surface-2);font-family:var(--hw-font-mono,Consolas,monospace);font-size:12px;line-height:1.6;scrollbar-width:thin}
+.meeting-backstage-lines li{display:grid;grid-template-columns:64px 64px minmax(0,1fr);gap:6px}
+.meeting-backstage-lines time{color:var(--hw-text-3)}
+.meeting-backstage-lines b{font-weight:500;color:var(--hw-text-2)}
+.meeting-backstage-lines span{white-space:pre-wrap;overflow-wrap:anywhere}
+.meeting-backstage-lines li[data-kind=stderr] span,.meeting-backstage-lines li[data-kind=timeout] span{color:var(--hw-red)}
+.meeting-backstage-und{flex:none;font-size:var(--hw-fs-12);color:var(--hw-text-3)}
+.meeting-backstage-actions{flex:none;display:flex;flex-wrap:wrap;gap:6px}
+.meeting-backstage-actions .ca-btn{height:28px;padding:0 10px;font-size:var(--hw-fs-12)}
+/* 会后大卡切到「助手对话」时收起头部大字，让对话占满一屏；矮窗只留一行标题 */
+.company-meeting[data-phase=review][data-aside-tab=chat] .meeting-review-hero{display:none}
+@media(max-height:760px){.meeting-review-hero .hw-facts{display:none}.meeting-review-hero{padding-top:14px}}
+
+/* 「会议理解」tab 顶部：理解线卡在哪、为什么、能点什么（契约 7.1）；会议 AI 来源一行灰字 */
+.meeting-engine-line{display:block;flex:none;margin:-4px 18px 6px;font-size:var(--hw-fs-12);color:var(--hw-text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meeting-und-alert{flex:none;margin:0 12px 8px;padding:8px 12px;border-radius:var(--hw-r-item);background:var(--hw-amber-soft);color:var(--hw-amber);font-size:var(--hw-fs-13);line-height:1.6;max-height:40%;overflow:auto;scrollbar-width:thin}
+.meeting-und-alert[data-tone=info]{background:var(--hw-surface-2);color:var(--hw-text-2)}
+.meeting-und-alert>small{display:block;color:var(--hw-text-2);font-size:var(--hw-fs-12)}
+.meeting-und-ops{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.meeting-und-ops:empty{display:none}
+.meeting-und-ops .ca-btn,.meeting-review-hero .hw-row .ca-btn{height:28px;background:var(--hw-surface);color:var(--hw-text-1)}
+.meeting-review-hero .hw-tag.red{background:var(--hw-red-soft);color:var(--hw-red)}
+
+/* 看后台抽屉分区（m4 实测：真实长命令把日志与按钮挤出抽屉）：元信息限高自滚、长字段整行单行省略点开看全、日志区占满剩余、按钮条固定在底部 */
+.meeting-backstage-facts{max-height:30%;overflow:auto;scrollbar-width:thin}
+.meeting-backstage-facts>.meeting-backstage-wide{grid-column:1/-1}
+.meeting-backstage-long>summary{list-style:none;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--hw-text-1)}
+.meeting-backstage-long>summary::-webkit-details-marker{display:none}
+.meeting-backstage-long[open]>summary{color:var(--hw-brand)}
+.meeting-backstage-long[open]>summary::before{content:"收起 · "}
+.meeting-backstage-long>div{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--hw-font-mono,Consolas,monospace);font-size:11px}
+/* 日志区先让位：矮窗时日志区压缩（自己滚），底部按钮条永远完整留在抽屉里 */
+.meeting-backstage-lines{flex:1 1 auto;min-height:0}
+.meeting-backstage-actions{flex:none}
+@media(max-height:720px){.meeting-backstage{inset:46px 8px 8px;gap:5px;padding:8px 10px}.meeting-backstage-facts{max-height:24%}.meeting-backstage-actions .ca-btn{height:26px;padding:0 8px}}
+.meeting-backstage>header,.meeting-backstage-state,.meeting-backstage-und,.meeting-backstage-actions,.meeting-backstage>.meeting-question-error,.meeting-backstage>.meeting-backstage-note{flex:none}
+.meeting-backstage-state,.meeting-backstage-und{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meeting-chat-next{margin:4px 0 0;font-size:var(--hw-fs-13);color:var(--hw-text-1)}

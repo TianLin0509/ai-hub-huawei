@@ -16,11 +16,7 @@ const meeting = {
   ],
 };
 const rows = flowEntries(meeting);
-assert.deepEqual(rows.map(r => r.key), ['event-1','event-2','question-during','event-3','question-after','question-legacy']);
-assert.equal(rows[2].at, 10000, 'anchor the question to when it was asked, not its later answer');
-assert.equal(rows[4].afterMeeting, true);
-assert.equal(rows[5].at, null, 'missing timestamps must not masquerade as meeting start');
-assert.equal(rows[2].afterMeeting, false, 'a slow answer does not turn a live question into a post-meeting question');
+assert.deepEqual(rows.map(r => r.key), ['event-1','event-2','event-3'], 'questions live in the right-pane chat tab, not the timeline');
 assert.equal(meetingNavigation(meeting).kind, 'time');
 assert.deepEqual(meetingNavigation(meeting).items.map(t => t.seq), [1,3]);
 const topics = meetingNavigation({ ...meeting, summary: '## 议题\n- 算法取舍 [事件 2]\n- 待补测 [事件 3]\n- 无效引用 [事件 999]\n## 结论\n继续验证 [事件 1]' });
@@ -29,21 +25,23 @@ assert.deepEqual(topics.items, [{title:'算法取舍',seq:2,at:7000},{title:'待
 assert.equal(meetingNavigation({ ...meeting, summary: '## 结论\n继续验证 [事件 1]' }).kind, 'time');
 assert.equal(meetingNavigation({ ...meeting, summary: '## 没有出处的标题\n无法定位' }).kind, 'time');
 assert.deepEqual(flowEntries(null), []);
+// 排队名次搬到 company-meeting-chat.questionQueue（同一套规则）。
+const { questionQueue } = require('../renderer/company-meeting-chat');
 const queueMeeting = { ...meeting, events: [], answers: [
   { id: 'first', state: 'running', queuedAt: 101000 },
   { id: 'second', state: 'queued', queuedAt: 102000 },
   { id: 'third', state: 'queued', queuedAt: 103000 },
 ], questionJob: { questionId: 'first', state: 'running' } };
-const queuePositions = () => flowEntries(queueMeeting).map(q => q.queueAhead);
+const queuePositions = () => { const m = questionQueue(queueMeeting); return queueMeeting.answers.map(q => m.has(q.id) ? m.get(q.id) : null); };
 assert.deepEqual(queuePositions(), [null, 1, 2]);
 queueMeeting.answers[0].state = 'done'; queueMeeting.questionJob = null;
 assert.deepEqual(queuePositions(), [null, 0, 1], 'queued cards update when an earlier answer completes');
 queueMeeting.questionJob = { questionId: 'second', state: 'sending' };
 queueMeeting.answers[0].state = 'queued';
 assert.deepEqual(queuePositions(), [1, 0, 2], 'claimed request stays ahead of an older retried card even before its running snapshot');
-assert.deepEqual(flowEntries(queueMeeting).map(q => q.at), [1000, 2000, 3000], 'queue rank does not move original timeline positions');
 queueMeeting.answers[1].state = 'error'; queueMeeting.questionJob.state = 'error';
 assert.deepEqual(queuePositions(), [0, null, 1], 'failed answers do not count ahead');
+assert.deepEqual(flowEntries(queueMeeting), [], 'no question rows in the timeline');
 const { meetingAsrState } = require('../renderer/company-meeting-asr-state');
 assert.equal(meetingAsrState().setupText, '本地转写：未安装（约 300 MB）');
 assert.equal(meetingAsrState({ ready: true }).setupText, '本地转写：已就绪');

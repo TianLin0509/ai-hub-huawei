@@ -79,17 +79,20 @@ class CompanyAiTasks {
         await new Promise(r=>setTimeout(r,this.d.pollMs||1000));}
     } finally {
       // An auth/start operation can finish after cancellation. Close that owned session too.
-      void creation?.then(()=>this.d.closeSession?.(job.sessionId)).catch(()=>{});
-      try{await bounded(Promise.resolve(this.d.closeSession?.(job.sessionId)));}catch{}
+      void creation?.catch(()=>{}).then(()=>this.d.closeSession?.(job.sessionId)).catch(()=>{});
+      // 不再等会话真正退出（closeOwnedSession 最长等 25 秒），免得每个任务收尾都多占一个并发名额；上一行已在后台关。
     }
   }
   close(){this.closed=true;for(const item of this.queue.splice(0)){item.cancelled=true;void this.finish(item,Error('Hub 已关闭，请重新提交'));}for(const item of this.active)item.cancelled=true;}
 }
-async function closeOwnedSession(manager,id,{prepareSweep=require('./session-close-sweep').prepareCloseSweep}={}) {
+async function closeOwnedSession(manager,id,{prepareSweep=require('./session-close-sweep').prepareCloseSweep,exitWaitMs=25000,pollMs=250}={}) {
   // 关之前记下整棵进程树，关完补杀 MCP 插件等孤儿（2026-11-19，core/session-close-sweep.js）。
   let sweep=null; try { sweep=await prepareSweep(manager,id); } catch { sweep=null; }
   const result=await manager.closeSessionRecoverably(id,{reason:'company-ai-complete',treeSweepArranged:!!sweep}); // 已自己安排补杀，通用补杀不再重复
   if(result?.ok===false && manager.getSession(id)) manager.closeSession(id,{treeSweepArranged:!!sweep});
+  // 有终端的会话是先结束进程、等它退出后才从会话表里移除（休眠看门狗 20 秒后强杀），
+  // 请求完立刻查必然还在（2026-11-24 会议理解轮换卡在 6:22 的根因）：等它退出再判定。
+  for(const until=Date.now()+exitWaitMs;manager.getSession(id)&&Date.now()<until;)await new Promise(r=>setTimeout(r,pollMs));
   if(manager.getSession(id)) throw Error('CodeAgent 任务会话尚未关闭');
   try { sweep?.schedule(); } catch { /* 补杀安排不上不影响关闭 */ }
 }

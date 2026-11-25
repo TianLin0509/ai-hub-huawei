@@ -117,14 +117,15 @@ test('会议上下文独立分区经stdin传递，公开IPC拒绝内部入口且
   assert.deepEqual(received, [{ sessionId: 's1', question: '结论是什么？' }]);
 });
 
-test('会议问题保留一万字上限，材料超限明确拒绝；历史只存原问题', async t => {
+test('会议问题保留一万字上限，超长材料保留开头和末尾裁剪；历史只存原问题', async t => {
   const cwd = tmp(t), calls = [];
   const fx = serviceFixture(t, { sessions: { s1: { kind: 'codeagent', cwd, ccSessionId: CC, currentModel: { id: 'fixture-model' } } }, run: async args => { calls.push(args); return { answer: '回答' }; } });
   const request = fx.svc.askMeeting(meetingRequest({ question: '问'.repeat(10000), context: '材'.repeat(60000) }));
   assert.throws(() => fx.svc.askMeeting(meetingRequest({ question: '问'.repeat(10001) })), /10000/);
-  assert.throws(() => fx.svc.askMeeting(meetingRequest({ context: '材'.repeat(60001) })), /超过 60000.*未发送/);
+  fx.svc.askMeeting(meetingRequest({ questionId: '22222222-2222-4222-8222-222222222222', context: '头' + '材'.repeat(60001) + '尾' }));
   assert.throws(() => fx.svc.askMeeting(meetingRequest({ responseHint: '要'.repeat(1001) })), /答复要求无效/);
   await fx.svc.drain(); assert.equal(calls[0].question.length, 10000); assert.equal(calls[0].context.length, 60000);
+  assert.equal(calls[1].context.length, 60000); assert.ok(calls[1].context.startsWith('头') && calls[1].context.endsWith('尾'));
   assert.equal(fx.svc.list('s1').items.length, 0, 'meeting answers stay in meeting timeline, not the generic drawer');
   const item = fx.svc.meetingResult({ ...meetingRequest(), id: request.id }); assert.equal(item.status, 'done');
   const raw = fs.readFileSync(path.join(fx.dataDir, 'ask-aside/s1.json'), 'utf8'); assert.ok(!raw.includes('材')); assert.equal(item.contextChars, 60000);
