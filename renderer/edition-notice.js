@@ -18,7 +18,7 @@
   .edn-msg.err { color: #c2410c; }
   .edn-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px 18px; }
   .edn-btn { padding: 7px 16px; border-radius: 8px; border: 1px solid var(--border-subtle, #dcd9e6); background: var(--surface-raised, #fff); color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
-  .edn-btn.primary { background: var(--brand, #8b5cf6); border-color: var(--brand, #8b5cf6); color: #fff; font-weight: 600; }
+  .edn-btn.primary { background: var(--brand, #8b5cf6); border-color: var(--brand, #8b5cf6); color: var(--brand-ink, #fff); font-weight: 600; }
   .edn-btn[disabled] { opacity: .6; cursor: default; }
   `;
   const snoozed = () => { try { return Date.now() < Number(localStorage.getItem(SNOOZE_KEY) || 0); } catch { return false; } };

@@ -439,6 +439,8 @@
 .config-modal-header h2 { margin: 0; font-size: 18px; font-weight: 600; }
 .config-modal-close { background: transparent; border: 0; color: var(--fg-muted); font-size: 20px; cursor: pointer; padding: 4px 8px; border-radius: var(--radius-xs); }
 .config-modal-close:hover { color: var(--fg-strong); background: rgba(var(--rgb-overlay), 0.08); }
+.config-modal-close:focus { outline: none; }
+.config-modal-close:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .config-modal-body { padding: 16px 24px 24px; }
 .config-modal-body .hidden { display: none !important; }
 .config-hint { color: var(--fg-muted); font-size: 12px; margin: 0 0 16px; line-height: 1.5; }
@@ -447,8 +449,8 @@
 .config-reading-title { margin-top: 18px; }
 .config-reading-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .config-reading-grid .config-field { margin-bottom: 4px; }
-.config-reading-grid output { float: right; color: var(--link-hover); font-size: 12px; font-variant-numeric: tabular-nums; }
-.config-reading-grid input[type="range"] { padding: 7px 0; accent-color: #58a6ff; cursor: pointer; }
+.config-reading-grid output { float: right; color: var(--brand-text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.config-reading-grid input[type="range"] { padding: 7px 0; accent-color: var(--brand); cursor: pointer; }
 .config-reading-note { margin: 4px 0 18px; color: var(--fg-muted); font-size: 11.5px; line-height: 1.55; }
 /* 桌宠 / 桌面回执保存没成功时的原因（renderer/hub-pet/hub-settings.js，2026-11-21） */
 .config-reading-note.config-save-error { color: var(--danger, #c0392b); }
@@ -458,20 +460,20 @@
 .config-operations-title { margin-top: 18px; }
 .config-operations-card { margin-bottom: 18px; padding: 12px; border: 1px solid rgba(var(--rgb-info), 0.22); border-radius: var(--radius-md); background: linear-gradient(135deg, rgba(var(--rgb-info), 0.06), var(--surface-raised) 55%); }
 .config-operations-card .config-reading-note { margin-bottom: 0; }
-.config-operations-card code { color: var(--link-hover); font: 10.5px/1.4 Consolas, monospace; }
+.config-operations-card code { padding: 0 3px; border-radius: var(--radius-xs); background: rgba(var(--rgb-overlay), 0.06); color: var(--fg-default); font: 10.5px/1.4 Consolas, monospace; }
 .config-toggle-row { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 13px; color: var(--fg-strong); cursor: pointer; }
-.config-toggle-row input { width: auto; margin: 3px 0 0; accent-color: #3fb950; }
+.config-toggle-row input { width: auto; margin: 3px 0 0; accent-color: var(--brand); }
 .config-toggle-row span { display: grid; gap: 3px; }
 .config-toggle-row strong { font-size: 13px; font-weight: 650; }
 .config-toggle-row small { color: var(--fg-muted); font-size: 11.5px; line-height: 1.45; }
 .config-secret-row { display: flex; align-items: stretch; gap: 8px; }
 .config-secret-row input { min-width: 0; flex: 1; }
-.config-test-btn { flex: 0 0 auto; padding: 0 12px; border: 1px solid rgba(var(--rgb-info), 0.42); border-radius: var(--radius-sm); background: rgba(var(--rgb-info), 0.12); color: var(--link-hover); font-size: 12px; font-weight: 600; cursor: pointer; }
-.config-test-btn:hover { background: rgba(var(--rgb-info), 0.20); color: var(--fg-strong); }
+.config-test-btn { flex: 0 0 auto; padding: 0 12px; border: 1px solid rgba(var(--rgb-brand), 0.42); border-radius: var(--radius-sm); background: rgba(var(--rgb-brand), 0.10); color: var(--brand-text); font-size: 12px; font-weight: 600; cursor: pointer; }
+.config-test-btn:hover { background: rgba(var(--rgb-brand), 0.18); color: var(--fg-strong); }
 .config-test-btn:disabled { opacity: 0.55; cursor: wait; }
 .config-check-grid { display: grid; gap: 8px; margin: 8px 0 10px; }
 .config-check-grid label { display: flex; align-items: center; gap: 7px; color: var(--fg-default); font-size: 12px; cursor: pointer; }
-.config-check-grid input { margin: 0; accent-color: #58a6ff; }
+.config-check-grid input { margin: 0; accent-color: var(--brand); }
 .config-notification-status { min-height: 0; margin: 8px 0 10px; padding: 7px 9px; border-radius: var(--radius-sm); font-size: 12px; line-height: 1.4; }
 .config-notification-status:empty { display: none; }
 .config-notification-status.working { background: rgba(var(--rgb-info), 0.10); color: var(--link-hover); }
@@ -517,8 +519,13 @@
 .config-note.warning { border-color: rgba(var(--rgb-warning), 0.35); background: rgba(var(--rgb-warning), 0.10); color: var(--mark-yellow); }
 .config-modal-actions { display: flex; gap: 8px; margin-top: 20px; }
 .config-btn { padding: 8px 20px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: background 0.15s; }
-.config-btn-save { background: #238636; color: var(--fg-inverse); }
-.config-btn-save:hover { background: #2ea043; }
+.config-btn-save { background: var(--brand); color: var(--brand-ink); }
+.config-btn-save:hover { background: var(--brand-hover); }
+/* 「账号登录与接入配置 → 权限」是次要跳转：描边按钮，和上方「管理共享」「配置接口」同一层级 */
+#btn-config-accounts { background: transparent; border: 1px solid var(--border-mid); color: var(--fg-default); }
+#btn-config-accounts:hover { background: rgba(var(--rgb-overlay), 0.06); color: var(--fg-strong); }
+.config-btn:focus { outline: none; }
+.config-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .config-btn-cancel { background: var(--surface-overlay); color: var(--fg-default); }
 .config-btn-cancel:hover { background: var(--surface-overlay); }
 .config-save-msg { margin-top: 12px; font-size: 12px; padding: 6px 10px; border-radius: var(--radius-xs); }

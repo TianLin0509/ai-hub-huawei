@@ -14,6 +14,11 @@
 @import url('./styles/rail.css');
 @import url('./styles/sidebar-v2.css');
 
+/* 原生勾选框、单选、滑块、进度条统一跟主题强调色（2026-11-26 主题错配 #42）；:where() 不加权重，个别控件仍可自行覆盖。 */
+:where(input[type="checkbox"], input[type="radio"], input[type="range"], progress) { accent-color: var(--brand); }
+/* 键盘焦点环：浏览器默认的亮橙/纯白框换成主题强调色描边，只在键盘聚焦（:focus-visible）时出现（存疑 #2 弹窗关闭按钮）；零权重，已有专门写法的控件不受影响。 */
+:where(button, [role="button"], a[href], summary):focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
 /* Native interaction cards sit above the composer; they do not resize xterm. */
 .native-card-send-error, .native-draft-error { color: #f28b82; padding: 6px 10px; font-size: 12px; }
 .codex-native-controls {

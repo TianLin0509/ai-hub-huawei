@@ -33,7 +33,7 @@
 .dr-protected { padding: 9px 0; font-size: 12px; color: var(--fg-muted); }
 .dr-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px 14px; border-top: 1px solid var(--border-subtle); color: var(--fg-muted); font-size: 12px; }
 .dr-primary,.dr-secondary { min-height: 32px; padding: 0 13px; border-radius: 7px; cursor: pointer; font: inherit; }
-.dr-primary { border: 0; background: var(--brand); color: #fff; font-weight: 600; }
+.dr-primary { border: 0; background: var(--brand); color: var(--brand-ink, #fff); font-weight: 600; }
 .dr-primary:disabled { opacity: .45; cursor: default; }
 .dr-secondary { border: 1px solid var(--border-subtle); background: transparent; color: var(--fg-default); }
 .dr-confirm-item { padding: 10px 0; border-top: 1px solid var(--border-subtle); }

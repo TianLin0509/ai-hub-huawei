@@ -112,3 +112,8 @@
 .msg-overlay .reply-segment + .reply-segment { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
 .msg-overlay .reply-stamp { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 11px; line-height: 1.4; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .msg-overlay .reply-stamp-latest { padding: 0 6px; border-radius: 8px; background: var(--brand-tint); color: var(--brand-text); font-weight: 600; }
+
+/* 2026-11-26 主题审视：用户头像是白底的应用图标，深色主题里是一块直角亮白补丁。
+   深色下收成圆角图标块、略压亮度，读作「应用图标」而不是没换皮的白块。 */
+:root:is([data-theme='dark'], [data-theme='frost']) .turn-avatar.av-user img,
+:root:is([data-theme='dark'], [data-theme='frost']) .mr-gc-avatar-user img { border-radius: 7px; filter: brightness(.86); }

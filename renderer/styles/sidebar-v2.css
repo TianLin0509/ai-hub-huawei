@@ -72,7 +72,7 @@
 .hub-name-error { min-height: 18px; margin: 8px 0; color: var(--mark-red, #a52828); font-size: 12px; line-height: 1.5; }
 .hub-name-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .hub-name-actions button { padding: 6px 14px; border: 1px solid var(--border-subtle, #e4e4ea); border-radius: 5px; background: var(--bg-secondary, #f5f5f7); color: inherit; cursor: pointer; font: inherit; font-size: 12px; }
-.hub-name-actions button.primary { background: var(--brand, #3478f6); color: #fff; border-color: var(--brand, #3478f6); }
+.hub-name-actions button.primary { background: var(--brand, #3478f6); color: var(--brand-ink, #fff); border-color: var(--brand, #3478f6); }
 .hub-name-actions button:disabled { opacity: .55; cursor: wait; }
 #session-list .session-sec-header {
   display: flex; align-items: center; gap: 6px; margin: 0;

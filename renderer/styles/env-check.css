@@ -19,6 +19,8 @@
 .ec-btn.primary { background: var(--cta-bg, var(--brand, #3478f6)); border-color: var(--cta-border, var(--brand, #3478f6)); color: var(--cta-fg, #fff); font-weight: 600; }
 .ec-btn.primary:hover { background: var(--cta-bg-hover, var(--brand, #3478f6)); }
 .ec-btn:disabled { opacity: .55; cursor: default; }
+/* 2026-11-26 主题审视：主按钮禁用时只压透明度，深色主题里成了「深字配浑浊暗底」读不出；改成中性禁用样式。 */
+.ec-btn.primary:disabled { opacity: 1; background: var(--surface-sunken, #f4f4f8); border-color: var(--border-mid, #dcd9e6); color: var(--fg-muted, #6b7080); font-weight: 500; }
 .ec-close { border: 0; background: transparent; color: var(--fg-muted, #6b7080); font-size: 18px; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
 .ec-close:hover { background: var(--surface-sunken, rgba(0, 0, 0, .05)); }
 

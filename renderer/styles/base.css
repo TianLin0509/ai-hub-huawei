@@ -290,8 +290,8 @@
 
   --fg-strong: #262624;
   --fg-default: #3c3a35;
-  --fg-muted: #6f6b60;
-  --fg-faint: #7d7768;
+  --fg-muted: #615d54;
+  --fg-faint: #706b5e; /* 2026-11-26 主题审视：说明文字在本主题各层底上 ≥4.5（原值只有 2.4–3.8，冷白/深色在 ui-polish 已调，其余四套漏了） */
 
   --brand: #c15f3c;
   --brand-hover: #a94f30;
@@ -299,8 +299,8 @@
   --brand-tint: #f6efe6;
   --brand-tint-border: #e6d9c8;
   --brand-glow: rgba(193, 95, 60, 0.35);
-  --link: #1b5fa8;
-  --link-hover: #14498a;
+  --link: #a0461f; /* 2026-11-26：链接跟陶土强调色（原冷蓝与暖米主题串色），米底对比 5.9 */
+  --link-hover: #7e3416;
 
   --status-success: #3f7d54;
   --status-warning: #a8672b;
@@ -457,8 +457,8 @@
 
   --fg-strong: #18181b;
   --fg-default: #33333a;
-  --fg-muted: #6b6b76;
-  --fg-faint: #86868f;
+  --fg-muted: #585861;
+  --fg-faint: #67676e; /* 2026-11-26 主题审视：说明文字在本主题各层底上 ≥4.5（原值只有 2.4–3.8，冷白/深色在 ui-polish 已调，其余四套漏了） */
 
   /* 紫在白底上容易显廉价，比深色下的 #8b5cf6 压深一档 */
   --brand: #7c3aed;
@@ -467,8 +467,8 @@
   --brand-tint: #f4efff;
   --brand-tint-border: #e0d4fb;
   --brand-glow: rgba(124, 58, 237, 0.35);
-  --link: #2563eb;
-  --link-hover: #1d4ed8;
+  --link: #6d28d9; /* 2026-11-26：链接跟紫色强调色（原亮蓝串色），浅底对比 6.6 */
+  --link-hover: #5b21b6;
 
   --status-success: #15803d;
   --status-warning: #b45309;
@@ -537,8 +537,8 @@
 
   --fg-strong: #1f2328;
   --fg-default: #353b42;
-  --fg-muted: #5f6a75;
-  --fg-faint: #7c8590;
+  --fg-muted: #535c66;
+  --fg-faint: #636a73; /* 2026-11-26 主题审视：说明文字在本主题各层底上 ≥4.5（原值只有 2.4–3.8，冷白/深色在 ui-polish 已调，其余四套漏了） */
 
   --brand: #3b6fe0;
   --brand-hover: #2f5cc0;
@@ -629,9 +629,10 @@
   --fg-default: #e8ecf2;
   /* 次要文字原 #7f8a9a 在输入槽与选中浅底上只有 4.2，提到 #8a94a3（各层底上都 ≥4.7） */
   --fg-muted: #8a94a3;
-  --fg-faint: #4d5665;
+  --fg-faint: #7b8594; /* 2026-11-26 主题审视：说明文字在本主题各层底上 ≥4.5（原值只有 2.4–3.8，冷白/深色在 ui-polish 已调，其余四套漏了） */
 
   --brand: #6d8dff;
+  --brand-ink: #0f1319; /* 2026-11-26：冷杉强调蓝偏亮，白字只有 3.0；强调色上的字改用画布深色（与 --hw-text-on 一致） */
   --brand-hover: #7c98ff;
   --brand-text: #c9d5ff;
   --brand-tint: rgba(109, 141, 255, 0.14);

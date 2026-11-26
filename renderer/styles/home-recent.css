@@ -23,4 +23,4 @@
 .sh-group dd { margin: 0; font-size: 13px; color: var(--fg-strong); }
 .sh-group kbd { padding: 1px 6px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--surface-canvas); color: var(--fg-strong); font: inherit; font-size: 12px; }
 .attention-jump { margin-left: 8px; padding: 1px 10px; border: 0; border-radius: 999px; background: var(--brand-tint); color: var(--brand); font: inherit; font-size: 12px; line-height: 20px; cursor: pointer; white-space: nowrap; }
-.attention-jump:hover { background: var(--brand); color: #fff; }
+.attention-jump:hover { background: var(--brand); color: var(--brand-ink, #fff); }

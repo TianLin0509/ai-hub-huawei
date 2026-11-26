@@ -256,7 +256,7 @@
   text-align: left;
   transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
 }
-.launch-center-resume-option:hover { border-color: rgba(131, 159, 255, .54); background: var(--surface-overlay); color: var(--fg-strong); }
+.launch-center-resume-option:hover { border-color: rgba(var(--rgb-brand), .54); background: var(--surface-overlay); color: var(--fg-strong); }
 .launch-center-resume-option:disabled { cursor: wait; opacity: .65; }
 .launch-center-resume-option .ai-logo { margin: 0; }
 .launch-center-resume-copy strong,
@@ -279,9 +279,9 @@
 .new-session-menu .session-workspace-choice.selected,
 .new-session-menu .session-recommended-item.selected,
 .new-session-menu .session-recent-item.selected {
-  border-color: rgba(130, 158, 255, .78);
-  background: rgba(130, 158, 255, .11);
-  box-shadow: inset 0 0 0 1px rgba(130, 158, 255, .07);
+  border-color: rgba(var(--rgb-brand), .78);
+  background: rgba(var(--rgb-brand), .11);
+  box-shadow: inset 0 0 0 1px rgba(var(--rgb-brand), .07);
 }
 .new-session-menu .session-workspace-choice svg { stroke: var(--brand-text); }
 .new-session-menu .session-create-footer {
@@ -298,14 +298,14 @@
 
 /* The embedded group configurator keeps the same visual language. */
 .mcm-create.mcm-primary { border-color: #eceee9 !important; background: #eceee9 !important; color: #151719 !important; }
-.mcm-scene-choice.selected { border-color: #829eff !important; background: rgba(130, 158, 255, .11) !important; }
+.mcm-scene-choice.selected { border-color: var(--brand, #829eff) !important; background: var(--brand-tint, rgba(130, 158, 255, .11)) !important; }
 
 .btn-new-session:focus-visible,
 .btn-shell-nav:focus-visible,
 .launch-center-intent:focus-visible,
 .launch-center-resume-option:focus-visible,
 .launch-center-secondary:focus-visible {
-  outline: 2px solid #8fa6ff;
+  outline: 2px solid var(--brand, #8fa6ff);
   outline-offset: 2px;
 }
 
@@ -388,7 +388,7 @@
 .new-session-menu .session-workspace-guard-toggle[hidden] { display: none; }
 .new-session-menu .session-workspace-guard-toggle input { margin: 0; }
 .new-session-menu .session-workspace-guard-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary, #6b7280); }
-.new-session-menu .session-workspace-guard-note[data-tone="warn"] { color: #b45309; }
+.new-session-menu .session-workspace-guard-note[data-tone="warn"] { color: var(--status-warning, #b45309); }
 .new-session-menu .session-workspace-choice { min-width: 0; min-height: 86px; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; padding: 12px 10px; }
 .new-session-menu .session-workspace-choice svg { width: 20px; height: 20px; }
 .new-session-menu .session-workspace-choice strong { font-size: 12px; line-height: 20px; }

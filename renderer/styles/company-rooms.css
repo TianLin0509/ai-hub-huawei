@@ -55,6 +55,9 @@
 .cr-banner { display:flex; align-items:center; gap:var(--hw-sp-4); margin:16px 28px 0; padding:12px 16px; border-radius:var(--hw-r-item); background:var(--hw-brand-soft); color:var(--hw-text-1); font-size:var(--hw-fs-13); }
 .cr-banner[data-tone="warn"] { background:var(--hw-amber-soft); }
 .cr-banner > span { flex:1; min-width:0; overflow-wrap:anywhere; }
+/* 横幅底就是浅强调色，次按钮的浅灰底贴上去看不出边界：改卡片底 + 强调色细描边（主题错配 #36） */
+.cr-banner .cr-btn-sec { background:var(--hw-surface); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--hw-brand) 38%,transparent); }
+.cr-banner .cr-btn-sec:hover { background:color-mix(in srgb,var(--hw-surface),var(--hw-brand) 8%); }
 .cr-message { margin:12px 28px 0; font-size:var(--hw-fs-13); color:var(--hw-text-2); overflow-wrap:anywhere; }
 .cr-message:empty { display:none; }
 .cr-footer { flex:none; display:flex; align-items:center; gap:var(--hw-sp-3); padding:14px 28px 18px; border-top:1px solid var(--hw-line); }

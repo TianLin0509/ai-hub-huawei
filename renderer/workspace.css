@@ -360,7 +360,7 @@
   text-decoration: underline dotted; text-underline-offset: 2px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left;
 }
-.session-root-edit:hover, .session-root-edit:focus-visible { color: #3478f6; background: rgba(52, 120, 246, .08); }
+.session-root-edit:hover, .session-root-edit:focus-visible { color: var(--link); background: rgba(var(--rgb-brand), .08); }
 .session-root-edit:disabled { cursor: default; text-decoration: none; }
 .session-root-info { flex: 0 0 auto; color: var(--text-muted); font-size: 11px; cursor: help; }
 .session-root-disk { margin: 0; color: #b4690e; font-size: 11px; }
@@ -404,7 +404,7 @@
 .session-create-cancel:focus-visible,
 .session-create-submit:focus-visible,
 .mcm-workspace-button:focus-visible {
-  outline: 2px solid var(--link);
+  outline: 2px solid var(--brand, var(--link));
   outline-offset: 2px;
 }
 

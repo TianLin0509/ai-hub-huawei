@@ -5504,7 +5504,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   attachBtn.className = 'composer-chip composer-chip-icon composer-attach';
   attachBtn.title = '添加附件';
   attachBtn.setAttribute('aria-label', '添加附件');
-  attachBtn.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5 12.5 20a5 5 0 0 1-7-7l8.5-8.5a3.5 3.5 0 0 1 5 5L10.5 18"/></svg>';
+  attachBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5 12.5 20a5 5 0 0 1-7-7l8.5-8.5a3.5 3.5 0 0 1 5 5L10.5 18"/></svg>';
   attachBtn.hidden = false;
 
   // 模型 chip：不重造选择器，直接把现有的挂载函数接到它上面。

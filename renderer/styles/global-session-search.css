@@ -182,8 +182,8 @@
 .session-search-load-more {display:block;margin:15px auto;}
 .session-search-new-results {font-size:10px;}
 .session-search-empty,.session-search-preview-empty {display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;min-height:200px;padding:32px;text-align:center;color:#95849f;}
-.session-search-empty svg,.session-search-preview-empty svg {width:33px;height:33px;color:#b4a0c6;}
-.session-search-empty strong,.session-search-preview-empty strong {font-size:15px;font-weight:500;color:#7c648e;}
+.session-search-empty svg,.session-search-preview-empty svg {width:33px;height:33px;color:var(--accent-blue);} /* 加载圈跟面板强调色：独立弹窗里是紫，嵌进工作台时 --accent-blue 换成主题强调色（主题错配 #38） */
+.session-search-empty strong,.session-search-preview-empty strong {font-size:15px;font-weight:500;color:var(--text-secondary);}
 .session-search-empty span,.session-search-preview-empty span {font-size:12px;line-height:1.75;max-width:360px;overflow-wrap:anywhere;}
 .session-search-empty.error strong {color:#af5366;}
 .session-search-empty.busy svg {animation:session-search-pulse 1.2s infinite;}

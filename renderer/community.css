@@ -17,7 +17,7 @@
 .api-gw { margin:4px 0 8px; }
 .api-gw-line { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--fg-muted,#5d6474); }
 .api-gw-dot { width:7px; height:7px; border-radius:50%; background:#15803d; display:inline-block; }
-#community-setup #api-gateway-start .api-gw-link {border:0 !important; background:none !important; padding:0 2px !important; color:var(--accent,#2563eb) !important; cursor:pointer !important; font:inherit !important; }
+#community-setup #api-gateway-start .api-gw-link {border:0 !important; background:none !important; padding:0 2px !important; color:var(--brand) !important; cursor:pointer !important; font:inherit !important; }
 .api-gw-card { border:1px solid var(--border-subtle,#d9e0e8); border-radius:10px; padding:14px 16px; margin:6px 0; max-width:620px; }
 .api-gw-card.rec { border-color:#b9cdfd; background:#fbfcff; }
 .api-gw-card h3 { font-size:15px; margin:0 0 4px; display:flex; align-items:center; gap:8px; }
@@ -93,8 +93,7 @@
 :root:is([data-theme='dark'],[data-theme='frost']) .api-gw-card.rec { background:var(--hw-surface-2); border-color:var(--hw-brand); }
 :root:is([data-theme='dark'],[data-theme='frost']) .api-gw-card input { background:var(--hw-surface-3); border-color:var(--hw-line-strong); color:var(--hw-text-1); }
 :root:is([data-theme='dark'],[data-theme='frost']) .api-gw-card input[readonly] { background:var(--hw-surface-2); color:var(--hw-text-2); }
-/* 「用 API key 开始」的固定蓝 #2f6bff 在深底上只有 3.9，深色主题改用本主题的链接色 */
-:root:is([data-theme='dark'],[data-theme='frost']) #community-setup #api-gateway-start .api-gw-link { color:var(--link) !important; }
+/* 「用 API key 开始」链接与同行「问问 Hub」一样用本主题强调色（2026-11-26 主题错配 #13；原来写死蓝、深色再单独改链接色） */
 :root:is([data-theme='dark'],[data-theme='frost']) .api-gw-tag { background:var(--hw-brand-soft); color:var(--hw-brand); }
 :root:is([data-theme='dark'],[data-theme='frost']) .api-gw-tag.gray { background:var(--hw-surface-3); color:var(--hw-text-2); }
 :root:is([data-theme='dark'],[data-theme='frost']) #community-setup #api-gateway-start .api-gw-actions button:not(.primary), :root:is([data-theme='dark'],[data-theme='frost']) #community-setup #api-gateway-start .api-gw-err button, :root:is([data-theme='dark'],[data-theme='frost']) #community-setup #api-gateway-start .api-gw-models button { background:var(--hw-surface-3) !important; border-color:var(--hw-line-strong) !important; color:var(--hw-text-1) !important; }

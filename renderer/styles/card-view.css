@@ -1826,3 +1826,13 @@
 .msg-overlay .turn-card.user.team-notice[data-chat-style='message'] .turn-head { margin: 0; flex-wrap: nowrap; }
 .msg-overlay .turn-card.user.team-notice[data-chat-style='message'] .chat-message-bubble { flex: 1 1 auto; min-width: 0; padding: 0; border: 0; border-radius: var(--hw-r-xs); background: var(--hw-surface-2); box-shadow: none; }
 .msg-overlay .turn-card.user.team-notice[data-chat-style='message']:has(.team-notice-fold[open]) .turn-content { align-items: stretch; }
+
+/* 2026-11-26 主题审视：卡片视图盖在终端上，但比终端容器矮 4px；暖米/紫留白/灰白三套的终端恒深，
+   底边就露出一条黑横条（冷白的终端是浅色才没显出来）。卡片视图下终端容器不铺底，露出的是面板自己的底色。 */
+#terminal-panel.card-view-active > .terminal-container { background: transparent; }
+/* 2026-11-26 主题审视：正文里的普通链接没设颜色，落回浏览器默认深蓝：深色主题里暗蓝配深底看不清，暖米/紫主题里串色。统一走主题链接色。 */
+.turn-body a:not(.rt-file-link), .cb-markdown a { color: var(--link); }
+.turn-body a:not(.rt-file-link):hover, .cb-markdown a:hover { color: var(--link-hover, var(--link)); }
+
+/* 2026-11-26 主题适配：PowerShell、pi 的官方图标自带深色方底，深色主题里贴在深色卡片上看不出轮廓，加一圈淡描边 */
+:root:is([data-theme='dark'], [data-theme='frost']) :is(.logo-powershell, .logo-pi) { box-shadow: 0 0 0 1px rgba(var(--rgb-overlay, 255, 255, 255), .22); }

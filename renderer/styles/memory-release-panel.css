@@ -40,7 +40,7 @@
 .mr-empty { padding: 10px 0; border-top: 1px solid var(--border-subtle); color: var(--fg-muted); font-size: 12px; }
 .memory-release-panel > .mr-empty { padding: 18px 16px; border: 0; }
 .mr-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 16px 14px; border-top: 1px solid var(--border-subtle); color: var(--fg-muted); font-size: 12px; }
-.mr-primary { height: 30px; padding: 0 14px; border: 0; border-radius: 7px; background: var(--brand); color: #fff; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.mr-primary { height: 30px; padding: 0 14px; border: 0; border-radius: 7px; background: var(--brand); color: var(--brand-ink, #fff); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
 .mr-primary:disabled { opacity: .45; cursor: default; }
 .mr-secondary { height: 30px; padding: 0 12px; border: 1px solid var(--border-subtle); border-radius: 7px; background: transparent; color: var(--fg-default); font: inherit; cursor: pointer; }
 .mr-lead { margin: 4px 0 10px; color: var(--fg-muted); font-size: 12px; line-height: 1.55; }

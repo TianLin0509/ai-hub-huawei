@@ -42,7 +42,8 @@
 .pf-card-head>span{margin-left:auto;font-size:var(--hw-fs-13);color:var(--hw-text-2)}
 .pf-card-head>span b{color:var(--hw-brand);font-family:var(--hw-font-num)}
 .pf-card-head .pf-link{font-size:var(--hw-fs-13)}
-.pf-link{border:0;background:none;padding:0;color:var(--hw-brand);font:inherit;font-size:var(--hw-fs-12);cursor:pointer}
+/* 小号链接字细，纯强调色在深底上发暗：往正文色掺 25%，深色主题变亮、浅色主题变深，色相不变（主题错配 #35） */
+.pf-link{border:0;background:none;padding:0;color:color-mix(in srgb,var(--hw-brand) 75%,var(--hw-text-1));font:inherit;font-size:var(--hw-fs-12);cursor:pointer}
 .pf-link:hover{text-decoration:underline}
 .pf-link:disabled{color:var(--hw-text-3);cursor:default;text-decoration:none}
 .pf-bar{height:8px;border-radius:var(--hw-r-pill);background:var(--hw-surface-3);overflow:hidden}
@@ -117,11 +118,12 @@
 .pf-pet-num{font-size:var(--hw-fs-12);color:var(--hw-text-2)}
 /* 六个形态留在同一行，沿用主题令牌，避免挤占四页签的一屏布局。 */
 .pf-evolution-title{display:flex;justify-content:space-between;align-items:center;font-size:var(--hw-fs-12);line-height:16px;color:var(--hw-text-2)}
-.pf-evolution-title span{color:var(--hw-brand)}
+.pf-evolution-title span{color:color-mix(in srgb,var(--hw-brand) 75%,var(--hw-text-1))}
 .pf-evolutions{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:3px}
 .pf-evolution{display:flex;flex-direction:column;align-items:center;gap:1px;padding:4px 0;border-radius:var(--hw-r-md);color:var(--hw-text-3);font-size:10px;line-height:14px}
 .pf-evolution b{font-size:var(--hw-fs-12);font-weight:600;white-space:nowrap}
-.pf-evolution-art{display:flex;align-items:center;justify-content:center;width:32px;height:24px;opacity:.35;filter:grayscale(1)}
+/* 未解锁：去色半透明；.35 在深色卡片上会融进底色（主题错配 #21），提到 .55 并加一层随主题的细轮廓 */
+.pf-evolution-art{display:flex;align-items:center;justify-content:center;width:32px;height:24px;opacity:.55;filter:grayscale(1) drop-shadow(0 0 .6px var(--hw-text-2))}
 .pf-evolution-art img{width:100%;height:100%;object-fit:contain}
 .pf-newborn{font-size:32px;font-style:normal;line-height:24px}
 .pf-evolution.on{color:var(--hw-text-1)}

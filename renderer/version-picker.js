@@ -25,15 +25,15 @@
   .vp-cur{display:flex;flex-direction:column}.vp-cur b{font-size:15px}
   .vp-follow{display:flex;align-items:center;gap:8px;margin-left:auto;font-size:13px}
   .vp-close{border:0;background:none;font-size:18px;cursor:pointer;color:var(--fg-muted,#6b7280)}
-  .vp-banner{margin:10px 20px 0;padding:8px 12px;border-radius:6px;font-size:13px;background:rgba(52,120,246,.08);color:var(--fg-default,#1f2329);display:flex;gap:10px;align-items:center}
+  .vp-banner{margin:10px 20px 0;padding:8px 12px;border-radius:6px;font-size:13px;background:rgba(var(--rgb-brand),.08);color:var(--fg-default,#1f2329);display:flex;gap:10px;align-items:center}
   .vp-banner.warn{background:rgba(230,140,20,.12)}
   .vp-body{flex:1;display:grid;grid-template-columns:360px 1fr;min-height:0}
   .vp-list{border-right:1px solid var(--border-subtle,#e5e7eb);display:flex;flex-direction:column;padding:10px 12px;min-height:0}
   .vp-item{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:6px;cursor:pointer;font-size:13px;border:1px solid transparent}
-  .vp-item:hover{background:rgba(52,120,246,.05)}.vp-item.sel{border-color:#3478f6;background:rgba(52,120,246,.08)}
+  .vp-item:hover{background:rgba(var(--rgb-brand),.05)}.vp-item.sel{border-color:var(--brand,#3478f6);background:rgba(var(--rgb-brand),.08)}
   .vp-item b{font-size:14px;min-width:62px}.vp-item small{color:var(--fg-muted,#6b7280)}
-  .vp-tag{font-size:11px;padding:1px 6px;border-radius:9px;background:rgba(52,120,246,.12);color:#3478f6}
-  .vp-tag.cur{background:rgba(40,160,90,.14);color:#1f8a4c}
+  .vp-tag{font-size:11px;padding:1px 6px;border-radius:9px;background:rgba(var(--rgb-brand),.12);color:var(--brand,#3478f6)}
+  .vp-tag.cur{background:rgba(var(--rgb-success),.14);color:var(--status-success,#1f8a4c)}
   .vp-pager{margin-top:auto;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--fg-muted,#6b7280);padding-top:8px}
   html[lang="en"] .vp-pager{gap:8px}html[lang="en"] .vp-pager>span:last-child{white-space:nowrap;flex:none}
   .vp-hidden{font-size:12px;color:var(--fg-muted,#6b7280);margin-top:6px;line-height:1.5}
@@ -44,14 +44,14 @@
   .vp-foot{display:flex;gap:10px;align-items:center;padding:12px 20px;border-top:1px solid var(--border-subtle,#e5e7eb)}
   .vp-foot .vp-msg{font-size:13px;color:var(--fg-muted,#6b7280);margin-right:auto}
   .vp-btn{padding:6px 14px;border-radius:6px;border:1px solid var(--border-subtle,#d0d5dd);background:var(--hw-surface,#fff);color:inherit;cursor:pointer;font-size:13px}
-  .vp-btn.primary{background:#3478f6;border-color:#3478f6;color:#fff}.vp-btn[disabled]{opacity:.5;cursor:default}
+  .vp-btn.primary{background:var(--brand,#3478f6);border-color:var(--brand,#3478f6);color:var(--brand-ink,#fff)}.vp-btn[disabled],.vp-btn.primary[disabled]{background:var(--surface-sunken,#f1f2f4);border-color:var(--border-subtle,#d9dde3);color:var(--fg-faint,#8a919c);cursor:default}
   .vp-empty{margin:auto;text-align:center;font-size:13px;color:var(--fg-muted,#6b7280);line-height:1.8}
   .vp-confirm{position:absolute;inset:0;background:rgba(20,24,31,.28);display:flex;align-items:center;justify-content:center}
   .vp-confirm>div{width:470px;background:var(--hw-surface,#fff);border-radius:10px;padding:18px 20px;box-shadow:0 8px 30px rgba(0,0,0,.18);font-size:13px;line-height:1.7}
   .vp-confirm h3{margin:0 0 8px;font-size:15px}.vp-confirm .vp-row{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
   .vp-dlp{flex:1;min-width:0;margin-right:auto}.vp-dlp .dlp{margin:0}
-  #vp-pinned-chip{position:fixed;right:16px;bottom:14px;z-index:9000;display:flex;gap:8px;align-items:center;padding:6px 8px 6px 12px;border-radius:18px;background:var(--hw-surface,#fff);border:1px solid #3478f6;font:12px "Microsoft YaHei",sans-serif;color:var(--fg-default,#1f2329);box-shadow:0 2px 10px rgba(0,0,0,.08)}
-  #vp-pinned-chip button{border:0;border-radius:12px;padding:3px 10px;background:#3478f6;color:#fff;cursor:pointer;font-size:12px}`;
+  #vp-pinned-chip{position:fixed;right:16px;bottom:14px;z-index:9000;display:flex;gap:8px;align-items:center;padding:6px 8px 6px 12px;border-radius:18px;background:var(--hw-surface,#fff);border:1px solid var(--brand,#3478f6);font:12px "Microsoft YaHei",sans-serif;color:var(--fg-default,#1f2329);box-shadow:0 2px 10px rgba(0,0,0,.08)}
+  #vp-pinned-chip button{border:0;border-radius:12px;padding:3px 10px;background:var(--brand,#3478f6);color:var(--brand-ink,#fff);cursor:pointer;font-size:12px}`;
   function ensureCss() { if (document.getElementById('vp-css')) return; const s = document.createElement('style'); s.id = 'vp-css'; s.textContent = CSS; document.head.appendChild(s); }
 
   const pinned = () => (upd && upd.pinned) || (list && list.pinned) || null;

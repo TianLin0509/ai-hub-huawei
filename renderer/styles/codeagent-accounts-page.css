@@ -24,7 +24,8 @@ svg.caa-i.caa-sm{width:14px;height:14px}svg.caa-i.caa-lg{width:20px;height:20px}
 .caa-btn-primary:hover{background:var(--hw-brand-hover)}
 .caa-btn-secondary{background:var(--hw-surface-3)}.caa-btn-secondary:hover{background:var(--hw-line)}
 .caa-btn-soft{background:var(--hw-brand-soft);color:var(--hw-brand)}.caa-btn-soft:hover{background:var(--hw-brand);color:var(--hw-text-on)}
-.caa-btn-ghost{color:var(--hw-text-2)}.caa-btn-ghost:hover{background:var(--hw-surface-3);color:var(--hw-text-1)}
+/* 幽灵按钮带一圈细描边：深色主题下纯文字按钮看着像禁用（主题错配 #19、#34） */
+.caa-btn-ghost{color:var(--hw-text-1);box-shadow:inset 0 0 0 1px var(--border-mid)}.caa-btn-ghost:hover{background:var(--hw-surface-3);color:var(--hw-text-1)}
 .caa-btn-danger{background:var(--hw-red-soft);color:var(--hw-red)}
 .caa-btn-sm{height:30px;padding:0 12px;font-size:12px;gap:4px}
 .caa-btn-icon{width:32px;height:32px;padding:0;color:var(--hw-text-2)}

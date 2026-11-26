@@ -88,7 +88,7 @@ body.web-roundtable-open #terminal-panel { visibility: hidden; }
 .wrt-btn, .wrt-primary, .wrt-chip, .wrt-card footer button { padding: 5px 12px; border: 1px solid var(--border-mid); border-radius: 6px; background: var(--surface-card); color: var(--fg-default); font: 13px var(--font-sans); cursor: pointer; white-space: nowrap; }
 .wrt-btn:hover, .wrt-chip:hover, .wrt-card footer button:hover { border-color: var(--brand); color: var(--brand-text); }
 .wrt-btn.small { padding: 2px 8px; font-size: 12px; }
-.wrt-primary { border-color: var(--brand); background: var(--brand); color: #fff; font-weight: 600; }
+.wrt-primary { border-color: var(--brand); background: var(--brand); color: var(--brand-ink, #fff); font-weight: 600; }
 .wrt-primary:hover { filter: brightness(1.06); }
 button:disabled.wrt-btn, button:disabled.wrt-primary { opacity: .45; cursor: not-allowed; filter: none; }
 .wrt-icon { width: 30px; height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); font-size: 20px; line-height: 1; cursor: pointer; }

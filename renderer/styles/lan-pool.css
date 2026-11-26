@@ -36,7 +36,7 @@
 /* 引导步骤 */
 .lp-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:0 0 18px;padding:0;list-style:none;counter-reset:lp}
 .lp-steps li{counter-increment:lp;padding:12px 14px;border-radius:var(--hw-r-md,14px);background:var(--hw-surface-2)}
-.lp-steps li::before{content:counter(lp);display:inline-grid;place-items:center;width:20px;height:20px;margin-right:6px;border-radius:50%;background:var(--hw-brand);color:#fff;font-size:12px;font-weight:600}
+.lp-steps li::before{content:counter(lp);display:inline-grid;place-items:center;width:20px;height:20px;margin-right:6px;border-radius:50%;background:var(--hw-brand);color:var(--hw-text-on, #fff);font-size:12px;font-weight:600}
 .lp-steps b{font-size:var(--hw-fs-13,13px)}
 .lp-steps span{display:block;margin-top:6px;color:var(--hw-text-2);font-size:var(--hw-fs-12,12px);line-height:1.5}
 .lp-form{display:grid;gap:12px}

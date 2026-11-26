@@ -22,13 +22,14 @@
     border: 1px solid var(--border-subtle, #dcd9e6); background: var(--surface-sunken, #f6f5fa); color: var(--fg-default, #1f2330); font: inherit; font-size: 13px; }
   .hub-feedback-dialog input.hf-contact { width: 100%; box-sizing: border-box; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-subtle, #dcd9e6);
     background: var(--surface-sunken, #f6f5fa); color: var(--fg-default, #1f2330); font: inherit; font-size: 13px; }
+  .hub-feedback-dialog :is(textarea, input.hf-contact):focus { outline: none; border-color: var(--brand, #3478f6); box-shadow: 0 0 0 3px var(--brand-tint, rgba(52, 120, 246, .14)); }
   .hub-feedback-dialog :is(textarea, input.hf-contact)::placeholder { color: var(--fg-muted, #6b7080); opacity: 1; }
   .hub-feedback-dialog .hf-items { margin: 0; padding-left: 18px; font-size: 12px; color: var(--fg-muted, #6b7080); max-height: 120px; overflow: auto; }
   .hub-feedback-dialog .hf-path { font-family: Consolas, monospace; font-size: 12px; word-break: break-all; user-select: text; }
   .hub-feedback-dialog .hf-outbox { margin-top: 10px; font-size: 12px; line-height: 1.7; }
   .hub-feedback-dialog .hf-outbox .au-btn { margin-left: 8px; }
   #hub-feedback-outbox-marker { flex: none; height: 22px; padding: 0 7px; border: 1px solid var(--border-subtle, #d7dde6); border-radius: 11px; background: transparent;
-    color: var(--warning, #b66a12); font: 500 11px var(--font-sans, 'Microsoft YaHei', sans-serif); white-space: nowrap; cursor: pointer; }
+    color: var(--status-warning, #b66a12); font: 500 11px var(--font-sans, 'Microsoft YaHei', sans-serif); white-space: nowrap; cursor: pointer; }
   #hub-feedback-outbox-marker:hover { background: var(--brand-tint, #eaf2ff); }`;
 
   function ensureDialog() {

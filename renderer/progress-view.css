@@ -44,7 +44,7 @@
 .pg-q { font-weight: 600; color: var(--fg-strong, #222a36); }
 .pg-acts { display: flex; gap: 8px; margin-top: 8px; }
 .pg-btn { font: inherit; font-size: 12px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border-mid, #d8dfe8); background: var(--surface-raised, #fff); color: var(--fg-default, #303b4b); cursor: pointer; }
-.pg-btn.pg-pri { background: var(--brand, #3065bd); border-color: var(--brand, #3065bd); color: #fff; }
+.pg-btn.pg-pri { background: var(--brand, #3065bd); border-color: var(--brand, #3065bd); color: var(--brand-ink, #fff); }
 .pg-links { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-top: 8px; font-size: 12px; color: var(--fg-muted, #637084); }
 .pg-link { font: inherit; border: 0; background: none; padding: 0; color: var(--link, #3065bd); cursor: pointer; }
 .pg-path { overflow-wrap: anywhere; user-select: text; }

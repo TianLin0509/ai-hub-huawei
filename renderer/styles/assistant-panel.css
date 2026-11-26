@@ -32,7 +32,7 @@ body.assistant-session-active .assistant-backend{display:block}
 .assistant-backend-menu button{display:block;width:100%;padding:8px 16px;border:0;border-radius:6px;text-align:left;background:transparent;color:inherit;cursor:pointer}
 .assistant-backend-menu button:hover,.assistant-backend-menu button:focus{background:#edf4ff}
 #terminal-panel.assistant-session .assistant-notifications{flex-shrink:0;white-space:nowrap}
-#terminal-panel.assistant-session .turn-body a{color:#315acb}
+#terminal-panel.assistant-session .turn-body a{color:var(--link, #315acb)}
 #terminal-panel.assistant-session .turn-body{background:transparent}
 #terminal-panel.assistant-session .turn-result-glance-row strong{color:#315acb}
 #terminal-panel.assistant-session .composer{background:#fff;color:#1b2942;border-color:#dfe6f1}

@@ -1,6 +1,6 @@
 {
   "name": "ai-hub-community",
-  "version": "5.6.122",
+  "version": "5.6.123",
   "description": "Local multi-agent desktop workspace using your own AI accounts",
   "main": "main-bootstrap.js",
   "scripts": {

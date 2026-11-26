@@ -20,11 +20,11 @@
   color: var(--fg-muted); cursor: pointer;
 }
 .card-question-nav svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.question-directory-toggle:hover, .question-directory-actions button:not(:disabled):hover { color: var(--fg-default); background: rgba(120, 150, 210, .16); }
+.question-directory-toggle:hover, .question-directory-actions button:not(:disabled):hover { color: var(--fg-default); background: rgba(var(--rgb-overlay), .08); }
 .question-directory-toggle:focus-visible, .question-directory-actions button:focus-visible,
 .card-question-nav-item:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
 .question-directory-actions { display: flex; justify-content: space-between; gap: 5px; border-top: 1px solid var(--border); padding-top: 9px; }
-.question-directory-actions button:disabled { opacity: .3; cursor: default; }
+.question-directory-actions button:disabled { opacity: .45; cursor: default; }
 .card-question-nav-track { width: 100%; height: auto; min-height: 0; flex: 1; gap: 4px; padding: 3px 1px; align-items: stretch; mask-image: none; scroll-snap-type: none; scrollbar-width: thin; }
 .card-question-nav .card-question-nav-item,
 .card-question-nav.dense .card-question-nav-item,

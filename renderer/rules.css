@@ -54,8 +54,9 @@
 .rl-btn { font: inherit; font-size: 13px; padding: 6px 14px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); background: var(--surface-sunken); color: var(--fg-default); cursor: pointer; white-space: nowrap; }
 .rl-btn:hover:not(:disabled) { border-color: var(--border-strong); color: var(--fg-strong); }
 .rl-btn:disabled { opacity: .5; cursor: default; }
-.rl-btn.primary { background: var(--cta-bg, var(--brand)); color: var(--cta-fg, var(--fg-inverse)); border-color: var(--cta-border, transparent); font-weight: 600; }
-.rl-btn.primary:hover:not(:disabled) { background: var(--cta-bg-hover, var(--brand-hover)); color: var(--cta-fg, var(--fg-inverse)); }
+/* 主按钮跟主题强调色；原来借侧栏「启动」的 --cta-*，深色主题下那是奶白药丸，和同页暖金开关不一致（主题错配 #37） */
+.rl-btn.primary { background: var(--brand); color: var(--brand-ink); border-color: transparent; font-weight: 600; }
+.rl-btn.primary:hover:not(:disabled) { background: var(--brand-hover); color: var(--brand-ink); }
 
 .rl-switch { position: relative; width: 46px; height: 26px; flex: none; border-radius: 13px; border: 1px solid var(--border-strong); background: var(--surface-sunken); cursor: pointer; padding: 0; transition: background .15s; }
 .rl-switch .knob { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface-raised); border: 1px solid var(--border-strong); transition: left .15s; }
@@ -72,7 +73,7 @@
 .rl-seg button { font: inherit; font-size: 12px; padding: 4px 12px; border: 0; background: var(--surface-sunken); color: var(--fg-muted); cursor: pointer; }
 .rl-seg button + button { border-left: 1px solid var(--border-subtle); }
 .rl-seg button.on { background: var(--brand); color: var(--hw-text-on, var(--fg-inverse)); }
-.rl-seg button:disabled { opacity: .45; cursor: default; }
+.rl-seg button:disabled { color: var(--fg-faint); cursor: default; }
 
 .rl-doc { font-size: 14px; line-height: 1.75; color: var(--fg-default); max-width: 860px; }
 .rl-doc h1 { font-size: 19px; margin: .2em 0 .6em; color: var(--fg-strong); }

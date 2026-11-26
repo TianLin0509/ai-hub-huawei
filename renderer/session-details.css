@@ -2,8 +2,8 @@
 .session-model-filter { display: flex; align-items: center; gap: 4px; color: var(--text-secondary); font-size: 11px; }
 .session-model-filter select { max-width: 85px; color: var(--text-primary); background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 4px; font: inherit; padding: 3px; }
 #btn-session-details { display: flex; align-items: center; gap: 7px; border: 1px solid var(--border-color); border-radius: 5px; background: transparent; color: var(--text-secondary); padding: 3px 7px; font-family: inherit; font-size: 11px; line-height: 1.4; cursor: pointer; }
-#btn-session-details[aria-pressed="true"] { color: var(--accent-blue); border-color: var(--accent-blue); background: rgba(var(--rgb-info), .08); }
-#btn-session-details:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+#btn-session-details[aria-pressed="true"] { color: var(--brand-text); border-color: var(--brand); background: rgba(var(--rgb-brand), .08); } /* 激活态跟主题强调色，和上方「启动」同色系（主题错配 #16） */
+#btn-session-details:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 #session-list .session-item.slim.has-details { display: block; height: auto; max-height: none; padding-top: 5px; padding-bottom: 5px; }
 #session-list .session-item.slim.has-details > .sl-line1 { display: grid; grid-template-columns: minmax(20px, max-content) minmax(0, 1fr) auto; gap: 6px; min-height: 19px; }
 .sl-details { display: flex; align-items: center; gap: 7px; min-width: 0; margin: 3px 0 0 22px; color: var(--text-secondary); font-size: 10px; line-height: 17px; }

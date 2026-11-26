@@ -59,9 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "检查更新点「立即重启」立刻有反应：按钮马上变「正在重启…」，不再等网络回报；外部脚本借用 Hub 程序时不再被当成另一个 Hub 白等；新版窗口 15 秒没出来给「手动启动」；整次升级约快一倍"
+    "全界面主题适配：6 套主题（冷白/暖米/紫留白/灰白/深色/冷杉）下消除浅色配深色等错配，界面颜色统一跟随主题"
   ],
-  "version": "5.6.122",
+  "version": "5.6.123",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

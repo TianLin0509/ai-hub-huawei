@@ -67,16 +67,19 @@
   .au-sources .failed .au-st { color: #b4472f; }
   .au-sources .downloading .au-st { color: var(--brand, #8b5cf6); }
   .au-msg { padding: 10px 12px; border-radius: 10px; font-size: 12.5px; margin: 8px 0; }
-  .au-msg.ok { background: #ecf7f0; color: #24704a; }
-  .au-msg.bad { background: #fbefec; color: #9b3a24; }
+  .au-msg.ok { background: rgba(var(--rgb-success, 36, 112, 74), .1); color: var(--fg-default, #1f2329); box-shadow: inset 3px 0 0 var(--status-success, #24704a); }
+  .au-msg.bad { background: rgba(var(--rgb-danger, 155, 58, 36), .1); color: var(--fg-default, #1f2329); box-shadow: inset 3px 0 0 var(--status-danger, #9b3a24); }
   .au-msg.info { background: var(--surface-sunken, #f6f5fa); color: var(--fg-muted, #6b7080); }
   .au-msg.warn { background: #fff6e5; color: #8a5a00; }
   .au-wait-list { margin: 4px 0 8px; padding-left: 18px; font-size: 12px; color: var(--fg-muted, #6b7080); }
   .au-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px 18px; border-top: 1px solid var(--border-subtle, #eceaf2); background: var(--surface-raised, #fff); }
   .au-btn { padding: 7px 16px; border-radius: 8px; border: 1px solid var(--border-subtle, #dcd9e6); background: var(--surface-raised, #fff); color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
   .au-btn:hover { background: var(--surface-sunken, #f6f5fa); }
-  .au-btn.primary { background: var(--brand, #8b5cf6); border-color: var(--brand, #8b5cf6); color: #fff; font-weight: 600; }
+  .au-btn.primary { background: var(--brand, #8b5cf6); border-color: var(--brand, #8b5cf6); color: var(--brand-ink, #fff); font-weight: 600; }
   .au-btn.primary:hover { filter: brightness(1.06); }
+  /* theme audit: hide the default focus ring on auto-focused buttons; show a brand-colored ring for keyboard focus only */
+  .app-update-dialog button:focus { outline: none; }
+  .app-update-dialog button:focus-visible { outline: 2px solid var(--brand, #3478f6); outline-offset: 2px; }
   .au-btn:disabled { opacity: .5; cursor: default; }
   #btn-options.update-has-unread .rail-utility-label { position: relative; }
   #btn-options.update-has-unread .rail-utility-label:after { content: ''; position: absolute; top: -1px; right: -8px; width: 6px; height: 6px; background: #ff755c; border-radius: 50%; }

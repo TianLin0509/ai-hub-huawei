@@ -509,3 +509,9 @@
 #meeting-create-modal.mcm-embedded .mcm-footer{padding:14px 20px 0}
 @media(prefers-reduced-motion:reduce){#meeting-create-modal *{animation:none!important;transition:none!important}}
 .mcm-team-tip{margin:0 0 10px;font-size:12px;line-height:1.5;color:var(--hw-text-3,var(--text-dim,var(--fg-muted)))}
+/* 2026-11-26 主题审视：嵌进启动中心后面板底就是 --hw-surface-3/--surface-sunken；紫留白、灰白、暖米三套里
+   输入框、目录卡、成员卡、「添加」按钮和底同色又无边框，整块隐身。补一圈主题细线，冷白/深色观感不变。 */
+#meeting-create-modal .mcm-title-input:not(:focus),
+#meeting-create-modal .mcm-workspace-choice:not(.selected),
+#meeting-create-modal .mcm-slot,
+#meeting-create-modal .mcm-add-member { border: 1px solid var(--hw-line); }

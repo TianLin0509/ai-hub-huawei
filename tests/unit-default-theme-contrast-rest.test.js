@@ -26,5 +26,6 @@ test('默认主题琥珀色作字色 ≥4.5；问问 Hub 与 API key 链接不�
   for (const bg of ['FFFFFF', 'FDF0E3', 'F1F3F5', 'F7F8FA']) assert.ok(ratio(amber, bg) >= 4.5, `${amber} on #${bg}`);
   const community = read('renderer/community.css');
   assert.doesNotMatch(community, /\.community-help-ask \{[^}]*opacity:\.85/);
-  assert.ok(ratio('2563eb', 'f7f8fa') >= 4.5 && community.includes('color:var(--accent,#2563eb) !important'));
+  // 2026-11-26 主题错配 #13：「用 API key 开始」改跟主题强调色（默认主题 #3065bd），与同行「问问 Hub」一致
+  assert.ok(ratio('3065bd', 'f7f8fa') >= 4.5 && community.includes('#api-gateway-start .api-gw-link {border:0 !important; background:none !important; padding:0 2px !important; color:var(--brand) !important;'));
 });

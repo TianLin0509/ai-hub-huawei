@@ -62,7 +62,7 @@
 .composer-scene-popover .cs-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .composer-scene-popover .cs-actions button { border: 1px solid var(--border-subtle); border-radius: 6px; padding: 5px 10px; background: transparent;
   color: inherit; font: inherit; cursor: pointer; }
-.composer-scene-popover .cs-actions .cs-go { background: var(--brand); border-color: var(--brand); color: #fff; }
+.composer-scene-popover .cs-actions .cs-go { background: var(--brand); border-color: var(--brand); color: var(--brand-ink, #fff); }
 
 .composer[data-state='working'] {
   box-shadow:
@@ -444,7 +444,7 @@
 .composer-resend-strip[hidden] { display: none; }
 .composer-resend-strip[data-kind="uncertain"] { border-left-color: var(--hw-amber, #e8780c); }
 .composer-resend-msg { flex: 1; min-width: 0; }
-.composer-resend-btn { flex: none; padding: 3px 12px; border: 0; border-radius: 6px; background: var(--hw-brand, #0a59f7); color: #fff; font-size: 12.5px; cursor: pointer; }
+.composer-resend-btn { flex: none; padding: 3px 12px; border: 0; border-radius: 6px; background: var(--hw-brand, #0a59f7); color: var(--hw-text-on, #fff); font-size: 12.5px; cursor: pointer; }
 .composer-resend-btn:hover { filter: brightness(1.08); }
 .composer-resend-close { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted, #5e6d7e); font-size: 15px; line-height: 22px; cursor: pointer; }
 .composer-resend-close:hover { background: var(--surface-hover, rgba(0,0,0,.06)); }

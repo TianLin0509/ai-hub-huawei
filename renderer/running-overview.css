@@ -1,8 +1,8 @@
 /* 在跑一览（2026-11-20）：侧栏按钮 + 四列只读表。颜色只用主题变量，浅色深色皮肤都跟着走。 */
 :root { --ro-line: var(--border-color, var(--border-subtle, rgba(127, 127, 127, .22))); }
 #btn-running-overview { display: flex; align-items: center; gap: 4px; border: 1px solid var(--ro-line); border-radius: 5px; background: transparent; color: var(--text-secondary); padding: 3px 5px; font-family: inherit; font-size: 11px; line-height: 1.4; cursor: pointer; white-space: nowrap; }
-#btn-running-overview:hover, #btn-running-overview[aria-expanded="true"] { color: var(--accent-blue); border-color: var(--accent-blue); }
-#btn-running-overview:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+#btn-running-overview:hover, #btn-running-overview[aria-expanded="true"] { color: var(--brand-text); border-color: var(--brand); }
+#btn-running-overview:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 #btn-running-overview svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 
 .ro-overlay { position: fixed; inset: 0; z-index: 9990; display: flex; align-items: center; justify-content: center; background: rgba(var(--rgb-scrim), .45); }
