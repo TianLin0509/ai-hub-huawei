@@ -78,7 +78,7 @@ test('公司版外壳目录与启动中心同源：只有部门 key 与公司模
   t.mock.method(require('../core/company-api-config'), 'settings', () => ({ claude: { ...fake, gatewayModels: undefined }, codex: { ...fake, gatewayModels: undefined }, 'deepseek-acp': { ...fake, gatewayModels: undefined } }));
   const none = choice.catalog(dir, { env: { USERPROFILE: dir, CODEX_HOME: dir, CLAUDE_HUB_HOME_DIR: dir }, findCommand: kind => kind === 'codeagent' ? '' : 'fixture' });
   const claude = none.find(b => b.kind === 'claude');
-  assert.equal(claude.available, false); assert.match(claude.reason, /部门 API key/); assert.equal(claude.setup, 'gateway');
+  assert.equal(claude.available, false); assert.match(claude.reason, /部门 API key、自有 API/); assert.equal(claude.setup, 'source');
   assert.equal(claude.models.length, 0);
 });
 test('助理和 PPT 的真实建会话入口分别读取相应功能选型', async t => {

@@ -11,6 +11,7 @@ const {
 } = require('./preview-outline.js');
 const { isBlockingModalOpen } = require('./modal-layer-guard.js');
 const { createPreviewImmersiveController } = require('./preview-immersive.js');
+const { sourceTransition } = require('./preview-return-scroll.js');
 
 // webview 挂掉时 Chromium 只给一个 reason 码。2026-08-29 用户报「预览打不开」，
 // 屏幕上只有 `预览进程异常退出：launch-failed` —— 这句话既不说明发生了什么，也不
@@ -89,6 +90,8 @@ function createPreviewPanelController({
   openPath,
   refitActiveTerminal,
   onReturnToConversation,
+  onLeaveConversation,
+  onConversationShown,
   onCopyFeedback,
   onSelectionContextMenu,
   onBeforeOpen,
@@ -134,6 +137,7 @@ function createPreviewPanelController({
 
   let currentContextKey = null;
   let previewSourcePanel = null;
+  let restoringContext = false;
   let currentPreviewPath = null;
   let previewIsFullscreen = true;
   let previewSplitRatio = 0.5;
@@ -1171,9 +1175,14 @@ function createPreviewPanelController({
     previewSplitterEl.style.display = isSplit ? '' : 'none';
     applySplitWidths(isSplit ? previewSplitRatio : null);
     const src = previewSourcePanel ? document.getElementById(previewSourcePanel) : null;
+    // 对话区被全屏预览藏起前先记下位置；全屏切回分屏、对话区重新露出时回到那里（预览退出回原位）。
+    // 切回带着预览的会话（restoringContext）时沿用最初进入预览时记的位置，不重记。
+    const move = src ? sourceTransition({ wasHidden: src.style.display === 'none', hideNow: previewIsFullscreen, restoring: restoringContext }) : null;
+    if (move === 'leave') onLeaveConversation?.(currentContextKey);
     if (src) src.style.display = previewIsFullscreen
       ? 'none'
       : (previewSourcePanel === 'terminal-panel' ? '' : 'flex');
+    if (move === 'shown' && currentContextKey === getActiveContextKey()) onConversationShown?.(currentContextKey);
     syncPreviewLayoutControls(previewIsFullscreen);
     if (refit) refitActiveTerminal();
     return true;
@@ -1477,7 +1486,8 @@ function createPreviewPanelController({
     }
     ensureTabWatch(tab);
     prepareTabForLoad(tab);
-    showPanelFrame(state);
+    restoringContext = true;
+    try { showPanelFrame(state); } finally { restoringContext = false; }
     if (operation !== navigationToken) return;
     await renderActiveTabAndRefreshFind(tab, { preserveZoom: true, zoomLevel: tab.zoomLevel, scroll: tab.scroll });
   }
@@ -1485,6 +1495,9 @@ function createPreviewPanelController({
   function closePreviewPanel() {
     immersive.exit();
     const wasOpen = previewPanelEl.style.display !== 'none' && !!currentContextKey;
+    // 关闭前对话区是否被全屏预览藏着：半窗（分屏）下对话一直可见，用户可能已经滚过，回来时不改它的位置。
+    const sourceEl = previewSourcePanel ? document.getElementById(previewSourcePanel) : null;
+    const sourceWasHidden = !!sourceEl && sourceEl.style.display === 'none';
     clearPreviewNotice();
     previewFind.close({ restoreFocus: false, keepQuery: false });
     clearOutlineUI();
@@ -1509,7 +1522,7 @@ function createPreviewPanelController({
     syncPreviewLayoutControls();
     currentContextKey = null;
     refitActiveTerminal();
-    if (wasOpen && key === getActiveContextKey()) onReturnToConversation?.(key);
+    if (wasOpen && key === getActiveContextKey()) onReturnToConversation?.(key, { sourceWasHidden });
   }
 
   function dropPreviewContext(key) {

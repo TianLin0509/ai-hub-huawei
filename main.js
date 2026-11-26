@@ -2733,11 +2733,23 @@ registerTranscriptIpc(ipcMain, transcriptIpcDeps);
 // 函数声明会提升；里面用到的 companyProxyService / lanPoolService / claudeAccountBroker 在调用时才读，届时都已初始化。
 async function ensureSessionLaunchAuth(kind, opts = {}) {
   const featureGateway = require('./core/assistant-gateway-route').allowedSession(kind, opts || {});
-  if (featureGateway || require('./core/company-model-proxy').usesGateway(kind, getHubConfig())) {
+  // 功能固定线路（2026-11-27）：按选型里的来源检查——部门 key 只要反代在跑，公司模型要上游就绪，自有接口 / 账号不经反代。
+  const featureSource = featureGateway ? require('./core/assistant-gateway-route').routeOf(opts.featureAgentChoice)?.source : '';
+  if (featureSource === 'company') {
+    if (lanPoolService.client()?.enabled) {
+      const shared = await lanPoolService.snapshot({ force: true });
+      if (!shared?.ready) throw new Error(lanPoolService.error || '共享主机模型服务尚未就绪');
+    } else {
+      const status = await companyProxyService.ensureReady();
+      if (status.state === 'failed' || status.state === 'not-ready') throw new Error(status.message || '公司模型反代还没准备好');
+    }
+  } else if (featureGateway && featureSource !== 'gateway') {
+    // 自有接口 / 自有 API 账号：直连，不用拉起反代。
+  } else if (featureGateway || require('./core/company-model-proxy').usesGateway(kind, getHubConfig())) {
     // API 网关会话只要本机反代在跑；公司上游（CodeAgent）准备没准备好与它无关。网关自身的问题在对话里用白话报。
     const status = await companyProxyService.ensureRunning();
     if (status.state === 'failed' || status.state === 'stopped') throw new Error(status.message || '本机反代没有启动，API 网关会话暂时开不了');
-  } else if (require('./core/company-model-proxy').usesProxy(kind, getHubConfig())) {
+  } else if (!featureGateway && require('./core/company-model-proxy').usesProxy(kind, getHubConfig())) {
     if (lanPoolService.client()?.enabled) {
       const shared = await lanPoolService.snapshot({ force: true });
       if (!shared?.ready) throw new Error(lanPoolService.error || '共享主机模型服务尚未就绪');
@@ -3357,10 +3369,20 @@ try {
       meetingTerminals: () => {
         const setup = require('./core/community-setup'), cfg = getHubConfig(), proxy = require('./core/company-model-proxy');
         // 走部门 API key（上游是网关）时列网关模型，不列公司模型（2026-11-26：以前一律列公司模型，选了也不是实际走的线路）。
-        const viaConfig = (backend, upstream) => cfg.companyCli === true ? (backend === 'proxy' ? (upstream === 'gateway'
-          ? proxy.gatewayModelIds(getHubDataDir()).map(id => ({ id, label: `部门 API key · ${id}` })) : proxy.MODELS.map(m => ({ id: m.id, label: m.label }))) : null) : [{ id: '', label: '' }];
+        // 启动中心选的是自有接口 / 自有 API 账号时也列（2026-11-27：自有 API 用户和 CodeAgent 用户同样能选会议引擎），会话照启动中心的线路起。
+        let raw = {};
+        try { raw = require('./core/hub-config').readConfigJsonForUpdate(); } catch { raw = {}; }
+        const ownList = kind => {
+          const p = raw.providers?.[kind] || {};
+          if (p.backend !== 'api') return null;
+          const profile = p.selected_api_profile && (p.api_profiles || []).find(x => x.id === p.selected_api_profile);
+          if (profile) return [{ id: profile.model || '', label: `自有 API · ${profile.label || profile.id} · ${profile.model || '默认模型'}` }];
+          return p.base_url ? [{ id: p.model || '', label: `自有接口 · ${p.model || '接口默认模型'}` }] : null;
+        };
+        const viaConfig = (kind, backend, upstream) => cfg.companyCli === true ? (backend === 'proxy' ? (upstream === 'gateway'
+          ? proxy.gatewayModelIds(getHubDataDir()).map(id => ({ id, label: `部门 API key · ${id}` })) : proxy.MODELS.map(m => ({ id: m.id, label: m.label }))) : ownList(kind)) : [{ id: '', label: '' }];
         const has = id => { try { return !!setup.findCommand(id); } catch { return false; } };
-        return { codeagent: has('codeagent'), claude: has('claude') ? viaConfig(cfg.claudeBackend, cfg.claudeUpstream) : null, codex: has('codex') ? viaConfig(cfg.codexBackend, cfg.codexUpstream) : null };
+        return { codeagent: has('codeagent'), claude: has('claude') ? viaConfig('claude', cfg.claudeBackend, cfg.claudeUpstream) : null, codex: has('codex') ? viaConfig('codex', cfg.codexBackend, cfg.codexUpstream) : null };
       },
       nodeExecutable: process.execPath,
       onChanged: () => { sendToRenderer('company-assistant:changed', {}); avatarService?.onAuthChanged(); },
@@ -3404,6 +3426,8 @@ try {
       try { void desktopNotificationController?.show({ sessionId: 'company-assistant', title: notice.title, body: notice.text, kind: 'assistant', noticeKind: notice.kind,
         ...(notice.kind === 'digest' ? { noticeId: notice.id } : {}) }); } catch (error) { console.warn('[company-assistant] notification', error.message); }
     });
+    // WeLink 命令行续期时先请员工助手代办免密登录（auth-keeper.renewViaWeclaw）；没装员工助手不发请求。
+    companyAssistantService.weclaw = companyWeclawFetch();
     companyAssistantService.startTools();
     // 会议室可在「可选功能」里关（默认开，2026-11-19）：关着时不轮询、不拉起会议室组件。
     companyAssistantService.rooms.setEnabled(optionalFeatures.get('rooms'));
@@ -3504,6 +3528,14 @@ try {
   }
   require('./main/ipc/weclaw-link-handlers').registerWeclawLinkIpc(ipcMain, () => weclawLinkService);
 } catch (error) { console.error('[weclaw-link] 员工助手接入未启动：', error.message); }
+// 没装员工助手时一个请求都不发；测试把站点指到本机假站点时不用（除非显式给了 AI_HUB_WECLAW_BASE）；CLAUDE_HUB_WECLAW_FETCH=0 关掉。
+function companyWeclawFetch(testEnvKey) {
+  if (process.env.CLAUDE_HUB_WECLAW_FETCH === '0' || process.platform !== 'win32') return null;
+  if (testEnvKey && process.env[testEnvKey] && !process.env.AI_HUB_WECLAW_BASE) return null;
+  // 隔离测试（自带数据目录）默认不碰本机真实的员工助手（免得真去代办 WeLink 登录）；要测就显式给 AI_HUB_WECLAW_BASE 指到替身。
+  if (process.env.CLAUDE_HUB_DATA_DIR && !process.env.AI_HUB_WECLAW_BASE) return null;
+  try { return require('./core/weclaw-fetch').sharedWeclawFetch(); } catch { return null; }
+}
 // 公司版「帖子」（原「论坛」，2026-10-18；2026-11-12 加公司发文）：每天同步公司发文、稼先社区、心声社区并附 AI 摘要，数据只留在本机 Hub 数据目录。
 // 只在公司版启用（core/company-forum/gate.js）。取数用 Hub 自己的隐藏浏览器窗口（main/company-forum-browser.js）。
 let companyForumService = null, companyForumBrowser = null, companyForumEdge = null;
@@ -3528,6 +3560,7 @@ try {
       noTimer: process.env.CLAUDE_HUB_FORUM_TIMER === '0',
       browser: companyForumBrowser,
       edgeBrowser: companyForumEdge,
+      weclaw: companyWeclawFetch('CLAUDE_HUB_FORUM_SITES'),
       // 公司发文上新交给提醒总线：开着桌宠时桌宠说，没开时右下角通知卡。
       publish: notice => require('./core/company-assistant/notice-bus').noticeBus().publish(notice),
       lookupEmail: () => companyAssistantService?.accountEmail?.() || '',
@@ -3559,6 +3592,7 @@ try {
       dataDir: getHubDataDir(),
       noTimer: process.env.CLAUDE_HUB_ATTENDANCE_TIMER === '0',
       browser: companyAttendanceBrowser,
+      weclaw: companyWeclawFetch('CLAUDE_HUB_ATTENDANCE_URL'),
       edgeCapture: process.env.CLAUDE_HUB_ATTENDANCE_EDGE === '0' ? null : opts => require('./main/company-attendance-edge').captureWithEdge(opts),
       // 公司域名自动找：助理设置邮箱 → 论坛设置 → 内置默认域名 → 现场问 WeLink 账号（core/company-domain.js）。
       lookupEmail: () => companyAssistantService?.accountEmail?.() || '',
@@ -5116,93 +5150,9 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
   if (distribution.updateConfig) {
     try {
       const { createAppUpdateController, registerAppUpdateIpc } = require('./main/app-update-controller');
-      const memberUpgrade = distribution.target === 'company' && distribution.featureEnabled('memberUpgrade');
+      // 以前开通过扩展功能的本机记录（core/edition-channel.js，只读本机文件）。
       const editionChannel = require('./core/edition-channel');
-      // 自家阿里云被公司网络放行页拦住时自动放行（2026-10-29 用户选「默认开、无感」）：检查更新与一键反馈共用一个放行器，
-      // 只对更新配置里的自家主机生效，在看不见的窗口里打开自家的放行小页面点一次，不弹窗、不抢焦点。
-      const ownHosts = require('./core/own-hosts');
-      const netUnblock = require('./core/net-unblock');
-      // 测试把更新源换成本机服务（AI_HUB_UPDATE_SOURCES）时，自家主机与反馈地址跟着换，和一键更新同一口径。
-      const ownConfig = (() => { try { return process.env.AI_HUB_UPDATE_SOURCES ? { sources: JSON.parse(process.env.AI_HUB_UPDATE_SOURCES) } : distribution.updateConfig; } catch { return distribution.updateConfig; } })();
-      // 成员版（不是公开版）：后台被拦就在看不见的窗口里自动放行，并每分钟心跳探一次各台自家主机（2026-11-08 用户：默认自动放行，不用再手动点）。
-      // 公开版：不在后台自动点；被拦的地方给「打开放行页」，在 Hub 里弹出放行页让用户自己点。
-      const autoUnblock = distribution.target === 'company' && !distribution.featureEnabled('memberUpgrade');
-      const ownUnblocker = new netUnblock.GatePasser({ logDir: path.join(getHubDataDir(), 'logs'), logName: 'net-unblock', budget: netUnblock.sharedBudget,
-        // 被拦的是哪台就开哪台的放行页（2026-11-07 起有高速镜像和旧阿里云两台，公司代理按主机放行）。
-        // 心跳发现只有 POST 被拦（GET 已通）时，在窗口里直接 POST 一次，拦截页就出现在窗口里再点。
-        open: (url, opts) => opts && opts.method === 'POST'
-          ? netUnblock.postInHiddenWindow(BrowserWindow, ownHosts.unblockPage(ownConfig, url), {})
-          : netUnblock.openHiddenGateWindow(BrowserWindow, ownHosts.unblockPage(ownConfig, url)) });
-      // 第二步放行（2026-11-08 用户定）：后台没成功就在 Hub 里弹出放行页，继续自动点，用户也能手动点。只在用户动手的流程里用。
-      // 公开版：弹出的放行页只等用户自己点（maxClicks 0，看到自家页面照样自动关窗），2026-11-08 用户。
-      const gateVisible = page => netUnblock.openVisibleGateWindow(BrowserWindow, page, { parent: mainWindow || null, ...(autoUnblock ? {} : { maxClicks: 0, title: '放行服务器（在页面上点放行按钮，放行后自动关闭）' }) });
-      const gatePageFor = url => {
-        const text = String(url || '');
-        if (!/^https?:\/\//i.test(text)) return '';
-        if (ownHosts.isOwnUrl(text, ownConfig)) return ownHosts.unblockPage(ownConfig, text);
-        try { return new URL(text).origin + '/'; } catch { return ''; }  // 别家地址也只开站点首页，绝不打开文件地址
-      };
-      try {
-        const { createNetPass } = require('./core/net-pass');
-        const netPass = createNetPass({ hosts: [], dataDir: getHubDataDir(),
-          fetchImpl: (...args) => require('electron').net.fetch(...args),
-          // 公开版不在后台自动点：直接弹出放行页让用户点。
-          openGate: autoUnblock ? page => netUnblock.openHiddenGateWindow(BrowserWindow, page) : null,
-          openVisible: gateVisible,
-          onChange: view => sendToRenderer('net-pass:state', view) });
-        // 各下载功能失败时的统一放行入口（core/own-gate.js）：被拦才动手，成员版先后台自动点，不行或公开版弹出放行页。
-        require('./core/own-gate').setHandler(async (url, opts) => {
-          const r = await netPass.passUrl(url, opts);
-          if (r === 'passed') { try { ownUnblocker.passed(); } catch (_) {} }
-          return r;
-        });
-        // 主界面底栏的「一键放行」（2026-11-12 用户：统一入口放在主界面角落，一次放行全局共享）：
-        const globalPassStatus = () => {
-          const s = netPass.status();
-          let bridgeGate = null;
-          const blocked = s.hosts.filter(h => h.state === 'blocked').map(h => h.name);
-          if (bridgeGate) blocked.push('通道服务器');
-          return { ...s, bridgeGate: !!bridgeGate, blocked, needed: s.needed || !!bridgeGate };
-        };
-        let globalPassing = null;
-        ipcMain.handle('net-pass:global-status', async () => globalPassStatus());
-        ipcMain.handle('net-pass:global', async () => {
-          if (globalPassing) return globalPassing;
-          globalPassing = (async () => {
-            const steps = [];
-            const all = await netPass.passAll().catch(e => ({ results: [], error: e.message }));
-            if (all.error) steps.push({ name: '通道服务器', ok: false, note: '放行出错：' + String(all.error).slice(0, 80) });
-            if ((all.results || []).some(x => x.result === 'ok')) { try { ownUnblocker.passed(); } catch (_) {} }
-            for (const r of all.results || []) steps.push({ name: r.name, ok: r.result === 'ok', note: r.result === 'ok' ? (r.first === 'blocked' ? '已放行' : '正常') : r.result === 'blocked' ? '还被拦着' : '连不上（不是放行问题）' });
-            return { ok: steps.every(x => x.ok), steps, status: globalPassStatus() };
-          })().finally(() => { globalPassing = null; });
-          return globalPassing;
-        });
-        ipcMain.handle('net-pass:run', async () => { const r = await netPass.passAll(); if (r.results.some(x => x.result === 'ok')) { try { ownUnblocker.passed(); } catch (_) {} } return r; });
-        // 所有「打开放行页」按钮都走这里：传进来的可能是被拦的下载文件地址，一律换成那台主机的放行小页面。
-        // opts.method === 'POST'：被拦的是提交（如一键反馈），在弹出的窗口里对那个自家地址 POST 一次，拦截页才会出现。
-        ipcMain.handle('net-pass:open-window', async (_e, url, opts) => {
-          const isPost = opts && opts.method === 'POST' && ownHosts.isOwnUrl(String(url || ''), ownConfig);
-          const page = isPost ? String(url) : gatePageFor(url);
-          if (!page) return { passed: false, error: '放行页地址无效' };
-          const opened = isPost ? await netUnblock.openVisibleGateWindow(BrowserWindow, page, { parent: mainWindow || null, post: {}, ...(autoUnblock ? {} : { maxClicks: 0 }) }) : await gateVisible(page);
-          await netPass.refresh({ force: true }).catch(() => {});
-          if (opened.passed) { try { ownUnblocker.passed(); } catch (_) {} }
-          return { ...opened, status: netPass.status() };
-        });
-        // 启动后查一次（每台一个很小的网页请求）：新用户第一次打开更新或安装面板时，提醒已经准备好。
-        setTimeout(() => { void netPass.refresh().catch(() => {}); }, 20000).unref?.();
-      } catch (e) { console.warn('[net-pass] 放行按钮初始化失败：', e && e.message); }
-      // 检查更新和反馈同时被拦时只开一个放行窗口：进行中的那次结果大家共用。
-      // 按主机分开：两台同时被拦时各开各的放行页。
-      const unblocking = new Map();
-      const unblockOwn = async url => {
-        if (!autoUnblock || !ownHosts.isOwnUrl(url, ownConfig) || !ownHosts.unblockPage(ownConfig, url)) return false;
-        const host = ownHosts.hostOf(url);
-        if (!unblocking.has(host)) unblocking.set(host, ownUnblocker.attempt(url).finally(() => { unblocking.delete(host); }));
-        return unblocking.get(host);
-      };
-      const appUpdate = createAppUpdateController({ app, config: memberUpgrade ? editionChannel.updateConfig(distribution.updateConfig, getHubDataDir()) : distribution.updateConfig, dataDir: getHubDataDir(),
+      const appUpdate = createAppUpdateController({ app, config: distribution.updateConfig, dataDir: getHubDataDir(),
         currentVersion: distribution.editionVersion || app.getVersion(), prepareLaunch: prepareHubLaunchClean,
         // 值得提醒的新版本（改了 x 或 y）由桌宠说一声；只改末位的照旧静默（2026-11-09）。
         sendToRenderer: (channel, payload) => { sendToRenderer(channel, payload); if (channel === 'app-update:state' && payload && payload.phase === 'available' && payload.latest && payload.latest.notify) { try { hubPetController?.announceUpdate?.(payload.latest.version); } catch (_) {} } },
@@ -5216,7 +5166,7 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
           void appUpdate.openxRecorder.record({ ...evt, kind: 'component' }).catch(() => {});
         }
       });
-      // CLI 一键安装（2026-11-07）：组件目录和一键更新放在同一台自家主机，被放行页拦住时共用同一个放行器。
+      // CLI 一键安装（2026-11-07）：组件从公司内源下载。
       try {
         const { createCliInstaller } = require('./core/cli-tools/installer');
         const cliSources = require('./core/cli-tools/catalog').catalogSources({ config: distribution.updateConfig });
@@ -5233,8 +5183,8 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
       let feedbackReceiverAddressRef = null;
       const sharedFeedbackReceiverAddress = () => feedbackReceiverAddressRef || (feedbackReceiverAddressRef = require('./core/feedback-receiver-address')
         .createReceiverAddress({ dataDir: getHubDataDir(), fetchImpl: (...args) => require('electron').net.fetch(...args) }));
-      // 一键反馈（2026-10-29）：设置菜单「一键反馈」→ 脱敏诊断包；阿里云路径被拦自动放行，发不出就存到「下载」。
-      // r42（2026-11-18）：成员版只经公司内网发给维护人电脑上的收件机；公开版在公司内（连得上内源）同样走内网，公司外才发阿里云。
+      // 一键反馈（2026-10-29）：设置菜单「一键反馈」→ 脱敏诊断包，发不出就存到「下载」。
+      // r42（2026-11-18）：经公司内网发给维护人电脑上的收件机。
       // 内网发不到进待发队列，后台每 10 分钟补发。
       try {
         const { createHubFeedbackService, registerHubFeedbackIpc } = require('./main/hub-feedback-service');
@@ -5259,10 +5209,7 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
                 return err ? { ok: false, via: hit.via, reason: err } : { ok: true, via: hit.via };
               } };
           })() : null,
-          endpoint: ownHosts.feedbackEndpoint(ownConfig), logsDir: path.join(getHubDataDir(), 'logs'), unblock: unblockOwn, onPassed: () => ownUnblocker.passed(),
-          // 放行后提交仍被拦：在看不见的窗口里直接提交（走浏览器网络栈，拦截页出现在窗口里就点放行），见 core/net-unblock.js postInHiddenWindow。
-          // 公开版不在后台窗口里自动点放行（2026-11-08 用户）：被拦就提示用户打开放行页自己点。
-          windowPost: autoUnblock ? (url, body) => ownHosts.isOwnUrl(url, ownConfig) ? netUnblock.postInHiddenWindow(BrowserWindow, url, body) : Promise.resolve({ error: '不是自家地址' }) : null,
+          logsDir: path.join(getHubDataDir(), 'logs'),
           // 隔离实例（E2E）存到自己的数据目录，不写进真实的「下载」文件夹。
           downloadsDir: () => isIsolatedHub() ? path.join(getHubDataDir(), 'downloads') : app.getPath('downloads'),
           // edition 带上「·成员版 / ·公开版」并另带 target（r42 与阿里云侧约定）：阿里云据此拒收新版成员版，旧客户端不受影响。
@@ -5303,11 +5250,12 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
         app.whenReady().then(() => communityServiceRef.start()).catch(() => {});
         app.on('will-quit', () => communityServiceRef?.stop());
       } catch (e) { console.warn('[community] 初始化失败：', e && e.message); }
+      // 扩展功能：界面问「本机是否开通过、是否已解锁」。
       const sealedModules = require('./core/sealed-modules');
       const sealedMode = sealedModules.present();
       ipcMain.handle('edition:state', () => (sealedMode
         ? { enabled: !sealedModules.loaded(), sealed: true, unlocked: !sealedModules.loaded() && editionChannel.wasUnlocked(getHubDataDir()), switched: sealedModules.loaded() || sealedModules.hasCachedKey(getHubDataDir()) }
-        : { enabled: memberUpgrade, unlocked: memberUpgrade && editionChannel.wasUnlocked(getHubDataDir()), switched: memberUpgrade && !!editionChannel.readChannel(getHubDataDir()) }));
+        : { enabled: false, unlocked: false, switched: false }));
       ipcMain.handle('edition:relaunch', () => { app.relaunch(); app.quit(); return { ok: true }; });
       ipcMain.handle('edition:switch', async (_e, payload = {}) => {
         if (sealedMode) {
@@ -5315,17 +5263,7 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
           const r = await sealedModules.unlockWithCode(typeof payload.code === 'string' ? payload.code : '', { dataDir: getHubDataDir() });
           return r.ok ? { ok: true, sealed: true } : { ok: false, reason: r.reason, message: r.message };
         }
-        if (!memberUpgrade) return { ok: false, message: '这个版本不需要' };
-        const code = typeof payload.code === 'string' ? payload.code : '';
-        const verify = () => editionChannel.verify(code, { fetchImpl: (...args) => require('electron').net.fetch(...args) });
-        let r = await verify();
-        if (!r.ok && (r.reason === 'blocked' || r.reason === 'network') && await unblockOwn(editionChannel.manifestUrl(code)).catch(() => false)) r = await verify();
-        // 公开版不在后台自动放行：被拦时带上地址，界面给「打开放行页」（在 Hub 里弹出，用户自己点）。
-        if (!r.ok) return (r.reason === 'blocked' || r.reason === 'network') && !r.url ? { ...r, url: editionChannel.manifestUrl(code) || undefined } : r;
-        editionChannel.writeChannel(getHubDataDir(), r.id);
-        appUpdate.useConfig(editionChannel.updateConfig(distribution.updateConfig, getHubDataDir()));
-        await appUpdate.check({ silent: false });
-        return { ok: true, version: r.version };
+        return { ok: false, message: '这个版本不需要' };
       });
       app.whenReady().then(() => {
         appUpdate.startBackgroundChecks();

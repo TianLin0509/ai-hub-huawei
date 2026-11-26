@@ -15,12 +15,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { randomUUID } = require('node:crypto');
 
-// 下载只走公司内源（R29/R35）；这组地址只在内源不生效时（纯 Node 单测、测试注入）使用。
-const OCR_SOURCES = Object.freeze([
-  'https://dl.lt-stockpartner.tech/pptutor/ocr/',
-  'https://me.lt-stockpartner.tech/pptutor/ocr/',
-  'https://github.com/TianLin0509/PPTutor/releases/download/ocr-v1.2.0/',
-]);
+// 下载只走公司内源（R29/R35）；内源不生效时（纯 Node 单测、测试注入）由调用方给地址，默认不提供外网源。
+const OCR_SOURCES = Object.freeze([]);
 // 清单取不到时界面显示的大概下载量（与 Doctor 组件页同一口径，MB）。
 const APPROX_MB = 82;
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -51,10 +47,10 @@ function sources(deps = {}) {
   return deps.urls || OCR_SOURCES;
 }
 
-// R29 审查 #1：只走内源时读程序自带的清单快照（scripts/refresh-bundled-manifests.js 发版时刷新），不去外网读、不弹放行窗。
+// R29 审查 #1：只走内源时读程序自带的清单快照（scripts/refresh-bundled-manifests.js 发版时刷新），不去外网读。
 const SNAPSHOT_FILE = path.join(__dirname, 'ppt-ocr-manifest-snapshot.json');
 function bundledManifest(file = SNAPSHOT_FILE) {
-  return { base: OCR_SOURCES[0], manifest: validManifest(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''))) };
+  return { base: OCR_SOURCES[0] || null, manifest: validManifest(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''))) };
 }
 
 async function fetchManifest(fetch, deps = {}) {
@@ -141,7 +137,7 @@ function createOcrComponentInstaller(deps = {}) {
   async function perform() {
     abort = new AbortController();
     const signal = abort.signal;
-    const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(deps.fetchImpl));
+    const fetch = require('./fetch-util').resolveFetch(deps.fetchImpl);
     const root = doctorDataDir(env), target = path.join(root, 'ocr');
     const job = path.join(root, '.hub-ocr-' + randomUUID());
     set({ phase: 'checking', message: '正在读取识别组件清单…', error: null, received: 0, total: 0, percent: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null });
@@ -152,8 +148,8 @@ function createOcrComponentInstaller(deps = {}) {
       const ar = manifest.archive, version = manifest.version;
       set({ phase: 'downloading', message: `正在下载识别组件 v${version}（${(ar.size / 1048576).toFixed(0)} MB）…`, version, total: ar.size, sizeMb: Math.round(ar.size / 1048576) });
       await fsp.mkdir(job, { recursive: true });
-      const bases = [base, ...sources({ ...deps, env }).filter(u => u !== base)];
-      const result = await download({ gate: true, version,
+      const bases = [base, ...sources({ ...deps, env }).filter(u => u !== base)].filter(Boolean);
+      const result = await download({ version,
         sources: bases.map(b => ({ id: new URL(b).hostname, name: require('../app-update/downloader').friendlySourceName(b), url: new URL(ar.name, b).href })),
         openx: deps.openx === false ? false : { release: `ocr-${version}`, env, ...(deps.openx || {}) },   // 探测预算用内源默认的 3 秒
         expect: { file: openxFile(version), bytes: ar.size, sha256: ar.hash },

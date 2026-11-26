@@ -1211,44 +1211,13 @@ function getCodexApiHome() {
 }
 
 function ensureCodexApiProfile(cv, projectDir) {
-  const codexHome = cv.CODEX_API_HOME || getCodexApiHome();
-  const provider = cv.CODEX_API_PROVIDER || 'openai-api';
   const baseUrl = cv.CODEX_API_BASE_URL || (cv.COMPANY_CLI ? '' : 'https://api.openai.com/v1');
-  const model = cv.CODEX_API_MODEL || (cv.COMPANY_CLI ? '' : DEFAULT_MODEL_BY_KIND.codex);
-  if (!baseUrl) throw new Error('Codex 自有 API 请填写接口地址');
-  const projectKey = path.resolve(projectDir || os.homedir());
-
-  fs.mkdirSync(codexHome, { recursive: true });
-  // 只接管 Hub 生成的顶层键，Codex 写下的 [hooks.state.*]、[tui] 等保留（同 DeepSeek profile）。
-  require('./codex-managed-config').writeHubManagedCodexConfig(path.join(codexHome, 'config.toml'), [
-    'disable_response_storage = true',
-    ...(model ? [`model = ${tomlString(model)}`] : []),
-    `model_provider = ${tomlString(provider)}`,
-    `model_reasoning_effort = ${tomlString(CODEX_REASONING_EFFORT)}`,
-    'approval_policy = "never"',
-    'sandbox_mode = "danger-full-access"',
-    '',
-    '[notice]',
-    'hide_rate_limit_model_nudge = true',
-    'hide_full_access_warning = true',
-    '',
-    '[windows]',
-    'sandbox = "unelevated"',
-    '',
-    `[model_providers.${provider}]`,
-    `base_url = ${tomlString(baseUrl)}`,
-    `name = ${tomlString(provider)}`,
-    `requires_openai_auth = ${cv.CODEX_API_KEY || !cv.COMPANY_CLI ? 'true' : 'false'}`,
-    `wire_api = ${tomlString(require('./company-api-config').wireApi(cv.CODEX_API_WIRE_API || 'responses'))}`,
-    '',
-    `[projects.${tomlString(projectKey)}]`,
-    'trust_level = "trusted"',
-    '',
-  ].join('\n'));
-  fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({
-    OPENAI_API_KEY: cv.CODEX_API_KEY || '',
-  }), 'utf8');
-  return codexHome;
+  return require('./codex-api-home').writeCodexApiHome(cv.CODEX_API_HOME || getCodexApiHome(), {
+    provider: cv.CODEX_API_PROVIDER || 'openai-api', baseUrl,
+    model: cv.CODEX_API_MODEL || (cv.COMPANY_CLI ? '' : DEFAULT_MODEL_BY_KIND.codex),
+    apiKey: cv.CODEX_API_KEY || '', wireApi: cv.CODEX_API_WIRE_API || 'responses', projectDir,
+    requiresAuth: !!(cv.CODEX_API_KEY || !cv.COMPANY_CLI), reasoningEffort: CODEX_REASONING_EFFORT,
+  });
 }
 
 function isCodexApiBackend(cv) {
@@ -1922,7 +1891,7 @@ class SessionManager extends EventEmitter {
     const apiLaunch = !gatewayRoute && /^(?:claude|codex)(?:-resume)?$/.test(kind) ? require('./cli-api-profiles').prepareLaunch(kind, opts, {
       raw: require('./hub-config').readConfigJsonForUpdate(), dataDir: getHubDataDir(), values: getConfigValues(),
     }) : null;
-    const getLaunchValues = () => gatewayRoute ? require('./assistant-gateway-route').launchValues(getConfigValues()) : apiLaunch ? apiLaunch.values : getConfigValues();
+    const getLaunchValues = () => gatewayRoute ? require('./assistant-gateway-route').launchValues(getConfigValues(), opts.featureAgentChoice) : apiLaunch ? apiLaunch.values : getConfigValues();
     if (apiLaunch) opts = { ...opts, ...apiLaunch.meta, model: opts.model || apiLaunch.profile.model };
     let antigravityProfile = null;
     if (kind === 'gemini' || kind === 'gemini-resume') {
@@ -4996,7 +4965,7 @@ try {
       const effortFlag = process.env.CLAUDE_HUB_NO_EFFORT_MAX === '1' || !effort ? '' : ` --effort ${effort}`;
       let fastFlag = '';
       const relaunchValues = () => (require('./assistant-gateway-route').allowedSession(kind, s.info || {})
-        ? require('./assistant-gateway-route').launchValues(apiLaunch?.values || getConfigValues()) : apiLaunch?.values || getConfigValues());
+        ? require('./assistant-gateway-route').launchValues(apiLaunch?.values || getConfigValues(), s.info?.featureAgentChoice) : apiLaunch?.values || getConfigValues());
       const cv = relaunchValues();
       if (shouldUseClaudeFastSettings(cv, { fastMode: s.info && s.info.fastMode, autonomous })) {
         const fastSettingsPath = resolveAsarUnpacked('claude-subscription-fast-settings.json');

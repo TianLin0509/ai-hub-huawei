@@ -1,0 +1,10 @@
+{
+  "sources": [
+    {
+      "id": "github",
+      "name": "GitHub",
+      "manifest": "https://github.com/TianLin0509/ai-hub-huawei/releases/latest/download/latest.json",
+      "files": "https://github.com/TianLin0509/ai-hub-huawei/releases/download/v{version}/"
+    }
+  ]
+}

@@ -7,7 +7,9 @@ async function run(selected, prompt, { dataDir, signal, timeoutMs = 60000, env =
   const engine = require('./help-ask/engine'), kind = selected.kind;
   const launchEnv = engine.childEnv(env), cwd = path.join(dataDir, 'feature-agent-cwd');
   fs.mkdirSync(cwd, { recursive: true });
-  let command = findCommand(kind, env), providerFile = '';
+  // DSH 走 ACP（不是命令行一问一答）：core/dsh-oneshot.js 起一个只读的 DSH，问一句收一段回答。
+  if (kind === 'deepseek-acp') return require('./dsh-oneshot').run(selected, prompt, { dataDir, cwd, signal, timeoutMs, env: launchEnv, onActivity });
+  let command = findCommand(kind, env), providerFile = '', settingsFile = '', overlay = null;
   if (!command) throw new Error('所选后端当前不可用，请恢复默认');
   if (kind === 'codeagent') {
     const config = require('./codeagent-config').resolveCodeAgentConfig(env);
@@ -15,16 +17,16 @@ async function run(selected, prompt, { dataDir, signal, timeoutMs = 60000, env =
     require('./codeagent-launch-env').applyAccountEnv(launchEnv, { configDirEnv: config.configDirEnv, configDir: config.configDir });
   }
   if (kind === 'claude') launchEnv.CLAUDE_CODE_DISABLE_CLAUDE_MDS = '1';
-  // 公司版外壳（core/feature-agent-choice.js）：Claude Code / Codex 只当外壳，模型经本机反代走部门 API key 或公司模型，
-  // 和启动中心同一条线路（company-model-proxy applyClaudeEnv / applyCodexEnv）。不读 CLI 自己的登录。
-  const source = (kind === 'claude' || kind === 'codex') ? selected.source : '';
+  // 公司版外壳（core/feature-agent-choice.js）：Claude Code / Codex 只当外壳，模型来源和启动中心同一套
+  // （部门 API key、公司模型经本机反代；自有接口、自有 API 账号直连；本机 CLI 配置原样不动，见 core/harness-route.js）。
+  const source = (kind === 'claude' || kind === 'codex') ? selected.source || '' : '';
   if (source) {
-    if (!['gateway', 'company'].includes(source)) throw new Error('所选模型来源不可用，请恢复默认');
-    const gateway = source === 'gateway', proxy = require('./company-model-proxy');
-    await require('./feature-agent-choice').ensureProxy(source);
+    const route = require('./harness-route');
+    if (!route.SOURCES.includes(source)) throw new Error('所选模型来源不可用，请恢复默认');
+    if (route.viaProxy(source)) await require('./feature-agent-choice').ensureProxy(source);
     const tag = `feature-${crypto.randomUUID().slice(0, 8)}`;
-    if (kind === 'claude') proxy.applyClaudeEnv(launchEnv, { dataDir, sessionId: tag, model: selected.model, gateway });
-    else proxy.applyCodexEnv(launchEnv, { dataDir, sessionId: tag, model: selected.model, projectDir: cwd, gateway });
+    if (kind === 'claude') overlay = route.applyClaudeOnce(launchEnv, selected, { dataDir, tag });
+    else route.applyCodexOnce(launchEnv, selected, { dataDir, tag, cwd });
   }
   if (kind === 'codex' && !launchEnv.CODEX_HOME) launchEnv.CODEX_HOME = require('./codex-usage-scope')
     .resolveCodexUsageScope(require('./hub-config').getConfig(), { hubDataDir: dataDir }).home;
@@ -41,9 +43,14 @@ async function run(selected, prompt, { dataDir, signal, timeoutMs = 60000, env =
       if (selected.model) args.splice(1, 0, '--model', selected.model);
     } else {
       if (!engine.readOnlyCapable(help)) throw new Error('所选后端不能关闭工具，请恢复默认');
+      // 连接写进 --settings 的 env，盖住用户 settings.json 里的连接（同启动中心会话）；文件含 Key，用完即删。
+      if (overlay) {
+        settingsFile = path.join(cwd, `${crypto.randomUUID()}.settings.json`);
+        fs.writeFileSync(settingsFile, JSON.stringify({ env: overlay }), { mode: 0o600 });
+      }
       // CodeAgent 指定了模型、没指定供应商时走精简参数（--bare + 空 MCP 配置，core/codeagent-print-args.js）；指定供应商要读 --settings，不加 --bare。
       args = kind === 'codeagent' ? engine.codeAgentArgs(selected.model, help, { lean: !selected.codeagentModelProvider, mcpConfigFile: require('./codeagent-print-args').emptyMcpConfigFile(cwd) })
-        : engine.claudeArgs(help, { model: selected.model });
+        : engine.claudeArgs(help, { model: selected.model, settingsFile });
       // 空模型表示沿用 CLI 当前默认，不能传一个空 --model。
       if (kind === 'codeagent' && !selected.model) args.splice(args.indexOf('--model'), 2);
       if (kind === 'codeagent' && selected.codeagentModelProvider) {
@@ -61,7 +68,7 @@ async function run(selected, prompt, { dataDir, signal, timeoutMs = 60000, env =
     if (r.code !== 0 || !text.trim()) throw new Error('所选模型未能回答：' + require('./hub-feedback').redact(engine.cleanAnswer(r.stderr || raw)).slice(0, 200));
     return text;
   } finally {
-    for (const file of [out, providerFile].filter(Boolean)) try { fs.unlinkSync(file); } catch { /* 尚未生成 */ }
+    for (const file of [out, providerFile, settingsFile].filter(Boolean)) try { fs.unlinkSync(file); } catch { /* 尚未生成 */ }
   }
 }
 module.exports = { run };

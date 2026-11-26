@@ -1,23 +1,16 @@
 'use strict';
+// 扩展功能的本机记录（2026-10-28 起；统一包时代只读本机文件、不联网）：
 const fs = require('node:fs');
 const path = require('node:path');
 const { scryptSync } = require('node:crypto');
 
 const CHANNEL_FILE = 'edition-channel.json';
 const SALT = '7d1f0c9a4be25e83a6f4c10d92b7e5a1';
-const BASE = 'https://me.lt-stockpartner.tech/hub-update/';
-// 高速下载镜像（2026-11-07）：内容每 5 分钟从 BASE 同步，排第一；只读，反馈等仍走 BASE 所在的主服务器。
-const FAST_BASE = 'https://dl.lt-stockpartner.tech/hub-update/';
 
 function channelId(code) {
   const text = String(code || '').trim().toLowerCase();
   if (text.length < 6 || text.length > 64) return '';
   return scryptSync(text, SALT, 16).toString('hex');
-}
-
-function channelSources(id) {
-  return [{ id: 'aliyun-fast', name: '阿里云高速', mirror: true, manifest: `${FAST_BASE}m-${id}/latest.json`, files: `${FAST_BASE}m-${id}/v{version}/` },
-    { id: 'aliyun', name: '阿里云', manifest: `${BASE}m-${id}/latest.json`, files: `${BASE}m-${id}/v{version}/` }];
 }
 
 // 本机开通过扩展功能：只读，打不开或没有记录都当没开通。
@@ -53,31 +46,4 @@ function writeChannel(dataDir, id, now = Date.now()) {
   fs.renameSync(file + '.tmp', file);
 }
 
-function updateConfig(base, dataDir) {
-  const channel = readChannel(dataDir);
-  if (!channel) return base;
-  return { ...(base || {}), sources: channelSources(channel.id), switchEdition: true };
-}
-
-async function verify(code, { fetchImpl = globalThis.fetch, timeoutMs = 15000 } = {}) {
-  const id = channelId(code);
-  if (!id) return { ok: false, reason: 'format', message: '口令长度不对' };
-  const url = channelSources(id).find(s => !s.mirror).manifest;
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const res = await fetchImpl(url, { signal: ac.signal, cache: 'no-store' });
-    if (res.status === 404) return { ok: false, reason: 'wrong', message: '口令不对' };
-    if (!res.ok) return { ok: false, reason: 'network', message: `更新地址暂时连不上（HTTP ${res.status}）` };
-    const text = await res.text();
-    let manifest = null; try { manifest = JSON.parse(text); } catch { manifest = null; }
-    if (!manifest || typeof manifest.version !== 'string') return { ok: false, reason: 'blocked', message: '读到的不是更新清单，可能被公司网络拦截，请先在浏览器里打开一次该地址放行', url };
-    return { ok: true, id, version: manifest.version };
-  } catch (error) {
-    return { ok: false, reason: 'network', message: `更新地址暂时连不上：${error.name === 'AbortError' ? '15 秒没响应' : error.message === 'fetch failed' ? '网络请求没有发出去，请检查网络或代理' : error.message}` };
-  } finally { clearTimeout(timer); }
-}
-
-function manifestUrl(code) { const id = channelId(code); return id ? channelSources(id).find(s => !s.mirror).manifest : ''; }
-
-module.exports = { CHANNEL_FILE, channelId, channelSources, manifestUrl, wasUnlocked, readChannel, writeChannel, updateConfig, verify };
+module.exports = { CHANNEL_FILE, channelId, wasUnlocked, readChannel, writeChannel };

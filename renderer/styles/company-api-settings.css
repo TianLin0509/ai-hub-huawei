@@ -26,6 +26,7 @@
 .company-api-dialog .company-api-mode{display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--hw-sp-3,12px);margin:0 0 var(--hw-sp-4,16px)}
 .company-api-dialog .company-api-mode button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:var(--hw-sp-3,12px) var(--hw-sp-4,16px);border-radius:var(--hw-r-md,16px);text-align:left}
 .company-api-dialog .company-api-mode small{color:var(--hw-text-2,#58626d);font-size:var(--hw-fs-12,12px)}
+.company-api-dialog .company-api-mode small.company-api-mode-note{margin-top:4px;color:var(--hw-text-3,#7a838c);line-height:1.45}
 .company-api-dialog .company-api-mode [aria-checked=true]{background:var(--hw-brand-soft,#e7effe);border-color:var(--hw-brand,#0a59f7);color:var(--hw-brand,#0a59f7)}
 .company-api-dialog .company-proxy-state{padding:var(--hw-sp-3,12px) var(--hw-sp-4,16px);margin:var(--hw-sp-4,16px) 0;border-radius:var(--hw-r-md,16px);background:var(--hw-surface-2,#f7f8fa)}
 .company-api-dialog .company-proxy-state>div{display:flex;align-items:center;gap:var(--hw-sp-2,8px)}

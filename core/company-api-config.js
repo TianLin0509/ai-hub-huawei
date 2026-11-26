@@ -74,6 +74,13 @@ function ownStash(raw, kind) {
   const o = kind === 'deepseek-acp' ? raw.acp?.companyApi?.own_api : raw.providers?.[kind]?.own_api;
   return o && typeof o === 'object' ? { baseURL: o.base_url || '', apiKey: o.api_key || '', model: o.model || '', modelList: listOf(o.model_list, o.model), wireApi: o.wire_api || 'responses', ...keyState(o, 'api_key', 'encrypted_api_key') } : null;
 }
+// 这个工具的「自有接口」连接（地址、Key、模型、模型表、wire_api）：当前就在用自有接口时取当前值，切到公司模型 / 网关时取保留的那份。
+// 后台功能选「外壳 + 自有接口」时用（core/harness-route.js），没填过返回 null。
+function ownConnection(raw, kind) {
+  const p = connection(raw, kind);
+  const o = p.backend === 'proxy' ? ownStash(raw, kind) : p;
+  return o && o.baseURL ? o : null;
+}
 // own: what the launch center's own-source card starts (Claude/Codex): 自有接口 (api) with its model, or CLI 默认 (local).
 // DSH（2026-11-20）：公司版 DSH 没有「CLI 本机配置」可沿用，自有来源只有自有接口；没填过就是 local（启动中心不显示自有卡）。
 function ownSource(raw, kind) {
@@ -223,7 +230,13 @@ function assertLaunchConfigured(kind, config, opts = {}) {
   // 功能会话走部门 API key（core/assistant-gateway-route.js）：启动值由 launchValues() 固定指向本机反代的网关上游，
   // 与全局 Claude「自有 API」设置无关，不拿那边的残缺配置误杀；只要部门 key 还在。
   if (opts && opts.apiGatewayRoute === true && require('./assistant-gateway-route').allowedSession(kind, opts)) {
-    if (!gatewayStore().configured(dataDir())) throw Object.assign(new Error('部门 API key 已不在了：请先在「设置 → API 网关」保存部门 key，再重开这个功能。'), { code: 'API_GATEWAY_KEY_MISSING', notSent: true });
+    const route = require('./assistant-gateway-route').routeOf(opts.featureAgentChoice);
+    if (route?.source === 'gateway' && !gatewayStore().configured(dataDir())) throw Object.assign(new Error('部门 API key 已不在了：请先在「设置 → API 网关」保存部门 key，再重开这个功能。'), { code: 'API_GATEWAY_KEY_MISSING', notSent: true });
+    // 自有接口 / 自有 API 账号：地址、Key 缺了在这里就说清（和启动中心同一句），不等会话起来再报连不上。
+    if (route && ['own', 'api'].includes(route.source)) {
+      try { require('./harness-route').connectionFor(route); }
+      catch (error) { throw Object.assign(error, { notSent: true }); }
+    }
     return;
   }
   kind = baseKind(kind);
@@ -252,4 +265,4 @@ function assertLaunchConfigured(kind, config, opts = {}) {
   if (kind === 'codex') wireApi(config.codexApiWireApi || 'responses');
 }
 
-module.exports = { KINDS, LABELS, baseKind, isCompany, wireApi, baseUrl, optionalText, modelList, settings, withSettings, applyCompanyConfig, assertLaunchConfigured, anyProxy, anyGateway, connection, ownSource, gatewayView };
+module.exports = { KINDS, LABELS, baseKind, isCompany, wireApi, baseUrl, optionalText, modelList, settings, withSettings, applyCompanyConfig, assertLaunchConfigured, anyProxy, anyGateway, connection, ownConnection, ownSource, gatewayView };

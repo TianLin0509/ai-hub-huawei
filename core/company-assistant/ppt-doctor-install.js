@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { execFile } = require('node:child_process');
-const { MIRROR_MANIFEST_URLS } = require('./ppt-doctor-protocol');
+const { MIRROR_MANIFEST_URLS, DOWNLOAD_URL } = require('./ppt-doctor-protocol');
 const { archiveUrl } = require('./ppt-doctor-download');
 const { resolveFetch } = require('./fetch-util');
 const { downloadWithFallback } = require('../app-update/downloader');
@@ -150,7 +150,7 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
   const set = patch => { state = { ...state, ...patch }; try { onState(snapshot()); } catch { /* a closed view must not interrupt installation */ } };
   async function perform() {
     abort = new AbortController();
-    const signal = abort.signal, fetch = require('../own-gate').gatedFetch(resolveFetch(fetchImpl));
+    const signal = abort.signal, fetch = resolveFetch(fetchImpl);
     const root = path.resolve(dataDir, 'tools', 'ppt-doctor');
     const job = path.join(root, 'install-' + randomUUID());
     let registered = false;
@@ -162,8 +162,10 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
       const installed = String(await Promise.resolve().then(installedVersion).catch(() => '') || '');
       // R29/R35：内源生效时只用程序自带的清单快照（发版时刷新），不去外网读清单；完整包只从内源下。
       const only = openxSource.active(process.env);
-      const tries = only && bundledManifest && sources.length && bundledManifest() ? [{ base: sources[0], bundled: true }]
-        : [...sources.map(base => ({ base })), ...(bundledManifest && sources.length ? [{ base: sources[0], bundled: true }] : [])];
+      // 自带快照只用来取版本、文件名和校验值；没有在线清单地址时用内源项目页拼出文件名（内源按文件名找附件）。
+      const snapBase = sources[0] || DOWNLOAD_URL;
+      const tries = only && bundledManifest && bundledManifest() ? [{ base: snapBase, bundled: true }]
+        : [...sources.map(base => ({ base })), ...(bundledManifest ? [{ base: snapBase, bundled: true }] : [])];
       const tried = new Set();
       for (const { base, bundled } of tries) {
         if (signal.aborted) throw new Error('已取消');
@@ -210,7 +212,7 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
           if (!sizedByOpenx) bytes = await externalSize();
           const fetchArchive = n => {
             set({ phase: 'downloading', message: '正在下载 PPT Doctor…', version: meta.version, latestVersion: meta.latestVersion, total: n, received: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null });
-            return download({ gate: true, sources: [{ id: 'doctor', name: require('../app-update/downloader').friendlySourceName(meta.url), url: meta.url }],
+            return download({ sources: [{ id: 'doctor', name: require('../app-update/downloader').friendlySourceName(meta.url), url: meta.url }],
               version: meta.version, openx, expect: { file, bytes: n, sha256: meta.sha256 },
               dest: path.join(job, 'package.zip'), fetchImpl: fetch, signal,
               onProgress: progress => set(progress) });

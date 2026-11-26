@@ -21,7 +21,8 @@ function cutHere(n, buffer, rate) {
   return len >= CUT_MAX_S || (len >= CUT_MIN_S && rms <= Math.max(0.004, n.floor * 2));
 }
 class MeetingCapture {
-  constructor({ document, window, save, status, waitMs = 10000 }) { this.d = document; this.w = window; this.save = save; this.status = status; this.waitMs = waitMs; this.streams = []; this.nodes = []; this.queue = []; this.levels = {}; }
+  // offsetMs / segment：「继续录制」中断的会议时，时间轴从已保存的那一刻往后接，画面存成续录片段（R51）。
+  constructor({ document, window, save, status, waitMs = 10000, offsetMs = 0, segment = false }) { this.d = document; this.w = window; this.save = save; this.status = status; this.waitMs = waitMs; this.offsetMs = Math.max(0, Math.round(offsetMs) || 0); this.segment = !!segment; this.streams = []; this.nodes = []; this.queue = []; this.levels = {}; }
   async wait(promise, message, progressAt) {
     let timer;
     const startedAt = performance.now();
@@ -53,7 +54,7 @@ class MeetingCapture {
         }
         if (mic) { this.streams.push(mic); this.audio(mic, 'mic'); }
       }
-      this.recorder = new MeetingRecorder({ window: this.w, streams: this.streams, elapsed: () => this.elapsed(), save: this.save, waitMs: this.waitMs, onError: message => { void this.pause('录屏保存异常').catch(() => {}); this.status('录像出错：' + message + '。已录的内容都在，请先点「重试保存」。'); } });
+      this.recorder = new MeetingRecorder({ window: this.w, streams: this.streams, elapsed: () => this.elapsed(), save: this.save, waitMs: this.waitMs, segment: this.segment, onError: message => { void this.pause('录屏保存异常').catch(() => {}); this.status('录像出错：' + message + '。已录的内容都在，请先点「重试保存」。'); } });
       await this.recorder.open();
     } catch (e) {
       const message = { NotAllowedError: '采集权限被拒绝，请在系统隐私设置中允许访问后重试', NotFoundError: '未找到共享设备，请刷新并重新选择窗口或屏幕', NotReadableError: '共享设备被占用或无法读取，请关闭占用程序后重试' }[e.name];
@@ -74,7 +75,7 @@ class MeetingCapture {
     src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
     stream.getAudioTracks().forEach(t => { t.onended = () => { this.disconnected = true; void this.pause((track === 'mic' ? '麦克风' : '系统声音') + '断开').catch(e => this.status(e.message)); this.status('声音来源已断开，已暂停采集，请结束并重新选择设备'); }; });
   }
-  elapsed() { return Math.max(0, Math.round(this.w.performance.now() - this.started)); }
+  elapsed() { return (this.offsetMs || 0) + Math.max(0, Math.round(this.w.performance.now() - this.started)); }
   // 界面时钟：暂停期间停在暂停那一刻。elapsed() 是墙上时钟，录像时间轴靠它记录暂停缺口，不能改。
   displayMs() { return this.paused && this.gapAt != null ? this.gapAt : this.elapsed(); }
   start(crop) { this.crop = crop; this.started = this.w.performance.now(); this.running = true; this.paused = false; this.recorder?.start(); this.timer = setInterval(() => { if (!this.paused) { void this.frame().catch(e => this.status(e.message)); this.enqueue({ kind: 'heartbeat', at: this.elapsed() }); } }, 1000); void this.frame(true).catch(e => this.status(e.message)); }

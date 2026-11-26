@@ -12,7 +12,7 @@ const { runOnce } = require('../core/company-assistant/ppt-map-model');
 
 const ROOT = path.resolve(__dirname, '..');
 const tmp = t => { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'help-ask-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return dir; };
-// 公司 CodeAgent 1.2615 的 --help 里实际有的参数（2026-11-19 远程器取回）；没有 --max-turns。
+// 公司 CodeAgent 1.2615 的 --help 里实际有的参数（2026-11-19 维护人取回）；没有 --max-turns。
 const CODEAGENT_HELP = '-p, --print --model --output-format --effort --tools --permission-mode --strict-mcp-config --no-session-persistence --disable-update --skip-safe-check';
 const CLAUDE_HELP = '-p, --print --tools --permission-mode --strict-mcp-config --no-session-persistence --max-turns --settings';
 const sleep = ms => new Promise(r => setTimeout(r, ms));

@@ -5,6 +5,8 @@
 //   防误触发（借鉴同事的 WeRemoteControl）：只认本人账号发的；Hub 自己发的都带「【助理】」开头并记下，不当成指令；
 //     同一条只处理一次；超过 120 秒的旧消息不执行（Hub 重启时不补跑积压）；每分钟最多 20 条。
 //   推送：助理发过话、新建的会话（或让它盯的）答完或卡住时推到群里；其他会话卡住时也推，但电脑前 5 分钟内有人操作就不推。
+// 2026-11-27 可选「WeLink 私聊助理（beta）」（welink-bot.js）：用户主动点「绑定到 WeLink」扫码后才启用，手机上私聊这个助手即可，不用建群；
+//   没绑定的用户一切照旧（专用群方式、设置内容、网络请求都和以前一样）。网关主动推消息过来，不用轮询。
 const crypto = require('node:crypto');
 const welink = require('./welink');
 
@@ -71,7 +73,10 @@ class PhoneChannel {
     this.lastTalkAt = this.now(); this.lastPollStartAt = 0;
   }
   settings() { return { ...DEFAULT_PHONE, ...(this.a.settings().phone || {}) }; }
-  active() { const p = this.settings(); return !!(p.enabled && p.groupId); }
+  // 接通方式：只有用户自己绑定并选了私聊助理（transport 存成 'bot'）才走私聊；其余一律是原来的专用群方式。
+  transport(p = this.settings()) { return p.transport === 'bot' ? 'bot' : 'group'; }
+  viaBot(p = this.settings()) { return this.transport(p) === 'bot'; }
+  active() { const p = this.settings(); return !!(p.enabled && (this.viaBot(p) ? this.a.bot?.hasCred() : p.groupId)); }
   state() { return { cursor: '', cursorGroup: '', me: '', meAt: 0, sent: [], seen: [], inbound: [], log: [], watches: {}, stuck: {}, pending: {}, lastPollAt: null, lastOkAt: null, lastError: '', groupCheck: null, ...this.a.read('phone.json', {}) }; }
   save(patch) { const s = { ...this.state(), ...patch }; this.a.write('phone.json', s); return s; }
   // 读、改、存一气呵成（中间没有 await）：收消息、盯会话、助理工具三处都会改这份状态，不能拿旧副本覆盖别人的改动。
@@ -89,6 +94,18 @@ class PhoneChannel {
   }
   close() { for (const t of this.timers) clearInterval(t); this.timers = []; }
 
+  // 私聊身份更严（审查复核 #5）：只认登录守护此刻确认在线的账号，不用快照和 1 小时缓存兜底；
+  //   没有登录守护的场合（单测）才看快照。
+  async meStrict() {
+    const auth = this.a.auth?.status?.();
+    if (this.a.auth) {
+      if (auth?.state === 'online' && auth.login?.ok && auth.login.uid) return auth.login.uid;
+      throw new Error('WeLink 命令行没有确认在线，私聊暂停');
+    }
+    const snap = this.a.snapshot();
+    if (snap?.login?.ok && snap.login.uid) return snap.login.uid;
+    throw new Error('WeLink 没登录');
+  }
   // 本人账号：取数时 auth status 读到的 UID；群里只有它发的消息才交给助理。
   async me() {
     // R32 换过工号：命令行还登着旧账号时不认旧账号（缓存的也不认），等本人在助理页重新登录。
@@ -112,7 +129,7 @@ class PhoneChannel {
 
   // ---- 收 ----
   async poll() {
-    if (!this.active()) { this.wasActive = false; return; }
+    if (!this.active() || this.viaBot()) { this.wasActive = false; return; }
     if (!this.wasActive) { this.wasActive = true; this.lastTalkAt = this.now(); } // 刚开启手机对话：从正常节奏起步，不沿用 Hub 启动以来的安静时长
     if (this.polling || this.now() < this.backoffUntil) return;
     const quiet = this.now() - this.lastTalkAt, gap = quiet > 30 * 60000 ? 30000 : quiet > 10 * 60000 ? 15000 : 0;
@@ -164,9 +181,40 @@ class PhoneChannel {
     } finally { this.polling = false; }
   }
 
+  // 专属助手收到私聊（网关推来的，不用轮询）。只认本人：用 WeLink 登录账号确认（与群方式同一套）；
+  //   读不到登录账号或账号对不上时一律不执行，只记一行（2026-11-27 审查：不再认「第一个说话的人」，也不沿用旧主人）。
+  async receive({ text, sender, entry, messageId }) {
+    if (!this.active() || !this.viaBot()) return;
+    const p = this.settings(), body = String(text || '').trim();
+    if (!body) return;
+    const bot = this.a.bot, gen = bot.gen;
+    // 路由在第一次等待之前就记下：连着两条消息时，各自的回答回到各自那一轮。
+    const r0 = entry && bot.state().routes[entry], route = r0 ? { tsid: r0.tsid, wsid: r0.wsid } : null;
+    // 网关重投同一条消息只执行一次。
+    if (messageId) { const seen = this.state().botSeen || []; if (seen.includes(messageId)) return; this.save({ botSeen: [...seen, messageId].slice(-200) }); }
+    let login = '';
+    try { login = await this.meStrict(); } catch { login = ''; /* 没确认在线、账号对不上：都不执行 */ }
+    if (bot.gen !== gen || !this.active() || !this.viaBot()) return; // 查身份期间关掉了：这条不再执行
+    const bs = bot.state();
+    const owner = login || '';
+    if (login && bs.owner !== login) bot.save({ owner: login });
+    if (!owner || !isOwnAccount(sender, owner, p.extraIds)) { this.note('in', `${short(body, 40)}（${sender || '未知账号'} 发的，${owner ? '你的账号是 ' + owner : '还确认不了你的账号：在助理页登录 WeLink 后自动恢复'}）如果这是你本人，可在下面添加该账号。`, 'other'); return; }
+    if (entry) bot.save({ last: entry });
+    const now = this.now(), st = this.state();
+    const inbound = st.inbound.filter(t => now - t < 60000);
+    if (inbound.length >= RATE_PER_MIN) { this.note('in', body, 'throttled'); void this.sendBot(`一分钟内超过 ${RATE_PER_MIN} 条，先歇一下，这条没处理。`, 'info', entry); return; }
+    inbound.push(now);
+    this.save({ inbound, lastPollAt: now, lastOkAt: now, lastError: '' });
+    this.note('in', body);
+    const item = this.a.ask(body, { via: 'phone' });
+    // 记下这一问从哪个对话来：回答回到原对话，不跟着「最近私聊」跑。
+    this.update(cur => ({ pending: { ...cur.pending, [item.id]: { at: now, acked: false, ...(route ? { entry: route } : {}) } } }));
+  }
+
   // ---- 发 ----
   send(text, kind = 'answer', targetGroup = '') {
     const p = this.settings();
+    if (!targetGroup && this.viaBot(p)) return this.sendBot(text, kind);
     if (targetGroup) p.groupId = targetGroup;
     if (!p.groupId) return Promise.resolve(false);
     const parts = chunks(plain(text));
@@ -192,12 +240,34 @@ class PhoneChannel {
     }).catch(() => false);
     return this.outbox;
   }
+  // 专属助手：私聊里的消息天然分得清谁发的，不用加「【助理】」前缀。助手只能回到用户私聊过的对话，没说过话之前发不出去。
+  sendBot(text, kind, entry = null) {
+    const parts = chunks(plain(text));
+    this.outbox = this.outbox.then(() => {
+      for (let i = 0; i < parts.length; i += 1) {
+        const body = (parts.length > 1 ? `（${i + 1}/${parts.length}）` : '') + parts[i];
+        if (!this.a.bot?.reply(entry, body)) {
+          const bs = this.a.bot?.status() || {};
+          this.save({ lastError: bs.phase !== 'ready' ? '私聊助理还没连上 WeLink，连上后再发' : '还没在 WeLink 上和私聊助理说过话：先私聊它一句，之后就能收到提醒' });
+          this.note('out', body, 'failed');
+          return false;
+        }
+        this.note('out', body, kind);
+      }
+      return true;
+    }).catch(() => false);
+    return this.outbox;
+  }
   // 手机问的那句答完（或没答上）：把回答发回群里。
   settle(item) {
-    if (!item || !this.state().pending[item.id]) return;
+    const p = item && this.state().pending[item.id];
+    if (!p) return;
     this.update(cur => { const pending = { ...cur.pending }; delete pending[item.id]; return { pending }; });
-    if (item.state === 'done') void this.send(item.phoneText || item.a, 'answer');
-    else void this.send('这句没答上：' + short(item.error || '原因不明', 120) + '。可以再说一次。', 'error');
+    const text = item.state === 'done' ? item.phoneText || item.a : '这句没答上：' + short(item.error || '原因不明', 120) + '。可以再说一次。';
+    const kind = item.state === 'done' ? 'answer' : 'error';
+    // 私聊里问的只回私聊：答完前改回了专用群，这条不往群里发（群里的人看不到上下文，也可能不止本人），只记一行。
+    if (p.entry) { if (this.viaBot()) void this.sendBot(text, kind, p.entry); else this.note('out', text, 'failed'); return; }
+    void this.send(text, kind);
   }
 
   // ---- 盯会话 ----
@@ -273,7 +343,7 @@ class PhoneChannel {
   }
   status() {
     const p = this.settings(), st = this.state();
-    return { settings: p, active: this.active(), lastPollAt: st.lastPollAt, lastOkAt: st.lastOkAt, lastError: st.lastError, log: st.log.slice(0, 15),
+    return { settings: p, transport: this.transport(p), bot: this.a.bot?.status() || null, active: this.active(), lastPollAt: st.lastPollAt, lastOkAt: st.lastOkAt, lastError: st.lastError, log: st.log.slice(0, 15),
       watching: Object.entries(st.watches).map(([id, w]) => ({ id, title: w.title, at: w.at })), pending: Object.keys(st.pending).length, groupCheck: st.groupCheck };
   }
 }

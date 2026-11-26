@@ -257,6 +257,10 @@
 .ca-phone-group{flex:1;min-width:160px!important}
 .ca-phone-row>span:first-child{width:96px;flex:none;white-space:nowrap}
 .ca-phone-row .ca-chip{flex:none}
+.ca-bot-reg{align-items:flex-start;gap:16px}
+.ca-bot-qr{flex:none;border:1px solid var(--hw-line);border-radius:6px;background:var(--hw-surface);padding:6px;image-rendering:pixelated}
+.ca-bot-reg>.col{gap:6px}
+.ca-bot-box>summary{cursor:pointer;margin:4px 0}
 .ca-memory-row{display:flex;justify-content:space-between;gap:14px;padding:10px 0;border-bottom:1px solid var(--hw-line);font-size:13px}
 .ca-memory-row>div:first-child{min-width:0;overflow-wrap:anywhere}
 .ca-memory-row b{font-size:13px;font-weight:500}

@@ -1,5 +1,5 @@
 'use strict';
-// PPT Doctor 完整包地址解析（一键安装用）。浏览器手动下载（镜像 / GitHub 入口）已随下载源废弃删除（R35）。
+// PPT Doctor 完整包地址解析（一键安装用）。浏览器手动下载入口已随外网下载源废弃删除（R35）。
 const { DOWNLOAD_URL } = require('./ppt-doctor-protocol');
 const validVersion = version => typeof version === 'string' && /^\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?$/i.test(version);
 

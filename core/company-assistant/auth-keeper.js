@@ -58,7 +58,7 @@ class AuthKeeper {
   }
   online(login, renewed = false, manual = false) {
     this.set({ state: 'online', login, error: '', renewCause: null, lastCheckAt: this.a.now(), scanAttempts: 0, notified: false, noticeId: '', lastOkAt: this.a.now(), lastOkUid: login?.uid || this.current.lastOkUid || null,
-      ...(renewed ? { lastRenewAt: this.a.now() } : {}) }, { manual });
+      ...(renewed ? { lastRenewAt: this.a.now(), renewedVia: 'cli' } : {}) }, { manual });
   }
   manualSucceeded(login) { if (!this.wrongAccount(login, this.a.now(), { manual: true })) this.online(login, false, true); }
   // 换过工号（R32）：令牌有效但和 WeLink 桌面端当前账号不是同一个人，查询会被网关拒成「proxy failed」。
@@ -90,6 +90,32 @@ class AuthKeeper {
     if (this.a.publish({ id, kind: 'welink-login', title: 'WeLink 自动续期没成功', text: this.current.renewCause?.text || '自动续期连续两次没完成；点助理左栏的 WeLink 一行扫码登录即可继续。', at: this.a.now() })) this.set({ notified: true });
   }
   close() { this.closed = true; this.controller?.abort(); }
+  // 员工助手代办 welink-cli 免密登录（2026-11-27，公司真机 probe 31/32）：GET 本机 3008 /v1/welinkcli/login，约 1 秒，
+  // 用员工助手自己的身份跑 agent_login，不出二维码（仍要本机 WeLink 桌面端开着）。只在员工助手在线且已登录时试，30 分钟最多一次；
+  // 之后用 auth status 复核，确认在线才算续上。返回 true 表示已续上。
+  weclaw() { return this.a.weclaw || null; }
+  async renewViaWeclaw(refresh) {
+    const wf = this.weclaw();
+    if (!wf) return false;
+    try {
+      if (!(await wf.usable('welink-login'))) return false;
+      if (this.closed || this.a.loginFlow?.state === 'waiting' || (this.sharedState(), this.current.state === 'signed-out')) return false;
+      const r = await wf.welinkLogin({ canProceed: () => !this.closed && this.a.loginFlow?.state !== 'waiting' && (this.sharedState(), this.current.state !== 'signed-out') });
+      if (this.closed || (this.sharedState(), this.current.state === 'signed-out')) return false;
+      if (!r.ok) { if (r.status !== 'throttled' && r.status !== 'cancelled') { wf.fail('welink-login', r.status); console.warn('[company-assistant] 员工助手代办 WeLink 登录没成功：' + r.status); } return false; }
+      const after = await this.a.rawWelink(['auth', 'status']);
+      if (this.closed || (this.sharedState(), this.current.state === 'signed-out')) return false;
+      const confirmed = { ...W.loginState(after.stdout + '\n' + after.stderr), checkedAt: this.a.now() };
+      if (after.code !== 0 || !confirmed.ok) { wf.fail('welink-login', 'not-confirmed'); return false; }
+      if (this.wrongAccount(confirmed, this.a.now())) return true;
+      wf.succeed('welink-login');
+      console.log('[company-assistant] WeLink 登录已由员工助手代办续上');
+      this.online(confirmed, true);
+      this.set({ renewedVia: 'weclaw' });
+      if (refresh) queueMicrotask(() => { if (!this.closed) void this.a.refresh({ force: true }).catch(e => console.warn('[company-assistant] renew refresh', e.message)); });
+      return true;
+    } catch { return false; }
+  }
   check({ force = false, known = null, refresh = true } = {}) {
     this.sharedState();
     if (this.closed || this.a.loginFlow?.state === 'waiting') return Promise.resolve(this.status());
@@ -140,6 +166,10 @@ class AuthKeeper {
       if (!login.ok && this.current.scanAttempts >= SCAN_LIMIT) this.set({ state: 'needs-scan', error: '' });
       const since = this.current.lastAttemptAt ? now - this.current.lastAttemptAt : Infinity;
       if (this.current.scanAttempts >= SCAN_LIMIT ? since < SLOW_RETRY_MS : since < RETRY_MS) { this.notifyScan(); return this.status(); }
+      // 员工助手在线时先请它代办免密登录（不出二维码）；没装、没开、没登录或没成功就照原样往下走。
+      if (!early && await this.renewViaWeclaw(refresh)) return this.status();
+      // 等员工助手的这一两秒里本人可能点了退出、或 Hub 在关：照原来的规矩不再自动登录。
+      if (this.closed || this.current.state === 'signed-out') return this.status();
       // 已在提示扫码时的悄悄重试不改界面状态，「扫码登录」一行照常显示。
       this.set({ state: this.current.state === 'needs-scan' ? 'needs-scan' : 'renewing', lastAttemptAt: now, error: '' });
       this.controller = new AbortController();

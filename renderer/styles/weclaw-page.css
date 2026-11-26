@@ -39,3 +39,6 @@
 .wcx-err{padding:8px 12px;border-radius:8px;background:var(--rs);color:var(--r);font-size:12.5px}
 .wcx-note{margin:0;color:var(--t2);font-size:12.5px}
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-navigation > #btn-weclaw > .btn-label{font-size:10.5px;letter-spacing:-.4px;text-overflow:clip}
+
+/* Hint shown on forum/attendance pages when the old route is stuck on login and the assistant app is installed. */
+.wch-hint{margin:8px 0 0;font-size:12.5px;line-height:1.6;display:flex;gap:8px;align-items:center;flex-wrap:wrap;opacity:.9}

@@ -5,7 +5,7 @@
   if (!require('../core/distribution').community) return;
   const { ipcRenderer, shell } = require('electron');
   const codeagentSetup = require('./codeagent-setup').createCodeAgentSetup({ document, ipcRenderer });
-  const GUIDE = 'https://github.com/TianLin0509/ai-hub-huawei/blob/main/INSTALL.md';
+  const GUIDE = require('../core/app-update/openx-config').projectPage;
   function init() {
     // Own stylesheet goes before the controls layer, which must stay last.
     if (!document.getElementById('community-style')) {

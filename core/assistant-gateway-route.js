@@ -12,17 +12,33 @@ const FEATURE_PURPOSES = Object.freeze({
 const FEATURE_IDS = Object.freeze(Object.keys(FEATURE_PURPOSES));
 const gateway = () => require('./api-gateway');
 
-// 会话启动参数：只对这次会话把 Claude Code 指向本机反代的网关上游，不改全局「自有 API」设置。
-function launchValues(values = {}) {
-  return { ...values, COMPANY_CLI: true, CLAUDE_BACKEND: 'proxy', CLAUDE_UPSTREAM: 'gateway' };
+// 2026-11-27 起同一套「功能固定线路」也给 Claude Code 外壳的另外三种来源用（公司模型、自有接口、自有 API 账号），
+// 会话标记仍是 apiGatewayRoute（受控边界、恢复、登录检查都认它），具体连哪条由选型记录里的 source 定。
+const ROUTE_SOURCES = ['company', 'own', 'api'];
+function parseChoice(raw) { try { return typeof raw === 'string' ? JSON.parse(raw) : raw || null; } catch { return null; } }
+// 选型记录 → 连接来源：部门 key（api-gateway）= gateway；Claude Code 外壳带 source 的照它；别的返回 null。
+function routeOf(raw) {
+  const c = parseChoice(raw);
+  if (c?.kind === KIND) return { kind: 'claude', source: 'gateway', model: c.model || '' };
+  if (c?.kind === 'claude' && ROUTE_SOURCES.includes(c.source)) return { kind: 'claude', source: c.source, model: c.model || '', ...(c.profileId ? { profileId: String(c.profileId) } : {}) };
+  return null;
 }
+// 会话启动参数：只对这次会话改 Claude Code 的连接，不改全局「自有 API」设置。没给选型（旧调用）= 部门 key。
+function launchValues(values = {}, choice) {
+  const route = choice == null ? { kind: 'claude', source: 'gateway', model: '' } : routeOf(choice);
+  if (!route) throw new Error('功能会话的模型来源无效，请在「功能使用的 Agent」里重新选择');
+  return require('./harness-route').claudeValues(values, route);
+}
+// 会话走的是不是部门 key 那条（报错口径、网关设置按钮只对它）。
+// 没有选型记录的旧标记（2026-11-27 前只有部门 key 这一种）按部门 key 算。
+function isGatewaySession(meta) { return !!meta && meta.apiGatewayRoute === true && (!meta.featureAgentChoice || isGatewayChoice(meta.featureAgentChoice)); }
 // 放行只认「表里的功能 + 该功能自己的用途 + 选型结果是部门 key + none 档 MCP」：网关标记、会话类型、功能与用途、选型记录、
 // MCP 档位全对上才算（缺档位或 full / lean 会继承用户自己的 MCP，一律不放行）。
 function allowedSession(kind, opts = {}) {
   if (!opts || opts.apiGatewayRoute !== true || opts.mcpProfile !== 'none' || !/^claude(?:-resume)?$/.test(String(kind || ''))) return false;
   const id = String(opts.featureAgent || '');
   if (!Object.prototype.hasOwnProperty.call(FEATURE_PURPOSES, id) || FEATURE_PURPOSES[id] !== opts.purpose) return false;
-  return isGatewayChoice(opts.featureAgentChoice);
+  return !!routeOf(opts.featureAgentChoice);
 }
 
 function isGatewayChoice(raw) {
@@ -33,7 +49,7 @@ function isGatewayChoice(raw) {
 function resumeFields(saved) {
   if (!saved || typeof saved !== 'object' || !/^claude(?:-resume)?$/.test(String(saved.kind || ''))) return null;
   const id = String(saved.featureAgent || '');
-  if (!Object.prototype.hasOwnProperty.call(FEATURE_PURPOSES, id) || FEATURE_PURPOSES[id] !== saved.purpose || !isGatewayChoice(saved.featureAgentChoice)) return null;
+  if (!Object.prototype.hasOwnProperty.call(FEATURE_PURPOSES, id) || FEATURE_PURPOSES[id] !== saved.purpose || !routeOf(saved.featureAgentChoice)) return null;
   return { featureAgent: id, featureAgentChoice: String(saved.featureAgentChoice), purpose: saved.purpose, apiGatewayRoute: true, mcpProfile: 'none' };
 }
 
@@ -49,6 +65,18 @@ function availability(dataDir, { findCommand = require('./community-setup').find
   return { available: true, reason: '' };
 }
 
+// 这条功能固定线路此刻能不能用（恢复休眠会话、登录检查前用）：部门 key 照旧；其余要本机有 Claude Code，自有接口 / 账号要填全。
+function routeAvailability(dataDir, choice, options = {}) {
+  const route = routeOf(choice);
+  if (!route) return { available: false, reason: '功能会话的模型来源无效' };
+  if (route.source === 'gateway') return availability(dataDir, options);
+  try { require('./company-ai-policy').assertKind('claude'); } catch { return { available: false, reason: '当前发行版不提供 Claude Code' }; }
+  let claude = '';
+  try { claude = (options.findCommand || require('./community-setup').findCommand)('claude', options.env || process.env) || ''; } catch { claude = ''; }
+  if (!claude) return { available: false, reason: '本机没有 Claude Code，这个功能要靠它作答' };
+  if (route.source !== 'company') try { require('./harness-route').connectionFor(route); } catch (error) { return { available: false, reason: error.message }; }
+  return { available: true, reason: '' };
+}
 // 开箱即用：用户没选过、本机没有可用的 CodeAgent、部门 key 已配好且能用时，8 项会话功能都默认走部门 key
 // （11-24 先只管助理；R49-2，11-26 扩到全部 8 项，起因是只有部门 key 的同事在 PPT / 分身 / 论坛等功能里默认落到 CodeAgent 而失败）。
 // 有 CodeAgent 的用户（含所有老用户）不受影响。backends 给定时按它判断（与「功能使用的 Agent」同一份目录）。
@@ -139,4 +167,4 @@ function gatewayFailure(text) {
   return { line: `${LABEL}：${raw ? `网关报错（${raw}）` : 'Claude Code 没能连上部门网关'}，可以重试；仍不行请到设置 →「API 网关」检查 key。`, actions: ['retry'] };
 }
 
-module.exports = { KIND, LABEL, FEATURE_PURPOSES, FEATURE_IDS, launchValues, allowedSession, isGatewayChoice, resumeFields, availability, autoDefault, codeagentMissing, inUse, failure, gatewayFailure };
+module.exports = { KIND, LABEL, FEATURE_PURPOSES, FEATURE_IDS, ROUTE_SOURCES, launchValues, routeOf, routeAvailability, allowedSession, isGatewayChoice, isGatewaySession, resumeFields, availability, autoDefault, codeagentMissing, inUse, failure, gatewayFailure };

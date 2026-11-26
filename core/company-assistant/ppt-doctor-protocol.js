@@ -1,11 +1,10 @@
 'use strict';
 const fs = require('node:fs');
 const API_VERSION = 1;
-// The mirror has manifests and versioned archives, not a landing/latest page.
-// The download handler resolves this entry to an existing archive before opening.
-const DOWNLOAD_URL = 'https://me.lt-stockpartner.tech/pptutor/manifest.json';
-// 镜像下载按顺序试：高速下载镜像（2026-11-07，每 5 分钟从旧阿里云同步）→ 旧阿里云。
-const MIRROR_MANIFEST_URLS = Object.freeze(['https://dl.lt-stockpartner.tech/pptutor/manifest.json', DOWNLOAD_URL]);
+// 给用户的手动下载入口：公司内源上的项目页。安装包只从内源下（R29/R35），客户端不再读外网清单。
+const DOWNLOAD_URL = require('../app-update/openx-config').projectPage;
+// 在线清单地址：默认没有（只用程序自带的清单快照 + 内源附件）；单测可注入。
+const MIRROR_MANIFEST_URLS = Object.freeze([]);
 const READ_ONLY = new Set(['status', 'catalog', 'search', 'read', 'report']);
 const failure = (code, message, fields = {}) => Object.assign(new Error(message), { code, ...fields });
 const retryRead = fn => process.platform === 'win32' ? require('../fs-rename-retry').wrapSync(fn) : fn;

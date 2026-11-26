@@ -109,6 +109,8 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
       frequency: FREQUENCIES.includes(saved.frequency) ? saved.frequency : DEFAULT_PREFERENCES.frequency,
       lastPlayedDay: typeof saved.lastPlayedDay === 'string' ? saved.lastPlayedDay : '',
       hintSeen: !!saved.hintSeen,
+      // 开场声音默认关（2026-11-27：会议室里开 Hub 被满音量开场尬住）；只有在设置里亲手打开过（存成 true）才出声，老用户同样静音。
+      sound: saved.sound === true,
     };
   }
   function writePrefs(next) { atomicJson(prefsFile, next); return next; }
@@ -150,7 +152,7 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
     if (prefs.frequency === 'daily' && prefs.lastPlayedDay === today) return null;
     writePrefs({ ...prefs, lastPlayedDay: today });
     const item = playable(prefs.selected) || playable(DEFAULT_ID) || playable(FALLBACK_ID);
-    return item ? { ...item, showHint: true, firstHint: !prefs.hintSeen } : null;
+    return item ? { ...item, showHint: true, firstHint: !prefs.hintSeen, sound: prefs.sound } : null;
   }
   function savePreferences(input = {}) {
     const prefs = preferences();
@@ -164,6 +166,7 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
       next.frequency = input.frequency;
     }
     if (input.hintSeen) next.hintSeen = true;
+    if (input.sound !== undefined) next.sound = input.sound === true;
     writePrefs(next);
     const snap = snapshot();
     emit('boot-splash:changed', snap);
@@ -240,7 +243,7 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
       const dest = path.join(root, 'downloads', entry.file);
       const activeAbort = abort;
       const cancellableFetch = (url, options) => fetchImpl(url, { ...options, signal: AbortSignal.any([options.signal, activeAbort.signal]) });
-      const result = await downloadWithFallback({ gate: true, sources, version: entry.version, openx: { release: `boot-splash-${entry.version}` }, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
+      const result = await downloadWithFallback({ sources, version: entry.version, openx: { release: `boot-splash-${entry.version}` }, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
         onProgress: progress => notify({ progress }), onAttempt: attempts => notify({ attempts }) });
       if (!result.ok) { notify({ phase: result.cancelled ? 'cancelled' : 'error', activeId: null, failedId: id, error: result.cancelled ? '下载已取消' : (require('./app-update/bundled-catalog').onlyFailReason(result) || '下载没成功，可以重试') + '；正在用的开场动画不受影响。' }); return snapshot(); }
       try { if (entry.anim === 'video') installVideo(dest, entry); else install(readJson(dest), entry); } finally { try { fs.unlinkSync(dest); } catch (_) {} }

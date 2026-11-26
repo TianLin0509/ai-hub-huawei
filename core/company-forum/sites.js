@@ -33,6 +33,9 @@ const SITES = Object.freeze([
     hotApi: /hot|rank|top|click|reply/i,
     postLink: /[?&#/](?:uuid|tid|postId|topicId|articleId|id)[=/]([\w-]{3,})/i,
     detailPath: id => `/next/detail/#/index?uuid=${encodeURIComponent(id)}&uniqueType=homeRanking`,
+    // 员工助手取回的渲染后首页（2026-11-27 公司真机 probe 34）：两个排行各 10 条 <a href=".../next/detail/#/index?uuid=…">，
+    // 和接口卡片给的一样只有标题和链接，所以优先走员工助手；页面上还有大量「分类 list?id=」链接，只认详情页链接。
+    weclaw: Object.freeze({ prefer: true, minPerList: 10, postLink: /\/next\/detail\/#\/index\?(?:[^#]*&)?uuid=([\w-]{3,})/i }),
   }),
   // 公司发文（2026-11-12，公司真机探针）：内网门户首页的「政策•讲话」「公司文件」「公告」三栏来自同一个接口
   //   GET /service/rest/info/common/docs —— { policy:[{documents}], corporate:[{documents}], bulletins:[{documents}], … }，每栏 12–17 条：
@@ -52,6 +55,8 @@ const SITES = Object.freeze([
     hotApi: /docs/i,
     postLink: /viewDoc\.do\?[^#]*\bdid=(\d+)/i,
     detailPath: id => `/info/cn/doc/viewDoc.do?did=${encodeURIComponent(id)}`,
+    // 员工助手只拿得到渲染后的页面（接口 JSON 取不到）：三栏标题和链接都在，但没有文号、发文部门和摘要，
+    weclaw: Object.freeze({ prefer: false }),
   }),
 ]);
 

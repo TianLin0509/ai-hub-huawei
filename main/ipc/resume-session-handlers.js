@@ -23,8 +23,11 @@ function gatewayResumeAuthority(saved, dataDir) {
   const route = require('../../core/assistant-gateway-route.js');
   const fields = route.resumeFields(saved);
   if (!fields) return null;
-  const available = route.availability(typeof dataDir === 'function' ? dataDir() : dataDir);
-  if (!available.available) throw Object.assign(new Error(`${route.LABEL}用不了：${available.reason}。请先在「设置 → API 网关」保存部门 key，再重开这个功能。`), { code: 'API_GATEWAY_KEY_MISSING', notSent: true });
+  const available = route.routeAvailability(typeof dataDir === 'function' ? dataDir() : dataDir, saved.featureAgentChoice);
+  if (!available.available) {
+    if (route.isGatewayChoice(saved.featureAgentChoice)) throw Object.assign(new Error(`${route.LABEL}用不了：${available.reason}。请先在「设置 → API 网关」保存部门 key，再重开这个功能。`), { code: 'API_GATEWAY_KEY_MISSING', notSent: true });
+    throw Object.assign(new Error(`这个功能所选的模型来源用不了：${available.reason}`), { code: 'FEATURE_ROUTE_UNAVAILABLE', notSent: true });
+  }
   return fields;
 }
 

@@ -156,7 +156,8 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
     if (!entry) return notice + `<p class="cf-note pad">${data.syncing ? '正在取…' : `${esc(site.name)}还没同步，点右上角「刷新」。`}</p>`;
     if (entry.needsLogin) {
       const waiting = site.login === 'waiting';
-      return notice + `<div class="cf-login"><p>${esc(site.loginError || entry.error)}</p><button type="button" class="cf-btn primary" data-cf="login" data-site="${site.id}"${waiting ? ' disabled' : ''}>${waiting ? '登录窗口已打开…' : '登录' + esc(site.name)}</button></div>`;
+      const hint = entry.weclawHint === 'open' ? require('./weclaw-hint').hintHtml('data-cf', 'cf-btn') : '';
+      return notice + `<div class="cf-login"><p>${esc(site.loginError || entry.error)}</p><button type="button" class="cf-btn primary" data-cf="login" data-site="${site.id}"${waiting ? ' disabled' : ''}>${waiting ? '登录窗口已打开…' : '登录' + esc(site.name)}</button>${hint}</div>`;
     }
     if (!entry.ok) return notice + `<p class="cf-note bad pad">${esc(entry.error || '没取到')}</p>`;
     const cols = columnsOf(site.id);
@@ -229,6 +230,7 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
       if (key) { markSeen(key); render(); }
       await call('open-url', { url: el.dataset.url }); return;
     }
+    if (name === 'open-weclaw') { await require('./weclaw-hint').openWeclaw(); showMessage?.('已打开员工助手；登录后下次同步会自动改走它'); return; }
     if (name === 'login') { el.disabled = true; await call('login', { site: el.dataset.site }); await load(); return; }
     if (name === 'summarize') { await call('summarize'); await load(); return; }
     if (name === 'jump') {

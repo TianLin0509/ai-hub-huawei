@@ -48,7 +48,7 @@ class CompanyAiTasks {
       checkedFinal=job.state==='running'?this.d.lastFinal?.(job.sessionId):null;
       const auth=checkedFinal?.text?.includes(marker)?'':failures.read(job.sessionId);
       if(auth)throw Error(auth);
-      if(Date.now()>until)throw Error(`${this.d.getSession?.(job.sessionId)?.apiGatewayRoute?require('./assistant-gateway-route').LABEL:'CodeAgent'} 任务超时，原材料已保留，可重试`);
+      if(Date.now()>until)throw Error(`${(s=>require('./assistant-gateway-route').isGatewaySession(s)?require('./assistant-gateway-route').LABEL:s?.apiGatewayRoute?'Claude Code':'CodeAgent')(this.d.getSession?.(job.sessionId))} 任务超时，原材料已保留，可重试`);
     };
     const bounded=async work=>{
       let timer;
@@ -60,7 +60,7 @@ class CompanyAiTasks {
       check();job.state='starting';this.save(job);
       const picked=require('./feature-agent-choice').session(this.d.dataDir,'text','codeagent',{id:job.sessionId,cwd,title:'公司 AI · '+job.label,purpose:'company-ai',autonomous:true,noInheritCursor:true});
       // 部门 API key 会话没指定模型时写「部门 API key（网关）」，不显示裸的 claude。
-      job.model=picked.opts.apiGatewayRoute ? picked.opts.model||require('./assistant-gateway-route').LABEL : picked.opts.featureAgentChoice ? picked.opts.model||picked.kind : 'CodeAgent';
+      job.model=picked.opts.apiGatewayRoute ? picked.opts.model||(require('./assistant-gateway-route').isGatewaySession(picked.opts)?require('./assistant-gateway-route').LABEL:'Claude Code') : picked.opts.featureAgentChoice ? picked.opts.model||picked.kind : 'CodeAgent';
       creation=Promise.resolve(this.d.createSession(picked.kind,picked.opts));
       const created=await bounded(creation);check();
       if(created?.ok===false)throw Error(created.message||created.error||'CodeAgent 会话创建失败');

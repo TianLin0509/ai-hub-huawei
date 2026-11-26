@@ -3,9 +3,8 @@
 // 每一项的文件名与内源版本名，和该组件真正下载时传给 downloadWithFallback 的一致（行号写在注释里，改下载时一起改）。
 const points = require('../core/app-update/download-points');
 
-function gatedFetch(fetchImpl) {
-  const base = typeof fetchImpl === 'function' ? fetchImpl : (...args) => require('electron').net.fetch(...args);
-  try { return require('../core/own-gate').gatedFetch(base); } catch (_) { return base; }
+function resolveFetch(fetchImpl) {
+  return typeof fetchImpl === 'function' ? fetchImpl : (...args) => require('electron').net.fetch(...args);
 }
 
 function registerStaticDownloadPoints({ fetchImpl } = {}) {
@@ -29,7 +28,7 @@ function registerStaticDownloadPoints({ fetchImpl } = {}) {
   // PPT Doctor 完整包：ppt-doctor-install.js perform()，release ppt-doctor-<完整包版本>，文件 = 清单里完整包地址的文件名。
   // 内源生效时和安装时一样只用程序自带的清单快照，不去外网读清单（R29/R35）；内源不生效（测试）时读给定清单地址。
   points.register('ppt-doctor', async () => {
-    const { MIRROR_MANIFEST_URLS } = require('../core/company-assistant/ppt-doctor-protocol');
+    const { MIRROR_MANIFEST_URLS, DOWNLOAD_URL } = require('../core/company-assistant/ppt-doctor-protocol');
     const { fullArchive, bundledDoctorManifest } = require('../core/company-assistant/ppt-doctor-install');
     const spec = (manifest, base) => {
       const meta = fullArchive(manifest, base);
@@ -39,9 +38,9 @@ function registerStaticDownloadPoints({ fetchImpl } = {}) {
     if (require('../core/app-update/openx-source').active(process.env)) {
       const snap = bundledDoctorManifest();
       if (!snap) throw new Error('程序自带的 PPT Doctor 清单缺失');
-      return spec(snap, MIRROR_MANIFEST_URLS[0]);
+      return spec(snap, MIRROR_MANIFEST_URLS[0] || DOWNLOAD_URL);
     }
-    const fetch = gatedFetch(fetchImpl);
+    const fetch = resolveFetch(fetchImpl);
     let last = null;
     for (const base of MIRROR_MANIFEST_URLS) {
       try {
@@ -55,7 +54,7 @@ function registerStaticDownloadPoints({ fetchImpl } = {}) {
   // PPT 识别组件：ppt-ocr-component.js perform()，release ocr-<版本>，文件 pptdoctor-ocr-<版本>.zip。
   points.register('ppt-ocr', async () => {
     const ocr = require('../core/company-assistant/ppt-ocr-component');
-    const { manifest } = await ocr.fetchManifest(gatedFetch(fetchImpl), {});
+    const { manifest } = await ocr.fetchManifest(resolveFetch(fetchImpl), {});
     return { items: [{ file: ocr.openxFile(manifest.version), release: `ocr-${manifest.version}`, version: manifest.version }] };
   });
   // 团队素材包：ppt-materials.js teamPackFromOpenx()，release ppt-materials-<版本>，文件 pptutor-materials-<版本>.zip。

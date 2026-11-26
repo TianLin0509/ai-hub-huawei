@@ -162,7 +162,7 @@ function apiErrorId(self, sid) {
 }
 function gatewayStall(self, sid, baseline) {
   const deps = self.a?.deps;
-  if (!deps?.getSession?.(sid)?.apiGatewayRoute) return '';
+  if (!require('../assistant-gateway-route').isGatewaySession(deps?.getSession?.(sid))) return '';
   return (self.gatewayFailures ||= require('../feature-agent-session-failure').createReader(deps, { settleMs: 8000 })).read(sid, baseline ?? null);
 }
 
@@ -436,7 +436,7 @@ class MeetingCompanion {
         const interrupted = ACTIVE.has(m.state);
         if (interrupted || m.recording?.full?.status === 'writing') {
           this.recording.recover(m);
-          if (interrupted) { m.state = 'interrupted'; m.error = '上次采集已中断，已保存材料可继续转写与整理；开始新会议可重新采集。'; }
+          if (interrupted) this.markInterrupted(m, 'Hub 上次没有正常退出');
           this.save(m);
         } else if (m.recording?.full?.bytes && !m.recording.full.durationFixed && m.recording.full.durationMs > 0) this.recording.repair(id);
         if (m.recording?.syncError && this.recording.recoverSync(m)) this.save(m); // 上次退出时录像没同步成功：再同步一次
@@ -445,6 +445,64 @@ class MeetingCompanion {
       this.recovered = true;
     }
     this.timer = setInterval(() => { void this.tick(); }, 1000); this.timer.unref?.();
+  }
+  // 意外中断（2026-11-27 R51 反馈：闪退后回不到原来的会议）。已录下的截图、录音段、转写、纪要和录像文件原样保留，
+  // 这里只把状态改成「已中断」并记下中断时刻、原因和已保存到哪一刻，会议页顶部据此提示「继续录制 / 查看记录」。
+  savedPoint(m) {
+    let at = Math.max(m.capturedMs || 0, m.recording?.savedThrough || 0);
+    for (const e of m.events || []) at = Math.max(at, e.end ?? e.at ?? 0);
+    return Math.round(at);
+  }
+  markInterrupted(m, reason) {
+    const savedMs = this.savedPoint(m), mmss = `${String(Math.floor(savedMs / 60000)).padStart(2, '0')}:${String(Math.floor(savedMs / 1000) % 60).padStart(2, '0')}`;
+    m.state = 'interrupted';
+    m.interruption = { at: this.now(), reason, savedMs };
+    m.error = `录制意外中断（${reason}），已保存到 ${mmss}；已录的内容都在，可以接着转写与整理。`;
+  }
+  // 界面进程崩溃或重新载入（主进程还在）：原来这场会议一直停在「采集中」，页面重开后是空白新会议、又不让开新会，
+  // 录像也一直显示「保存中」。现在采集这场会议的页面一没，就按启动恢复的同一套把它收成「已中断」。
+  interrupt(id, reason) {
+    let m; try { m = this.load(id); } catch { return false; }
+    if (!ACTIVE.has(m.state)) return false;
+    this.recording.recover(m); this.markInterrupted(m, reason); this.save(m, { flush: true });
+    void this.recording.drain(id).catch(() => {});
+    return true;
+  }
+  // 记下哪一个页面（webContents）在采集这场会议；页面崩溃、关闭或整页重新载入时，把它采集的会议收成「已中断」。
+  bindOwner(id, sender) {
+    if (!id || !sender || !Number.isInteger(sender.id)) return;
+    (this.owners ||= new Map()).set(id, sender.id);
+    this.watched ||= new Set();
+    if (this.watched.has(sender.id) || typeof sender.on !== 'function') return;
+    this.watched.add(sender.id);
+    const wcId = sender.id, lost = reason => this.orphan(wcId, reason);
+    sender.on('render-process-gone', (_e, details) => lost(details?.reason === 'oom' ? '界面内存不足崩溃' : '界面进程崩溃'));
+    sender.on('did-navigate', () => lost('界面重新载入')); // 只在整页换了文档时触发（页内跳转是 did-navigate-in-page）
+    sender.once?.('destroyed', () => { lost('窗口已关闭'); this.watched.delete(wcId); });
+  }
+  orphan(wcId, reason) {
+    for (const [id, owner] of [...(this.owners || [])]) if (owner === wcId) { this.owners.delete(id); this.interrupt(id, reason); }
+  }
+  // 「继续录制」：接着往这一场里录，时间轴从已保存的那一刻往后接（留 1 秒间隔），中断期间记一段录像缺口。
+  // 之前的截图、录音、转写、纪要、问答和录像文件都不动；新录的画面另存为这一场的续录片段，回放时按时间自动切过去。
+  continueInterrupted(m) {
+    if (m.state !== 'interrupted') throw new Error('这场会议没有中断，不能继续录制');
+    if (this.list().some(x => x.id !== m.id && ACTIVE.has(x.state))) throw new Error('已有会议在采集，请先结束它');
+    const rec = this.recording.state(m), from = this.savedPoint(m), resumeAt = from + 1000;
+    if ([rec.full, ...rec.segments].some(s => s?.status === 'writing')) this.recording.recover(m);
+    const videoEnd = Math.max(0, ...[rec.full, ...rec.segments].filter(s => s && s.status !== 'empty').map(s => s.end || 0));
+    if (videoEnd && resumeAt > videoEnd) rec.gaps.push({ at: videoEnd, end: resumeAt, reason: '意外中断，之后继续录制' });
+    m.state = 'recording'; m.error = ''; m.capturedMs = resumeAt; m.resumeAt = resumeAt;
+    m.interruption = { ...(m.interruption || {}), dismissed: true, continuedAt: this.now() };
+    (m.continuations ||= []).push({ from, at: resumeAt, startedAt: this.now() });
+  }
+  // 会议页顶部的一行提示：最近一场会议意外中断、用户还没点过「继续录制」或关掉提示时才给。
+  lastInterrupted() {
+    const top = this.list()[0];
+    if (!top || top.state !== 'interrupted') return null;
+    let m; try { m = this.peek(top.id); } catch { return null; }
+    if (!m.interruption || m.interruption.dismissed) return null;
+    return { id: m.id, title: m.title, savedMs: m.interruption.savedMs ?? this.savedPoint(m), reason: m.interruption.reason, at: m.interruption.at };
   }
   close() {
     this.closed = true;
@@ -619,6 +677,8 @@ class MeetingCompanion {
     else if (op === 'pause' && m.state === 'recording') m.state = 'paused';
     else if (op === 'resume' && m.state === 'paused') m.state = 'recording';
     else if (op === 'stop' && ACTIVE.has(m.state)) { m.state = 'ended'; m.endedAt = this.now(); m.finalRequested = true; }
+    else if (op === 'continue') this.continueInterrupted(m);
+    else if (op === 'dismiss-interruption') { if (!m.interruption) throw new Error('这场会议没有中断提示'); m.interruption = { ...m.interruption, dismissed: true }; }
     else if (op === 'auto') m.autoUnderstand = !!value;
     else if (op === 'interval') { const v = Number(value); if (!INTERVALS.includes(v)) throw new Error('自动更新间隔无效'); m.autoIntervalMin = v; m.autoUnderstand = v > 0; }
     else if (op === 'speed') { if (!SPEEDS[value]) throw new Error('理解速度无效'); m.speed = value; }
@@ -647,7 +707,7 @@ class MeetingCompanion {
     const models = modelOptions(this.deps), speed = meeting?.speed || 'normal';
     const engines = this.deps.meetingTerminals ? engine.rank(engine.engines(this.terminals()), speed, this.deps.meetingDefaultEngine?.() || '') : [];
     const storageError = this.storageError(id), recordingError = [this.recording.errors.get(id), storageError].filter(Boolean).join('；');
-    return { ok: true, meetings: this.list(), storage: { ...this.storage(), ...(id && meeting ? { current: this.dir(id), copies: this.copiesOf(id) } : {}) }, meeting: delta ? null : meeting, ...(delta ? { meetingDelta: delta } : {}), ...(meetingRev ? { meetingRev } : {}), ...(meetingError ? { meetingError } : {}), asr: this.asr.status(), models, defaultFastModel: fastModel(models),
+    return { ok: true, meetings: this.list(), lastInterrupted: this.lastInterrupted(), storage: { ...this.storage(), ...(id && meeting ? { current: this.dir(id), copies: this.copiesOf(id) } : {}) }, meeting: delta ? null : meeting, ...(delta ? { meetingDelta: delta } : {}), ...(meetingRev ? { meetingRev } : {}), ...(meetingError ? { meetingError } : {}), asr: this.asr.status(), models, defaultFastModel: fastModel(models),
       engines: engines.map(({ id, label }) => ({ id, label })), recommendedEngine: engines[0]?.id || '', recordingError, ...(storageError ? { storageError } : {}), questionSpeed: meeting?.questionSpeed || 'fast', questionLaneError: meeting?.questionLaneError || null,
       ...(meeting ? { ...this.laneHealth(meeting), ...this.engineInfo(meeting) } : {}) };
   }
@@ -896,8 +956,9 @@ class MeetingCompanion {
     if (!this.deps.getSession(sid)) {
       if (this.deps.getSessionMetadata?.(sid)) await this.deps.resumeSession?.(sid);
       else {
-        const chosen = require('../feature-agent-choice').session(this.a.deps?.dataDir, 'meeting', picked.harness,
-          { id: sid, cwd: this.dir(id), title: lane.title + ' · ' + m.title, purpose: 'company-assistant', autonomous: true, noInheritCursor: true, ...(picked.model ? { model: picked.model } : {}) });
+        const base = { id: sid, cwd: this.dir(id), title: lane.title + ' · ' + m.title, purpose: 'company-assistant', autonomous: true, noInheritCursor: true, ...(picked.model ? { model: picked.model } : {}) };
+        // 本场手选的引擎原样用（优先级「本场手选 > 全局默认」）；以前这里一律再过一遍全局选型，全局选过就把本场手选盖掉。
+        const chosen = picked.source === 'meeting' ? { kind: picked.harness, opts: base } : require('../feature-agent-choice').session(this.a.deps?.dataDir, 'meeting', picked.harness, base);
         await this.deps.createSession(chosen.kind, chosen.opts);
       }
     }
@@ -1007,6 +1068,8 @@ class MeetingCompanion {
       const result = service.askMeeting({ sessionId: job.sourceSessionId, meetingId: m.id, questionId: question.id, question: question.q, context, responseHint,
         speed: questionSpeed, mode: question.mode || (questionSpeed === 'fast' ? 'fresh' : 'fork'), engine: selection, model: selectedModel, cwd: this.dir(m.id),
         gatewayRoute: selected.harness === 'api-gateway' && ['claude', 'api-gateway'].includes(selection.split('|')[0]),
+        // 全局选 / 自动默认的是 Claude Code · 公司模型 / 自有接口 / 自有 API：快速问答照这条线独立连（11-27 审查 P1-4）。
+        featureChoice: !question.engine && selected.choice?.kind === 'claude' && selected.choice.source ? selected.choice : null,
         inheritModel: !question.engine,
         logDir: this.dir(m.id), understanding: { sessionId: m.sessionId, state: m.agent?.state || '', error: m.error || '', engineLabel: m.engineLabel || '', lastActivityAt: m.updatedAt || null },
         onPhase: snapshot => { questions.apply(this, m.id, job.token, question.id, snapshot); } });

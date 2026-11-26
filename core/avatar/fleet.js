@@ -119,7 +119,11 @@ class FleetService {
     let agent;
     if (gw?.configured && !gw.selected) agent = { ok: false, source: 'gateway', label: gw.reason || '所选网关模型不可用，请重新选择', configured: true, selected: false };
     else if (gw?.selected) agent = { ok: true, source: 'gateway', label: `${gw.label} · ${gw.model || gw.defaultModel || '网关默认模型'}`, configured: true, selected: true };
-    else {
+    // Claude Code 外壳 + 公司模型 / 自有接口 / 自有 API（11-27，含没有 CodeAgent 时的自动默认）：不要求本机有 CodeAgent。
+    else if (backends.featureChoice?.selected?.kind === 'claude' && backends.featureChoice.selected.source) {
+      const s = backends.featureChoice.selected, labels = require('../harness-route').LABELS;
+      agent = { ok: true, source: 'claude', label: `Claude Code · ${labels[s.source] || s.source}${s.model ? ' · ' + s.model : ''}`, configured: !!backends.featureChoice.choice, selected: true };
+    } else {
       const choice = backends.featureChoice;
       const enabled = owner ? this.fleet(owner).avatars.filter(av => av.enabled) : [];
       const unusable = enabled.find(av => {

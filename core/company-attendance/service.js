@@ -342,6 +342,16 @@ class CompanyAttendance {
           st.lastSuccessAt = at;
           st.lastSuccessDay = this.todayKey();
         } else entry = { at, reason, ok: false, needsLogin: !!r.needsLogin, triedPages: !!r.triedPages, ...(r.dnsFail ? { dnsFail: true } : {}), ...(r.netFail ? { netFail: true } : {}), error: scrubError(r.error) || '失败' };
+        // 员工助手（在线才试）顺带读考勤首页上的「待处理考勤异常」和月结截止提示；打卡明细它取不到（接口请求加密，见 weclawSummary）。
+        // 不等它：同步照原样先结束、先存状态，摘要读到后单独补写。
+        this.summaryPending = this.weclawSummary(domain).then((sum) => {
+          if (!sum) return;
+          // 单独一个文件：不和同步写 state 抢（同步开头读、结尾写 state，中间补写会被覆盖）。
+          this.write('weclaw-summary', sum);
+          this.changed();
+        }).catch(() => {});
+        // 打卡记录卡在登录上：装了员工助手的人提示可以打开它（没装的不提）。
+        if (!entry.ok && entry.needsLogin && this.weclawInstalled()) entry.weclawHint = 'open';
       }
       st.log = [entry, ...(st.log || [])].slice(0, LOG_KEEP);
       st.lastResult = entry;
@@ -350,6 +360,22 @@ class CompanyAttendance {
     })().finally(() => { this.syncing = null; this.changed(); });
     return this.syncing;
   }
+
+  // 「YYYY年M月考勤数据处理将于…截止」，但没有逐日打卡时刻（打卡记录的请求是加密的，换几个页面地址都回到首页），
+  // 所以打卡明细仍走原来的 Hub 窗口 / 无头 Edge，员工助手只补这两项摘要。不在线、没登录、被熔断时直接跳过，不影响原流程。
+  async weclawSummary(domain) {
+    const wf = this.deps.weclaw;
+    if (!wf || !domain || pagesToTry(this.settings())[0] !== 'attendance') return null;
+    try {
+      if (!(await wf.usable('attendance'))) return null;
+      const r = await wf.fetchPage(attendanceUrl(domain, process.env, 'attendance'), { format: 'text' });
+      const sum = r.ok ? require('../weclaw-fetch').attendanceSummary(r.content) : null;
+      if (!sum) { wf.fail('attendance', r.ok ? 'parse' : r.code); return null; }
+      wf.succeed('attendance');
+      return { at: this.now().toISOString(), anomalies: sum.anomalies, deadline: sum.deadline };
+    } catch { return null; }
+  }
+  weclawInstalled() { try { return !!this.deps.weclaw?.isInstalled(); } catch { return false; } }
 
   async login() {
     const url = attendanceUrl(await this.ensureDomain().catch(() => ''), process.env, pagesToTry(this.settings())[0]);
@@ -368,6 +394,7 @@ class CompanyAttendance {
       ok: true, today: this.todayKey(), syncing: !!this.syncing, settings, rules: calc.rulesFromWorkTime(settings.workTime, settings.flex),
       url: attendanceUrl(settings.domain, process.env, pagesToTry(settings)[0]), pages: Object.entries(PAGES).map(([id, p]) => ({ id, label: p.label })), records, holidays: this.read('holidays', {}),
       lastResult: st.lastResult || null, lastSuccessAt: st.lastSuccessAt || null, lastAttemptAt: st.lastAttemptAt || null,
+      weclawSummary: this.read('weclaw-summary', null),
       log: (st.log || []).slice(0, 10), staleDays, gapRisk: staleDays != null && staleDays >= 6,
       firstDate: records.length ? records[0].date : null,
     };

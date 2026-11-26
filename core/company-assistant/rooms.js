@@ -86,7 +86,7 @@ class RoomBooking {
       connected: !!live, running: !!(live && helper.running), mode: live ? helper.mode : null,
       loginNeeded: !!helper?.loginNeeded, loginBusy: !!(live && helper.loginBusy),
       rules: helper?.rules || null, phases: live ? helper.phases : {}, nextOpen: helper?.nextOpen,
-      error: this.preparationError || this.error, home: this.home(), enabled: !!this.settings().enabled,
+      error: this.preparationError || this.error, external: this.blockedExternal ? (this.external || []) : [], home: this.home(), enabled: !!this.settings().enabled,
       ...this.scheduleState(helper), events: (this.a.state().roomEvents || []).map(e => ({ ...e, record: this.offlineRetry.decorate(e.record), slot: slotText(e.record) })) };
   }
   // 会议室名称与近期日程地点用来推断园区；日程快照每 10 分钟最多读一次。
@@ -248,6 +248,55 @@ class RoomBooking {
     if (!Array.isArray(history)) throw new Error('秘书历史格式不正确，未启动抢订');
     this.a.saveState({ roomSeen: history.map(r => createHash('sha256').update(JSON.stringify(r)).digest('hex')) });
   }
+  // 和 Hub 当前组件抢同一份登录资料夹的其他秘书终结者进程（2026-11-27 R51 反馈：重启 Hub 也一直提示「旧秘书终结者正在运行」）。
+  // 原来只要名字对上、路径和本次组件不同就拦，可 Hub 拉起的组件本来就常驻（关 Hub 不结束），换过助理数据目录或升级后，
+  // 组件缓存换了路径，上一份还在跑的 Hub 组件就被当成「旧秘书终结者」，它又没有托盘图标，用户退不掉、重启也没用。
+  // 现在：本数据目录的状态文件新鲜、进程号还活着的那一份就是我们的组件（不管从哪个路径启动），连同它的父子进程照常接通；
+  // 其余的才拦，并分清「Hub 早先拉起的组件」和「单独安装的旧秘书终结者」，界面上可以重新检测或一键结束。
+  async externalInstances(exe) {
+    const list = await component.foreignInstances(exe, { listProcesses: this.deps.roomProcesses });
+    let helper = null;
+    try { helper = this.helper(); } catch { helper = null; }
+    const fresh = helper?.protocol === 1 && helper.pid && processAlive(Number(helper.pid)) && this.a.now() - helper.at < 30000 && helper.at <= this.a.now() + 5000;
+    const own = new Set(), ownPaths = [];
+    if (fresh) {
+      const pid = Number(helper.pid), self = list.find(p => p.pid === pid);
+      // 只认命令行带 --hub-control 的：进程号被单独运行的旧版复用时不会被当成自己的。
+      for (const p of list) if (p.managed && (p.pid === pid || p.parent === pid || (self && p.pid === self.parent))) { own.add(p.pid); if (p.path) ownPaths.push(p.path); }
+    }
+    return list.filter(p => !own.has(p.pid) && !ownPaths.some(o => component.samePath(o, p.path)))
+      .map(p => ({ pid: p.pid, path: p.path, managed: p.managed }));
+  }
+  externalMessage(list) {
+    const pids = list.map(p => p.pid).join('、');
+    return list.every(p => p.managed)
+      ? `之前由 Hub 拉起的会议室组件还在后台运行（进程 ${pids}，没有托盘图标，多半是换过助理数据目录或升级前留下的），和这次的组件接不上；点「帮我结束它」后会自动重新接通。当前未启动第二份抢订`
+      : `旧秘书终结者正在运行（进程 ${pids}），请先在它的托盘退出，再点「我已退出，重新检测」；找不到托盘图标可以点「帮我结束它」。当前未启动第二份抢订`;
+  }
+  // 「我已退出，重新检测」：清掉上次的拦截结论，重新查一遍；没有别的实例就直接接通。
+  async recheck() {
+    this.blockedExternal = false; this.external = []; this.preparationError = '';
+    return this.ensure({ user: true });
+  }
+  // 「帮我结束它」：在主进程里重新查一遍名单，只结束名单上的进程（按进程号连同子进程），不接受页面传来的进程号。
+  async stopExternal() {
+    if (this.deps.roomCommand) return this.recheck();
+    const runtime = await component.prepareRuntime(this.a, { bundle: this.deps.roomBundle, downloader: this.runtimeDownloader() });
+    const list = await this.externalInstances(runtime.exe);
+    if (list.length) {
+      const pids = list.map(p => p.pid);
+      await (this.deps.roomStopProcesses || component.stopProcesses)(pids);
+      for (let i = 0; i < 25 && pids.some(pid => processAlive(pid)); i++) await new Promise(r => setTimeout(r, 200));
+      const left = pids.filter(pid => processAlive(pid));
+      if (left.length) {
+        // 横幅和下面的报错说同一件事：名单缩成还没结束的那几个。
+        this.external = list.filter(p => left.includes(p.pid)); this.blockedExternal = true;
+        this.preparationError = `进程 ${left.join('、')} 没能结束（可能是以管理员身份运行的），请在任务管理器里结束后点「我已退出，重新检测」`;
+        throw new Error(this.preparationError);
+      }
+    }
+    return this.recheck();
+  }
   // Preparing the embedded control component does not start a booking. Only the
   // explicit start command (or an already enabled schedule) may enter daemon mode.
   async ensure({ user = false } = {}) {
@@ -259,9 +308,9 @@ class RoomBooking {
       const command = this.deps.roomCommand || [runtime.exe];
       if (!command[0] || !fs.existsSync(command[0])) throw new Error('会议室组件不可用，请修复 Hub 安装包');
       if (!this.deps.roomCommand) {
-        const foreign = await component.foreignInstances(runtime.exe, { listProcesses: this.deps.roomProcesses });
-        this.blockedExternal = foreign.length > 0;
-        if (this.blockedExternal) throw new Error('旧秘书终结者正在运行，请先在它的托盘退出，再回到 Hub；当前未启动第二份抢订');
+        const foreign = await this.externalInstances(runtime.exe);
+        this.external = foreign; this.blockedExternal = foreign.length > 0;
+        if (this.blockedExternal) throw new Error(this.externalMessage(foreign));
       }
       if (this.status().connected) { this.baselineHistory(); this.error = ''; this.preparationError = ''; return { ...this.status(), preparing: false }; }
       component.initializeHome(this.home());

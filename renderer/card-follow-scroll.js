@@ -10,7 +10,10 @@ function createCardFollowScroll({ element, window: win, document: doc, button: s
   element.setAttribute('aria-label', '会话消息');
   const button = suppliedButton || doc.createElement('button');
   if (!suppliedButton) button.id = 'card-jump-latest'; button.type = 'button'; button.hidden = true;
-  button.textContent = '↓ 回到最新'; button.setAttribute('aria-label', '回到最新输出并继续跟随');
+  const LATEST = '↓ 回到最新';
+  let label = LATEST;
+  const setLabel = next => { if (label !== next) { label = next; button.textContent = next; } };
+  button.textContent = LATEST; button.setAttribute('aria-label', '回到最新输出并继续跟随');
   const gap = () => Math.max(0, element.scrollHeight - element.clientHeight - element.scrollTop);
   const visible = () => element.isConnected && element.clientHeight > 0;
   function paint() {
@@ -32,6 +35,7 @@ function createCardFollowScroll({ element, window: win, document: doc, button: s
   function pause() { following = false; pendingTop = null; epoch++; paint(); }
   function follow() {
     following = true; pendingTop = null; userDirection = 0; epoch++;
+    setLabel(LATEST);
     if (visible()) element.scrollTop = element.scrollHeight;
     request();
   }
@@ -102,11 +106,19 @@ function createCardFollowScroll({ element, window: win, document: doc, button: s
   button.addEventListener('click', follow);
   const api = {
     request, pause, follow, isFollowing: () => following,
+    // 停在指定位置、不再跟随（如长回复回来时停在回复开头），底部按钮可换一句说明。
+    holdAt(top, text) {
+      pause();
+      element.scrollTop = top;
+      if (text) setLabel(text);
+      paint();
+    },
     activate(id, { force = false } = {}) {
       if (id !== sessionId) {
         if (sessionId) saved.set(sessionId, { following, top: element.scrollTop });
         const state = saved.get(id);
         sessionId = id; following = state?.following ?? true; pendingTop = state?.top ?? 0;
+        setLabel(LATEST);
         userDirection = 0; epoch++;
       }
       if (force) follow();

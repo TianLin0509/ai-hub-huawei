@@ -40,7 +40,8 @@ function lastApiError(file, { tailBytes = TAIL_BYTES } = {}) {
 // 给用户看的一句话：原文去掉「Please run /login ·」这类 CLI 提示，留住状态码和服务端说明。
 function describe(text, session = {}) {
   const raw = String(text || '').replace(/^\s*Please run \/login\s*[·:：-]\s*/i, '').replace(/\s+/g, ' ').trim();
-  if (/\b(?:404|405|501)\b|method not allowed|unsupported (?:method|endpoint)/i.test(raw)) {
+  // 供应商修复卡只给 CodeAgent 会话；功能固定线路（部门 key / 自有接口等经 Claude Code）不套 CodeAgent 供应商说法（11-27 审查 P2-6）。
+  if (!session.apiGatewayRoute && /\b(?:404|405|501)\b|method not allowed|unsupported (?:method|endpoint)/i.test(raw)) {
     const info = require('../codeagent-assistant-route').connection(session.codeagentConfigDir, session.codeagentModelProvider);
     const provider = session.codeagentModelProviderLabel || info.provider || '未确认的供应商', address = info.address;
     return { kind: `供应商「${provider}」${address ? `（${address}）` : '（地址未能读取）'}的接口不接受对话请求`,

@@ -12,12 +12,8 @@ const MARKER = 'PPT Doctor Material v1';
 // 团队素材包（2026-11-11）：和 PPT Doctor 的「团队素材包」组件同一份发布物（component.json + component.zip，
 // zip 里只有 team-materials.pptx）。Hub 自己下载后直接读，不需要先装 Doctor，也不需要 PowerPoint 导入。
 const TEAM_PACK_FILE = 'team-materials.pptx';
-// 下载只走公司内源（R29/R35）；这组地址只在内源不生效时（纯 Node 单测、测试注入）用于读清单和下载。
-const TEAM_PACK_SOURCES = Object.freeze([
-  'https://dl.lt-stockpartner.tech/pptutor/materials/',
-  'https://me.lt-stockpartner.tech/pptutor/materials/',
-  'https://github.com/TianLin0509/PPTutor/releases/download/materials-v1.0.0/',
-]);
+// 下载只走公司内源（R29/R35）；内源不生效时（纯 Node 单测、测试注入）由调用方给地址，默认不提供外网源。
+const TEAM_PACK_SOURCES = Object.freeze([]);
 function packSources(deps = {}) {
   return deps.pptTeamPackUrls || TEAM_PACK_SOURCES;
 }
@@ -59,9 +55,9 @@ async function teamPackManifest(deps = {}) {
   if (deps.openx !== false && require('../app-update/openx-source').active((deps.openx && deps.openx.env) || process.env)) {
     const snap = deps.bundledTeamManifest !== undefined ? deps.bundledTeamManifest : bundledTeamManifest();
     if (!snap) throw new Error('程序自带的团队素材包清单缺失，请更新 Hub 后再试');
-    return { base: packSources(deps)[0], manifest: snap, bundled: true };
+    return { base: packSources(deps)[0] || null, manifest: snap, bundled: true };
   }
-  const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(deps.pptDownloadFetch));
+  const fetch = require('./fetch-util').resolveFetch(deps.pptDownloadFetch);
   const { reasonOf } = require('../app-update/downloader');
   const reasons = [];
   let gateNote = '', found = null;
@@ -76,9 +72,9 @@ async function teamPackManifest(deps = {}) {
     } catch (error) { reasons.push(reasonOf(error)); if (error.blocked || error.passed) gateNote = error.message; }
   }
   if (found) return found;
-  // 被公司网络确认页拦住的，直接说放行的事（core/own-gate.js），不拿最后一个源的原因顶替。
+  // 被公司网络确认页拦住的，直接说清楚，不拿最后一个源的原因顶替。
   if (gateNote) throw new Error(gateNote);
-  throw new Error(`团队素材包暂时下载不了：${reasons[reasons.length - 1]}。请检查网络后重试，或用「打开素材包…」打开同事发来的素材包文件`);
+  throw new Error(`团队素材包暂时下载不了：${reasons[reasons.length - 1] || '没有可用的下载源'}。请检查网络后重试，或用「打开素材包…」打开同事发来的素材包文件`);
 }
 // 逐个源下载素材包文件，返回第一个 sha256 对得上的；都不行时说清原因。
 async function teamPackArchive(fetch, manifest, bases, onProgress = null) {
@@ -240,7 +236,7 @@ class PptMaterials {
   async downloadTeamPack() {
     const dir = path.join(require('./ppt-work-dir').workDir(this.lib.a, { writable: true }), 'ppt-team-materials');
     const { base, manifest } = await teamPackManifest(this.deps);
-    const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(this.deps.pptDownloadFetch));
+    const fetch = require('./fetch-util').resolveFetch(this.deps.pptDownloadFetch);
     // 只走公司内源（R29/R35）：openx 上的 pptutor-materials-<版本>.zip，校验对才用；内源不生效（测试）时按给定源下。
     const bus = require('../app-update/progress-bus'), onProgress = p => bus.emit('ppt-materials', p);
     bus.emit('ppt-materials', { phase: 'connecting' });
@@ -252,7 +248,7 @@ class PptMaterials {
       bus.emit('ppt-materials', { phase: 'error', error: reason });
       throw new Error(`团队素材包暂时下载不了：${reason}`);
     }
-    if (!archive) archive = await teamPackArchive(fetch, manifest, [base, ...packSources(this.deps).filter(u => u !== base)], onProgress);
+    if (!archive) archive = await teamPackArchive(fetch, manifest, [base, ...packSources(this.deps).filter(u => u !== base)].filter(Boolean), onProgress);
     bus.emit('ppt-materials', { phase: 'verifying', message: '正在校验并读取素材…' });
     const stamp = `${process.pid}-${Date.now()}`;
     // 临时文件不用 .pptx 后缀（5.6.2）：公司电脑的文档安全软件会扫描并占住新写出的 Office 文件，

@@ -16,7 +16,7 @@ const path = require('node:path');
 const { withDeadline } = require('./request-lifecycle');
 
 const ENGINES = ['codeagent', 'claude', 'codex'];
-const LABEL = { codeagent: 'CodeAgent', claude: 'Claude Code', codex: 'Codex' };
+const LABEL = { codeagent: 'CodeAgent', claude: 'Claude Code', codex: 'Codex', 'deepseek-acp': 'DSH' };
 const TOTAL_MS = 60000;
 const IDLE_MS = 45000; // 保留原有一分钟总上限，静默更早退出。
 const MAX_QUESTION = 2000;
@@ -222,9 +222,10 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
     const file = manualPath();
     if (!file) return { ok: false, error: '安装包里缺少使用说明书，请升级到最新版本' };
     const engines = detect().filter(e => e.available);
-    if (!engines.length) return { ok: false, needSetup: true, error: '这台电脑上还没有可用的 AI 命令行（CodeAgent、Claude Code 或 Codex）' };
-    const prompt = buildPrompt({ manual: readManual(file), question: q, history });
     const selection = require('../feature-agent-choice').resolve(dataDir, 'help');
+    // 选了 DSH（不在命令行检测表里）时，只装了 DSH 也照所选作答。
+    if (!engines.length && !selection.selected) return { ok: false, needSetup: true, error: '这台电脑上还没有可用的 AI 命令行（CodeAgent、Claude Code 或 Codex）' };
+    const prompt = buildPrompt({ manual: readManual(file), question: q, history });
     fs.mkdirSync(cwd, { recursive: true });
     const t0 = now();
     const tried = [];
@@ -249,7 +250,8 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
       return await withDeadline(async ({ signal: requestSignal, onActivity }) => {
         const ctx = { signal: requestSignal, onActivity, deadline: t0 + totalMs };
         if (selection.selected) {
-          const selected = selection.selected.model ? selection.selected : { ...selection.selected, model: defaultModel(selection.selected.kind) };
+          // 带来源的外壳选择（部门 key / 自有接口等）空模型 = 用来源自己的默认模型，不套 CLI 默认。
+          const selected = selection.selected.model || selection.selected.source ? selection.selected : { ...selection.selected, model: defaultModel(selection.selected.kind) };
           try {
             const answer = await require('../feature-agent-run').run(selected, prompt,
               { dataDir, env, signal: requestSignal, onActivity, runOnce, findCommand, timeoutMs: left(ctx) });

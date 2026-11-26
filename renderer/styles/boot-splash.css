@@ -28,7 +28,7 @@
 .bsp-settings{max-width:620px}.bsp-settings h3{font-size:14px;margin:4px 0 10px}.bsp-settings h3+p{margin-top:-4px}.bsp-settings p{font-size:12px;color:var(--fg-muted,#6b7080);margin:0 0 8px}
 .bsp-radio{display:flex;gap:10px;align-items:flex-start;padding:11px 13px;border:1px solid var(--border-subtle,#e3e1ea);border-radius:10px;margin-bottom:8px;cursor:pointer}.bsp-radio:has(input:checked){border-color:var(--brand,#3065bd);background:var(--surface-sunken,#f6f7f9)}.bsp-radio input{margin-top:3px;accent-color:var(--brand,#3065bd)}
 .bsp-radio span{display:grid;gap:2px}.bsp-radio b{font-size:13px;font-weight:600}.bsp-radio small{font-size:12px;color:var(--fg-muted,#6b7080)}
-.bsp-row{display:flex;gap:8px;margin-top:16px}.bsp-settings h3:not(:first-child){margin-top:20px}
+.bsp-row{display:flex;gap:8px;margin-top:16px}.bsp-settings h3:not(:first-child){margin-top:16px}
 .bsp-error{color:var(--status-danger,#b4472f)}
 #options-boot-splash{display:block;width:100%;text-align:left;margin-top:8px;padding:10px 12px;border:1px solid var(--border-subtle,#e3e1ea);border-radius:8px;background:var(--surface-raised,#fff);font:inherit;font-size:13px;color:var(--fg-default,#1f2330);cursor:pointer}
 /* 设置外观页直接调整频率和重播，说明收进 ⓘ，保持一行操作。 */

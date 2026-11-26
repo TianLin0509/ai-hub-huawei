@@ -73,6 +73,11 @@ test('开箱即用：没 CodeAgent、存过部门 key、有 Claude Code 时默�
     assert.equal(other.kind, 'claude', id); assert.equal(other.opts.apiGatewayRoute, true, id);
     assert.doesNotThrow(() => choice.assertSessionKind(other.kind, other.opts), id);
   }
+  // 有 CodeAgent 的保持原默认（CodeAgent），opts 原样。
+  const withCa = [codeagentRow(true), gatewayRow(true)];
+  const opts = { purpose: route.FEATURE_PURPOSES.ppt };
+  const keep = choice.session(dir, 'ppt', 'codeagent', opts, { backends: withCa });
+  assert.equal(keep.kind, 'codeagent'); assert.equal(keep.opts, opts);
   // 状态页写清默认是部门 key。
   const st = choice.state(dir, { backends });
   assert.match(st.features.find(f => f.id === 'assistant').defaultText, /部门 API key/);

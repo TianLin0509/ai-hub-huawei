@@ -4,7 +4,7 @@
 // （mcloud/mag/ProxyForText）对不上就拒，CLI 只回一句「proxy failed」；而 auth status 只看令牌没过期，照样说已登录。
 // 所以身份以桌面端当前登录的账号为准，两边对不上就请本人「清除并重新扫码」，不再拿旧令牌续期。
 //
-// 两个本机来源（2026-11-24 远程器只读核实，公司黄区真机 WeLink 7.39）：
+// 两个本机来源（2026-11-24 在公司黄区真机 WeLink 7.39 上只读核实）：
 //   桌面端：%APPDATA%\WeLink_Desktop\appdata\logininfo.txt，一行 loginAccount=<账号>，每次登录改写；
 //           读不到时看 %APPDATA%\WeLink_Desktop\UserData\ 下按账号命名的目录，取 user.db 最新的那个。
 //   命令行：%USERPROFILE%\.welink-cli\credentials.json 里的 uid（w3Account 可能为空）。只取账号这一个字段，不碰令牌。

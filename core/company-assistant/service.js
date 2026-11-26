@@ -191,7 +191,11 @@ class CompanyAssistant {
     this.loginFlow = null;
     this.timers = [];
     this.tools = deps.noTools ? null : new HubTools(this, deps);
+    this.bot = new (require('./welink-bot').WelinkBot)(this, deps);
     this.phone = new PhoneChannel(this, deps);
+    this.bot.onChat = msg => this.phone.receive(msg);
+    // 用户扫码确认绑定后直接开启手机对话（走私聊助理），用户不用再去点开关。
+    this.bot.onConfirmed = () => this.setSettings({ phone: { ...(this.settings().phone || {}), enabled: true, transport: 'bot', since: this.now() } });
     this.ppt = new PptLibrary(this, deps);
     this.rooms = new RoomBooking(this, deps);
     this.auth = new AuthKeeper(this);
@@ -292,6 +296,9 @@ class CompanyAssistant {
       if ('enabled' in q) np.enabled = !!q.enabled;
       if ('groupId' in q) { np.groupId = String(q.groupId || '').trim().slice(0, 80); np.groupName = String(q.groupName || '').trim().slice(0, 60); }
       for (const k of ['pushWatched', 'pushStuck']) if (k in q) np[k] = !!q[k];
+      // 接通方式：选了私聊助理才记 'bot'；改回专用群就删掉这个字段，设置内容和从没用过私聊助理时一模一样。
+      if (q.transport === 'bot') { np.transport = 'bot'; if (Number.isFinite(q.since)) np.since = q.since; }
+      else if (q.transport === 'group') delete np.transport;
       // 刚接通（或换了群）：只认这之后发的消息，不把群里以前的话当成指令。
       if (np.enabled && np.groupId && (!cur.enabled || np.groupId !== cur.groupId)) np.since = this.now();
       next.phone = np;
@@ -582,6 +589,7 @@ class CompanyAssistant {
     this.prepareWorkspace();
     this.startTools();
     this.phone.start();
+    if (this.bot && this.phone.viaBot() && this.phone.settings().enabled) this.bot.start();
     this.rooms.start();
     if (!this.deps.noTimer) void this.ppt.refresh().catch(e => console.warn('[company-assistant] ppt', e.message));
     this.startTimers();
@@ -638,18 +646,18 @@ class CompanyAssistant {
     this.paused = true;
     this.stopTimers();
     clearInterval(this.meetings.timer); this.meetings.timer = null;
-    this.phone.close();
+    this.phone.close(); this.bot?.close();
     if (!this.rooms.settings().enabled) this.rooms.close();
     if (this.lanes.ppt.job || this.lanes.ppt.queue.length) this.startPptCollector();
   }
   resume() {
     if (!this.paused) return;
     this.paused = false;
-    this.meetings.start(); this.phone.start();
+    this.meetings.start(); this.phone.start(); if (this.bot && this.phone.viaBot() && this.phone.settings().enabled) this.bot.start();
     this.rooms.start();
     this.startTimers();
   }
-  close() { this.closed = true; this.archive.stop(); this.digest.close(); this.petReminders.close(); this.stopPptCollector(); this.stopTimers(); this.meetings.close(); this.loginStop?.abort(); this.auth.close(); this.phone.close(); this.ppt.close?.();
+  close() { this.closed = true; this.archive.stop(); this.digest.close(); this.petReminders.close(); this.stopPptCollector(); this.stopTimers(); this.meetings.close(); this.loginStop?.abort(); this.auth.close(); this.phone.close(); this.bot?.close(); this.ppt.close?.();
     this.rooms.close();
     clearInterval(this.warmSweepTimer); this.warmSweepTimer = null;
     for (const id of Object.values(this.warm)) this.retire(id);
@@ -725,6 +733,14 @@ class CompanyAssistant {
     // 校验先于欢迎消息，防止非法账号保存失败但已经向群里发消息。
     if ('extraIds' in patch) p.extraIds = validateExtraIds(patch.extraIds);
     p.groupId = String(p.groupId || '').trim();
+    // 专属助手：不用群，不发欢迎语（助手只能回到用户私聊过的对话）；切换方式时连上或断开网关。
+    if (this.phone.viaBot(p)) {
+      if (p.enabled && !this.bot.hasCred()) throw new Error('还没绑定 WeLink 私聊助理，先点「绑定到 WeLink」');
+      this.setSettings({ phone: { ...p, transport: 'bot', ...(p.enabled && !before.enabled ? { since: this.now() } : {}) } });
+      if (p.enabled && this.started && !this.paused) this.bot.start(); else this.bot.close();
+      return { ok: true, phone: this.phone.status(), welcome: null };
+    }
+    this.bot?.close();
     if (p.enabled && !p.groupId) throw new Error('请填写助理消息群 ID');
     if (/[\s\r\n]/.test(p.groupId) || p.groupId.length > 80) throw new Error('群 ID 格式不正确');
     let welcome = null;
@@ -2119,7 +2135,7 @@ class CompanyAssistant {
         if (this.now() - job.apiError.at >= UNMARKED_GRACE_MS) {
           const session = this.deps.getSession(job.sessionId) || {};
           // 部门 API key 会话：网关口径的一行原因 + 下一步按钮（core/assistant-gateway-route.js），不套 CodeAgent 供应商的说法。
-          const gw = session.apiGatewayRoute ? require('../assistant-gateway-route').gatewayFailure(err.text) : null;
+          const gw = require('../assistant-gateway-route').isGatewaySession(session) ? require('../assistant-gateway-route').gatewayFailure(err.text) : null;
           if (gw) { job.gatewayError = gw; this.failJob(job, gw.line); return; }
           const d = require('./turn-api-error').describe(err.text, session);
           if (d.routeRejected) job.providerRepair = require('../codeagent-assistant-route').repairAction(this.deps.dataDir, d.account);
@@ -2344,10 +2360,10 @@ class CompanyAssistant {
     if (this.answerRouteCache && now - this.answerRouteCache.at < 30000) return this.answerRouteCache.value;
     let value = null;
     try {
-      const route = require('../assistant-gateway-route'), pref = require('../codeagent-assistant-route').featurePreference(this.deps.dataDir, 'assistant');
-      if (pref ? pref.kind === route.KIND && route.availability(this.deps.dataDir).available : route.autoDefault(this.deps.dataDir)) {
-        value = { kind: route.KIND, label: route.LABEL, model: pref?.model || require('../api-gateway').read(this.deps.dataDir).model || '', auto: !pref };
-      }
+      // 和后台会话同一份判定（feature-agent-choice resolve）：部门 key，或 Claude Code · 公司模型 / 自有接口 / 自有 API（11-27）。
+      const route = require('../assistant-gateway-route'), r = require('../feature-agent-choice').resolve(this.deps.dataDir, 'assistant'), s = r.selected;
+      if (s?.kind === route.KIND) value = { kind: route.KIND, label: route.LABEL, model: s.model || require('../api-gateway').read(this.deps.dataDir).model || '', auto: !!r.auto };
+      else if (s?.kind === 'claude' && s.source) value = { kind: 'claude', source: s.source, label: `Claude Code · ${require('../harness-route').LABELS[s.source] || s.source}`, model: s.model || '', auto: !!r.auto };
     } catch { value = null; }
     this.answerRouteCache = { at: now, value };
     return value;

@@ -140,6 +140,12 @@
 .meeting-notice-close{display:inline-flex;border:0;background:none;color:var(--hw-text-2);padding:4px;border-radius:50%}
 .meeting-notice-close:hover{background:var(--hw-surface)}
 
+/* 意外中断后的一行提示（R51）：继续录制 / 查看记录 */
+.meeting-resume{display:flex;align-items:center;gap:8px;flex:none;margin:10px 16px 0;padding:8px 14px;border-radius:var(--hw-r-item);background:color-mix(in srgb,var(--hw-red) 9%,var(--hw-surface));color:var(--hw-text)}
+.meeting-resume[hidden]{display:none}
+.meeting-resume-text{flex:1;font-size:var(--hw-fs-13);overflow-wrap:anywhere}
+.company-meeting[data-phase=idle] .meeting-resume{margin-top:76px}
+
 /* ---------- 三栏卡片 ---------- */
 .meeting-columns{display:grid;grid-template-columns:230px minmax(0,1fr) 340px;grid-template-areas:"topics evid notes";gap:12px;flex:1;min-height:0;padding:12px 16px 8px}
 .meeting-topic-pane,.meeting-evidence-pane,.meeting-understanding{background:var(--hw-surface);border-radius:var(--hw-r-md);box-shadow:var(--hw-e1);min-width:0;min-height:0}

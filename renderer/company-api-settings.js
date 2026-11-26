@@ -219,11 +219,16 @@
       target.querySelector('[data-api-action="refresh"]')?.classList.remove('primary');
     });
   }
+  // 同事反馈分不清两种（2026-11-27）：各加一行说明，口径与「问一下 Hub」说明书 3.1 节一致。
+  const MODE_NOTES = {
+    gateway: '部门统一发的 key，走公司 API 网关，按部门计费，模型由网关提供',
+    own: '自己填 URL、模型名和 key，任何兼容 OpenAI 或 Anthropic 的接口都可以',
+  };
   function modeSwitch(mode) {
     return '<div class="company-api-mode" role="radiogroup" aria-label="接入方式">'
       + `<button type="button" role="radio" data-api-mode="proxy" aria-checked="${mode === 'proxy'}"><strong>公司模型</strong><small>${snapshot?.proxy?.shared ? '经共享主机，使用团队号池' : '通过本机公司模型通道，使用 CodeAgent 账号'}</small></button>`
-      + `<button type="button" role="radio" data-api-mode="gateway" aria-checked="${mode === 'gateway'}"><strong>API 网关 <em class="company-api-new">新</em></strong><small>用部门发的 API key，不需要 CodeAgent</small></button>`
-      + `<button type="button" role="radio" data-api-mode="own" aria-checked="${mode === 'own'}"><strong>自有接口</strong><small>填写接口地址，或沿用 CLI 本机配置</small></button></div>`;
+      + `<button type="button" role="radio" data-api-mode="gateway" aria-checked="${mode === 'gateway'}"><strong>API 网关 <em class="company-api-new">新</em></strong><small>用部门发的 API key，不需要 CodeAgent</small><small class="company-api-mode-note">${MODE_NOTES.gateway}</small></button>`
+      + `<button type="button" role="radio" data-api-mode="own" aria-checked="${mode === 'own'}"><strong>自有接口</strong><small>填写接口地址，或沿用 CLI 本机配置</small><small class="company-api-mode-note">${MODE_NOTES.own}</small></button></div>`;
   }
   // API 网关（2026-11-19 接入，11-20 加一键体检）：地址、Key、模型表各工具共用一份（core/api-gateway.js）；这里选这个工具用网关和它的默认模型。
   // 左边表单，右边分组说明 + 能力表 + 上手说明（renderer/api-gateway-health.js），1440 宽一屏放下。
@@ -678,7 +683,7 @@
   // options.mode：直接停在某张来源卡上（如「功能使用的 Agent」的「去配置部门 API key」传 'gateway'）。
   async function open(kind = 'claude', profileId, options = {}) {
     if (profileId !== undefined) { viewProfile[kind] = profileId; viewMode[kind] = 'own'; }
-    if (options?.mode === 'gateway') viewMode[kind] = 'gateway';
+    if (options?.mode === 'gateway' || options?.mode === 'own') viewMode[kind] = options.mode;
     const target = makeDialog();
     target.innerHTML = heading('自有 API', '正在读取配置…');
     bindClose(target);

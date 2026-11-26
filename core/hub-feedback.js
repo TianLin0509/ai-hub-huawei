@@ -1,6 +1,6 @@
 'use strict';
 // 一键反馈的诊断包（2026-10-29 用户要求尽快增强反馈渠道）：问题描述 + 版本与环境 + 最近的日志尾部，
-// 全部脱敏后拼成一份纯文字，提交到自家阿里云（core/own-hosts.js feedbackEndpoint）。
+// 全部脱敏后拼成一份纯文字，经公司内网发给维护人（main/hub-feedback-service.js）。
 // 只读 Hub 数据目录下近期日志、固定诊断与更新结果；不读会话正文、不读配置文件和凭据文件。
 const fs = require('node:fs');
 const path = require('node:path');

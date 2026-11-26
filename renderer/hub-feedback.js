@@ -106,8 +106,6 @@
     });
     const joinNow = box.querySelector('[data-hf-join]');
     if (joinNow) joinNow.addEventListener('click', event => { event.preventDefault(); joinAfterSend(true, 0); });
-    const unblock = box.querySelector('[data-hf-unblock]');
-    if (unblock) unblock.addEventListener('click', event => { event.preventDefault(); void ipcRenderer.invoke('net-pass:open-window', unblock.dataset.hfUnblock, { method: 'POST' }).catch(error => window.__hubToast?.('放行页没打开：' + (error?.message || '未知原因'))); });
   }
 
   // prefill.description：从错误卡「一键反馈」进来时预填现象、功能区和原始报错（5.5.24），用户可以改了再发。
@@ -247,8 +245,8 @@
     sending = true;
     const btn = dialog.querySelector('[data-hf="send"]');
     btn.disabled = true; btn.textContent = '正在发送…';
-    message('info', via === 'intranet' ? '正在发给维护人（公司内网）…' : '正在发送，公司网络需要放行时会自动处理，最多约两分钟');
-    const onProgress = (_e, p) => { if (p && p.phase === 'intranet') message('info', '正在发给维护人（公司内网）…'); else if (p && p.click)message('info', p.phase === 'unblocking' ? `公司网络要求放行，正在后台自动放行（第 ${p.click}/${p.maxClicks} 次）…` : p.phase === 'window' ? `改用后台窗口直接提交（第 ${p.click} 次）…` : `已点放行，正在重发（第 ${p.click}/${p.maxClicks} 轮）…`); };
+    message('info', via === 'intranet' ? '正在发给维护人（公司内网）…' : '正在发送…');
+    const onProgress = (_e, p) => { if (p && p.phase === 'intranet') message('info', '正在发给维护人（公司内网）…'); };
     ipcRenderer.on('hub-feedback:progress', onProgress);
     let r;
     const full = require('./harness-view').appendDiagnosis(desc, await diagnosis());
@@ -277,9 +275,7 @@
     }
     btn.disabled = false; btn.textContent = '重新发送';
     const saved = r && r.savedTo ? `<br>同样的内容已存到：<span class="hf-path">${esc(r.savedTo)}</span> <a href="#" data-hf-open="${esc(r.savedTo)}">打开所在文件夹</a>${copy}，可以手动发给维护人。` : '';
-    // 被公司网络放行页拦着（公开版不在后台自动点）：给按钮在 Hub 里打开放行页，点完回来点「重新发送」。
-    const gate = r && r.blocked ? `<br>公司网络要求放行：<a href="#" data-hf-unblock="${esc(r.url || '')}">打开放行页</a>，在页面上点「接受风险并访问」（或左边那个放行按钮），再回来点「重新发送」。` : '';
-    message('bad', `没发出去：${esc((r && r.reason) || '未知原因')}${gate}${saved}`);
+    message('bad', `没发出去：${esc((r && r.reason) || '未知原因')}${saved}`);
   }
 
   // 我的反馈（2026-11-19 用户体验第 9 项）：自己提交过的反馈一屏看完——已送达（收件编号）/ 排队中（原因）/ 没发出去 / 已放弃，

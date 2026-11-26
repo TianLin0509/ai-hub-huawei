@@ -17,12 +17,8 @@ const ID = /^\d{2}-[a-z][a-z0-9-]{0,30}$/;
 const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/;
 const FILE = /^(?:idle|typing|happy|sleep|seq-[a-z][a-z-]{0,23})\.webp$/;
 const POSE_NAMES = new Set(['idle', 'typing', 'happy', 'sleep']);
-const SOURCES = Object.freeze([
-  // 高速下载镜像（2026-11-07）排第一：内容每 5 分钟从旧阿里云同步，没有时自动换下一个源。
-  { id: 'aliyun-fast', name: '阿里云高速', manifest: 'https://dl.lt-stockpartner.tech/hub-update/hub-pet/catalog.json', files: 'https://dl.lt-stockpartner.tech/hub-update/hub-pet/' },
-  { id: 'github', name: 'GitHub', manifest: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/hub-pet-v1/catalog.json', files: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/hub-pet-v1/' },
-  { id: 'aliyun', name: '阿里云', manifest: 'https://me.lt-stockpartner.tech/hub-update/hub-pet/catalog.json', files: 'https://me.lt-stockpartner.tech/hub-update/hub-pet/' },
-]);
+// 下载只走公司内源（openx）；内源不生效时（纯 Node 单测）由调用方注入源，默认不提供外网源。
+const SOURCES = Object.freeze([]);
 const DEFAULT_ROLE = '01-cat';
 
 function isWebp(buf) {
@@ -189,7 +185,7 @@ function createRolePackStore({ assetsDir, dataDir, sources = SOURCES, fetchImpl 
     if (downloading) return snapshot();
     checking = (async () => {
       notify({ phase: 'checking', error: null, checks: [], attempts: [], progress: null });
-      // R29：只走内源时读程序自带的目录快照，不碰外网、不弹放行窗。
+      // R29：只走内源时读程序自带的目录快照，不碰外网。
       const results = require('../app-update/openx-source').active(env) ? [require('../app-update/bundled-catalog').bundledCatalog(snapshotFile, validateCatalog)]
         : await checkManifests({ sources, fetchImpl: boundedCatalogFetch(fetchImpl, catalogBodyTimeoutMs), validate: validateCatalog, gate: true });
       const best = results.filter(r => r.ok).sort((a, b) => compareVersion(b.manifest.version, a.manifest.version))[0];
@@ -236,7 +232,7 @@ function createRolePackStore({ assetsDir, dataDir, sources = SOURCES, fetchImpl 
       const dest = path.join(dataDir, 'hub-pet', 'downloads', entry.file);
       const activeAbort = abort;
       const cancellableFetch = (url, options) => fetchImpl(url, { ...options, signal: AbortSignal.any([options.signal, activeAbort.signal]) });
-      const result = await downloadWithFallback({ gate: true, sources, version: entry.version, openx: { release: `pet-role-${entry.version}` }, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
+      const result = await downloadWithFallback({ sources, version: entry.version, openx: { release: `pet-role-${entry.version}` }, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
         onProgress: progress => notify({ progress }), onAttempt: attempts => notify({ attempts }) });
       if (!result.ok) { notify({ phase: result.cancelled ? 'cancelled' : 'error', activeId: null, failedId: id, error: result.cancelled ? '下载已取消' : (require('../app-update/bundled-catalog').onlyFailReason(result) || '下载没成功，可以重试') + '；正在用的形象不受影响。' }); return snapshot(); }
       try { install(readJson(dest, MAX_PACK_BYTES * 2), entry); } finally { try { fs.unlinkSync(dest); } catch (_) {} }

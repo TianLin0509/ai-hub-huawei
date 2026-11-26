@@ -39,36 +39,70 @@ function gatewayRow(dataDir, { env, findCommand }) {
   return { kind: GATEWAY, label: LABELS[GATEWAY], available: a.available, reason: a.reason, defaultModel: view.model || '', models, allowCustom: true };
 }
 function feature(id) { const row = FEATURES.find(f => f.id === id); if (!row) throw new Error('未知功能'); return row; }
+// 公司版会话功能另收「Claude Code 外壳 + 公司模型 / 自有接口 / 自有 API」（部门 key 那条仍存成 api-gateway，和以前同一条线路）。
+// 单次任务另收 DSH（经 ACP 只读作答，core/dsh-oneshot.js）。
+const kindAllowed = (f, kind) => f.kinds.includes(kind) || (companyEdition() && (f.kinds === ONESHOT ? kind === 'deepseek-acp' : kind === 'claude'));
 // 公司版（2026-11-26 修正）：Claude Code / Codex / DSH 只是外壳（harness），公司里没有 Claude、GPT 这类模型。
-// 外壳背后的模型只从启动中心同一份来源里列：部门 API key（网关）的模型、公司模型（经本机反代用 CodeAgent 账号）。
+// 外壳背后的模型只从启动中心同一份来源里列（2026-11-27 宗旨：部门 API / 自有 API 用户和 CodeAgent 用户同样的体验）：
+// 部门 API key（网关）、公司模型（经本机反代用 CodeAgent 账号）、自有接口、自有 API 账号。「沿用本机 CLI 配置」不进后台功能
+// （公司里 CLI 自己没有可用模型，就是 11-26 修掉的那种「本机默认模型」）。
 // 枚举直接复用启动中心的模型卡函数（renderer/launch-model-cards.js cardsFor + core/company-api-config.js settings），不另写一套。
 const HARNESS = ['claude', 'codex', 'deepseek-acp'];
-const HARNESS_SOURCES = ['gateway', 'company'];
-const SOURCE_LABELS = { gateway: '部门 API key', company: '公司模型（CodeAgent 账号）' };
+const HARNESS_SOURCES = ['gateway', 'company', 'own', 'api'];
+const SOURCE_LABELS = require('./harness-route').LABELS;
 const HARNESS_LABELS = { claude: 'Claude Code', codex: 'Codex', 'deepseek-acp': 'DSH' };
+// 同一来源下的同一个模型：自有 API 账号还要账号对上。
+const sameModel = (m, c) => m.id === c.model && m.source === c.source && (c.source !== 'api' || m.profileId === c.profileId);
+const NO_SOURCE = '需要先配置模型来源：部门 API key、自有 API，或装好 CodeAgent 用公司模型';
 const companyEdition = () => { try { return require('./company-api-config').isCompany(); } catch { return false; } };
 // 主进程注入：反代状态（模型卡状态点用）与「用前拉起反代」。没注入时（单测、旧调用方）状态按「选中后自动启动」显示。
 let runtime = { proxyStatus: null, ensureProxy: null };
 function setRuntime(next = {}) { runtime = { ...runtime, ...next }; }
 // 默认链用（没给功能显式选过时）：只跟启动中心为这个工具存下的线路走——那里选的是部门 key / 公司模型，就经本机反代用它；
 // 选的是自有接口或沿用本机 CLI 配置，返回 null，照旧用 CLI 自己的配置（Codex 审查 P2：不能凭存着 key 就盖掉原来能用的线路）。
+// 启动中心为这个工具存下的线路（2026-11-27 起含自有接口 / 自有 API 账号）；「沿用本机 CLI 配置」返回 null。
+function launchRoute(kind, provider) {
+  if (!provider) return null;
+  if (provider.backend === 'proxy') return { source: provider.upstream === 'gateway' ? 'gateway' : 'company', model: provider.model || '' };
+  if (provider.backend === 'api' && provider.selectedProfileId) {
+    const profile = (provider.apiProfiles || []).find(p => p.id === provider.selectedProfileId);
+    return profile ? { source: 'api', profileId: profile.id, model: profile.model || '' } : null;
+  }
+  if (provider.backend === 'api' || (kind === 'deepseek-acp' && provider.own?.backend === 'api')) return { source: 'own', model: provider.model || provider.own?.model || '' };
+  return null;
+}
 function harnessDefault(dataDir, kind, options = {}) {
   if (!companyEdition() || !HARNESS.includes(kind)) return null;
   let provider = null;
-  try { provider = require('./company-api-config').settings(require('./hub-config').readConfigJsonForUpdate())[kind]; } catch { provider = null; }
-  if (provider?.backend !== 'proxy') return null;
-  const source = provider.upstream === 'gateway' ? 'gateway' : 'company';
+  try { provider = options.providers?.[kind] || require('./company-api-config').settings(require('./hub-config').readConfigJsonForUpdate())[kind]; } catch { provider = null; }
+  const saved = launchRoute(kind, provider);
+  if (!saved || (options.sources && !options.sources.includes(saved.source))) return null;
   const row = (options.backends || catalog(dataDir, options)).find(b => b.kind === kind);
-  const usable = (row?.models || []).filter(m => !m.unavailable && m.source === source);
-  const hit = usable.find(m => m.id === provider.model) || usable[0];
-  return row?.available && hit ? { kind, source, model: hit.id } : null;
+  const usable = (row?.models || []).filter(m => !m.unavailable && m.source === saved.source && (saved.source !== 'api' || m.profileId === saved.profileId));
+  const hit = usable.find(m => m.id === saved.model) || usable[0];
+  return row?.available && hit ? { kind, source: saved.source, model: hit.id, ...(hit.profileId ? { profileId: hit.profileId } : {}) } : null;
+}
+// 没有就用启动中心配了模型来源（部门 key / 公司模型 / 自有接口 / 自有 API）的 Claude Code、Codex，会话照启动中心那条线起。
+function workKind(options = {}) {
+  const find = options.findCommand || require('./community-setup').findCommand, env = options.env || process.env;
+  const has = kind => { try { return !!find(kind, env); } catch { return kind === 'codeagent'; } };
+  if (!companyEdition() || has('codeagent')) return 'codeagent';
+  let providers = options.providers || null;
+  if (!providers) try { providers = require('./company-api-config').settings(require('./hub-config').readConfigJsonForUpdate()); } catch { providers = null; }
+  return ['claude', 'codex'].find(kind => launchRoute(kind, providers?.[kind]) && has(kind)) || 'codeagent';
 }
 // 有功能选了「外壳 + 部门 key / 公司模型」时本机反代要常驻（main.js 反代 isEnabled），免得改完配置被收掉。
 // PPT 库地图没选过、走自动默认的外壳 + 部门 key 时也算（R49-2 审查 P2-1：只装了 Codex、会话功能用不了网关时，反代不能被收掉）。
 function harnessInUse(dataDir) {
   try {
-    if (FEATURES.some(f => { const p = routes.featurePreference(dataDir, f.id); return HARNESS.includes(p?.kind) && HARNESS_SOURCES.includes(p?.source); })) return true;
-    return !routes.featurePreference(dataDir, 'pptMap') && !!autoHarness(dataDir);
+    if (FEATURES.some(f => { const p = routes.featurePreference(dataDir, f.id); return HARNESS.includes(p?.kind) && require('./harness-route').viaProxy(p?.source); })) return true;
+    // 没选过、走自动默认且经本机反代（外壳 + 部门 key / 公司模型）的功能也算（R49-2 审查 P2-1；11-27 审查 P2-7 扩到全部功能）。
+    // 部门 key 那条（api-gateway）由 assistant-gateway-route inUse 管。目录只读一次。
+    const unpicked = FEATURES.filter(f => !routes.featurePreference(dataDir, f.id));
+    if (!unpicked.length) return false;
+    if (!gatewayRoute().codeagentMissing(dataDir)) return false;
+    const backends = catalog(dataDir);
+    return unpicked.some(f => { const a = autoSelected(dataDir, f, { backends }); return a?.kind !== GATEWAY && require('./harness-route').viaProxy(a?.source); });
   } catch { return false; }
 }
 // 单次任务用外壳前拉起本机反代（部门 key 只要反代在跑；公司模型还要上游就绪）。没注入时不拦，由反代地址缺失时报人话。
@@ -85,22 +119,33 @@ function harnessRow(kind, { env, findCommand, codeagentAvailable, providers }) {
   try { status = runtime.proxyStatus ? runtime.proxyStatus() : null; } catch { status = null; }
   let cards = [];
   try { cards = provider ? require('../renderer/launch-model-cards').cardsFor(kind, provider, status, null, { codeagentInstalled: codeagentAvailable }) : []; } catch { cards = []; }
-  // 只留后台功能真能用的两种来源；公司模型要本机有 CodeAgent（账号在它那里）。自有接口 / 自有 API 账号暂不进后台功能（见交付说明）。
-  const models = cards.filter(c => c.source === 'gateway' || (c.source === 'company' && codeagentAvailable))
-    .map(c => ({ id: c.model || c.id, label: `${SOURCE_LABELS[c.source]} · ${c.name || c.model || c.id}`, source: c.source,
+  // 留后台功能真能用的四种来源：公司模型要本机有 CodeAgent，或共享号池 / 反代已就绪（账号在那边）；自有卡里「沿用本机 CLI 配置」不要。
+  const label = c => c.source === 'api' ? `${SOURCE_LABELS.api} · ${c.name}${c.model && c.model !== c.name ? ' · ' + c.model : ''}`
+    : `${SOURCE_LABELS[c.source]} · ${c.source === 'own' ? c.model || '接口默认模型' : c.name || c.model || c.id}`;
+  const models = cards.filter(c => c.source === 'gateway' || (c.source === 'company' && (codeagentAvailable || c.state === 'ready'))
+    || (c.source === 'own' && c.sourceText === '自有接口') || c.source === 'api')
+    .map(c => ({ id: c.model || (c.source === 'company' ? c.id : ''), label: label(c), source: c.source, ...(c.profileId ? { profileId: c.profileId } : {}),
       note: c.statusText || '', ...(c.state === 'error' || c.state === 'needs' ? { unavailable: true } : {}) }));
   const gatewayKey = !!provider?.gatewayModels;
   let cli = '';
   try {
     if (kind !== 'deepseek-acp') cli = findCommand(kind, env) || '';
-    else { const entry = require('./hub-config').getConfig().acp?.providers?.[kind]; cli = entry?.entryPath && require('node:fs').existsSync(entry.entryPath) ? entry.entryPath : ''; }
+    else {
+      // 一键安装或 npm 全局装的 DSH 不写 entryPath：和启动中心、DSH 单次问答同一套查找（dsh-cli-profile resolveDshCliRuntime）。
+      const entry = require('./hub-config').getConfig().acp?.providers?.[kind];
+      cli = entry?.entryPath && require('node:fs').existsSync(entry.entryPath) ? entry.entryPath : '';
+      if (!cli) try { cli = require('./dsh-cli-profile').resolveDshCliRuntime(entry, env)?.entryPath || ''; } catch { cli = ''; }
+    }
   } catch { cli = ''; }
   const usable = models.filter(m => !m.unavailable);
-  const reason = !cli ? `本机没有 ${HARNESS_LABELS[kind]}` : !usable.length
-    ? (gatewayKey ? '部门 API key 和公司模型暂时都用不了' : '需要先保存部门 API key（或装好 CodeAgent 用公司模型）') : '';
-  const preferred = usable.find(m => m.source === 'gateway') || usable[0];
+  const reason = !cli ? `本机没有 ${HARNESS_LABELS[kind]}` : !usable.length ? (models.length ? '已配的模型来源暂时都用不了' : NO_SOURCE) : '';
+  // 首选：启动中心为这个工具存下的线路；没有再按 部门 key → 自有接口 → 自有 API → 公司模型。
+  const saved = launchRoute(kind, provider);
+  const preferred = (saved && usable.find(m => m.source === saved.source && (saved.source !== 'api' || m.profileId === saved.profileId) && (!saved.model || m.id === saved.model)))
+    || ['gateway', 'own', 'api', 'company'].map(src => usable.find(m => m.source === src)).find(Boolean);
   return { kind, label: HARNESS_LABELS[kind], harness: true, available: !!cli && usable.length > 0, reason,
-    setup: !gatewayKey ? 'gateway' : '', defaultModel: preferred ? preferred.id : '', defaultSource: preferred ? preferred.source : '', models };
+    setup: !usable.length ? (gatewayKey ? 'own' : 'source') : '', defaultModel: preferred ? preferred.id : '', defaultSource: preferred ? preferred.source : '',
+    ...(preferred?.profileId ? { defaultProfileId: preferred.profileId } : {}), models };
 }
 function catalog(dataDir, { env = process.env, findCommand = require('./community-setup').findCommand } = {}) {
   const models = require('./model-options');
@@ -143,56 +188,61 @@ function catalog(dataDir, { env = process.env, findCommand = require('./communit
 function resolve(dataDir, id, options = {}) {
   const f = feature(id), choice = routes.featurePreference(dataDir, id);
   if (!choice) {
-    // 开箱即用（R49-2，11-26 从助理扩到全部）：没选过、本机没有可用的 CodeAgent（没装或没有模型权限）、部门 key 已配好时，
-    // 8 项会话功能默认走部门 key，PPT 库地图默认用 Claude Code / Codex 外壳经部门 key；有 CodeAgent 的保持原默认。
-    if (f.kinds.includes(GATEWAY) && gatewayRoute().autoDefault(dataDir, { backends: options.backends }))
-      return { choice: null, selected: { kind: GATEWAY, model: '' }, warning: '', auto: true };
-    const harness = id === 'pptMap' ? autoHarness(dataDir, options) : null;
-    if (harness) return { choice: null, selected: harness, warning: '', auto: true };
-    return { choice: null, selected: null, warning: '' };
+    // 开箱即用（R49-2 扩到 8 项会话功能 + PPT 库地图；11-27 按「部门 API / 自有 API 用户与 CodeAgent 用户同样体验」细化）：
+    // 没选过、本机没有可用的 CodeAgent（没装或没有模型权限，判定见 assistant-gateway-route codeagentMissing）时，
+    // 跟启动中心为 Claude Code 存下的线路走（部门 key / 公司模型 / 自有接口 / 自有 API），没存过再用部门 key。有 CodeAgent 的保持原默认。
+    const auto = autoSelected(dataDir, f, options);
+    return auto ? { choice: null, selected: auto, warning: '', auto: true } : { choice: null, selected: null, warning: '' };
   }
   // 旧版存下的外壳选择（没有模型来源，模型是 claude-opus / gpt 这类公司里用不了的）：不再照跑，提示重选，本次沿用默认。
   if (companyEdition() && HARNESS.includes(choice.kind) && !HARNESS_SOURCES.includes(choice.source)) return { choice, selected: null, legacy: true, warning: legacyWarning(choice) };
-  if (!f.kinds.includes(choice.kind)) return { choice, selected: null, warning: '此功能尚不支持该后端的受控只读执行，本次沿用默认。' };
+  if (!kindAllowed(f, choice.kind)) return { choice, selected: null, warning: '此功能尚不支持该后端的受控只读执行，本次沿用默认。' };
   const backends = options.backends || catalog(dataDir);
-  const backend = backends.find(b => b.kind === choice.kind && b.available && f.kinds.includes(b.kind));
-  const hit = backend?.models.find(m => !m.unavailable && m.id === choice.model && (!choice.source || m.source === choice.source) && (!choice.codeagentModelProvider || (m.provider || m.codeagentModelProvider) === choice.codeagentModelProvider));
-  if (!backend || (choice.model && !hit)) return { choice, selected: null, warning: '所选后端或模型当前不可用，本次沿用默认。' };
+  const backend = backends.find(b => b.kind === choice.kind && b.available);
+  const hit = backend?.models.find(m => !m.unavailable && (choice.source ? sameModel(m, choice) : m.id === choice.model) && (!choice.codeagentModelProvider || (m.provider || m.codeagentModelProvider) === choice.codeagentModelProvider));
+  if (!backend || ((choice.model || choice.source) && !hit)) return { choice, selected: null, warning: '所选后端或模型当前不可用，本次沿用默认。' };
   return { choice, selected: choice, warning: '' };
-}
-// 单次功能（PPT 库地图）的自动默认：公司版、部门 key 已存、没有可用的 CodeAgent 时，用本机能用的外壳（Claude Code 优先，其次 Codex）
-// 经本机反代走部门 key，模型取网关默认模型。先做两步便宜的判断（读 key 文件、查 codeagent 命令），过了才读完整目录。
-function autoHarness(dataDir, options = {}) {
-  if (!companyEdition()) return null;
-  try { if (!require('./api-gateway').read(dataDir).keySet) return null; } catch { return null; }
-  const backends = options.backends;
-  if (!gatewayRoute().codeagentMissing(dataDir, { ...options, backends })) return null;
-  const rows = backends || catalog(dataDir, options);
-  for (const kind of ['claude', 'codex']) {
-    const row = rows.find(b => b.kind === kind && b.harness && b.available);
-    const models = (row?.models || []).filter(m => m.source === 'gateway' && !m.unavailable);
-    const hit = models.find(m => m.id === row?.defaultModel) || models[0];
-    if (hit) return { kind, model: hit.id, source: 'gateway' };
-  }
-  return null;
 }
 function legacyWarning(choice) {
   const what = `${HARNESS_LABELS[choice.kind] || choice.kind}${choice.model ? ' · ' + choice.model : ' · 本机默认模型'}`;
-  return `之前选的「${what}」在公司里用不了：${HARNESS_LABELS[choice.kind] || choice.kind} 在公司版只当外壳，模型要用部门 API key 或公司模型。本次沿用默认，请重新选择。`;
+  return `之前选的「${what}」在公司里用不了：${HARNESS_LABELS[choice.kind] || choice.kind} 在公司版只当外壳，模型要用部门 API key、公司模型或自有 API。本次沿用默认，请重新选择。`;
+}
+// 没选过的功能、本机没有可用的 CodeAgent：默认用哪条线。8 项会话功能（会议的本场手选仍优先，见 meeting.js engineFor）+ PPT 库地图；
+// 问问 Hub 有自己的默认链（core/help-ask/engine.js）；进展卡代写公司版默认不开（CodeAgent 用户也一样）。
+function autoSelected(dataDir, f, options = {}) {
+  if (!companyEdition() || (f.kinds === ONESHOT && f.id !== 'pptMap')) return null;
+  // 「没有可用的 CodeAgent」沿用 R49 的判定（没装、serve 空清单、个人号模型全在避让里；号池登记了号或自配了供应商模型都算有）。
+  // 先做便宜的判断：没给目录时先查命令和小文件，绝大多数有 CodeAgent 的老用户不读完整目录。
+  if (!gatewayRoute().codeagentMissing(dataDir, { backends: options.backends, findCommand: options.findCommand, env: options.env || process.env })) return null;
+  const backends = options.backends || catalog(dataDir, options);
+  if (f.kinds === ONESHOT) {
+    for (const kind of HARNESS) { const hit = harnessDefault(dataDir, kind, { ...options, backends, sources: HARNESS_SOURCES }); if (hit) return hit; }
+    // 启动中心没存线路：取第一个可用外壳的首选；首选是部门 key 时要 key 真存着（R49：没存部门 key 谁都不自动）。
+    let keySet = false;
+    try { keySet = !!require('./api-gateway').read(dataDir).keySet; } catch { keySet = false; }
+    const row = HARNESS.map(kind => backends.find(b => b.kind === kind)).find(b => b?.available && b.defaultSource && (b.defaultSource !== 'gateway' || keySet));
+    return row ? { kind: row.kind, source: row.defaultSource, model: row.defaultModel, ...(row.defaultProfileId ? { profileId: row.defaultProfileId } : {}) } : null;
+  }
+  const pick = harnessDefault(dataDir, 'claude', { ...options, backends, sources: HARNESS_SOURCES });
+  if (pick) return pick.source === 'gateway' ? { kind: GATEWAY, model: pick.model } : pick;
+  return backends.find(b => b.kind === GATEWAY)?.available ? { kind: GATEWAY, model: '' } : null;
 }
 function set(dataDir, id, choice, options) {
   const f = feature(id);
   if (choice) {
-    if (!f.kinds.includes(choice.kind) || (choice.model && !require('./model-id').isSafeModelId(choice.model))) throw new Error('请选择可用的后端和模型');
+    if (!kindAllowed(f, choice.kind) || (choice.model && !require('./model-id').isSafeModelId(choice.model))) throw new Error('请选择可用的后端和模型');
     const harness = companyEdition() && HARNESS.includes(choice.kind);
-    if (harness && !HARNESS_SOURCES.includes(choice.source)) throw new Error('请选择部门 API key 或公司模型');
-    const normalized = { kind: choice.kind, model: choice.model || '', ...(harness ? { source: choice.source } : {}), ...require('./codeagent-model-choice').routeFields(choice) };
+    if (harness && !HARNESS_SOURCES.includes(choice.source)) throw new Error('请选择模型来源：部门 API key、公司模型或自有 API');
+    if (harness && choice.source === 'api' && !/^[a-zA-Z0-9_-]{1,64}$/.test(choice.profileId || '')) throw new Error('请选择自有 API 账号');
+    const normalized = { kind: choice.kind, model: choice.model || '', ...(harness ? { source: choice.source, ...(choice.source === 'api' ? { profileId: choice.profileId } : {}) } : {}),
+      ...require('./codeagent-model-choice').routeFields(choice) };
     const backends = options?.backends || catalog(dataDir);
     const b = backends.find(b => b.kind === normalized.kind && b.available);
     if (normalized.kind === GATEWAY && !b) throw new Error(backends.find(r => r.kind === GATEWAY)?.reason || '部门 API key 暂时用不了');
     if (harness && !b) throw new Error(backends.find(r => r.kind === normalized.kind)?.reason || '所选外壳暂时用不了');
-    if (harness && !normalized.model) throw new Error('请选择模型');
-    if (!b || (normalized.model && !b.models.some(m => m.id === normalized.model && !m.unavailable && (!normalized.source || m.source === normalized.source) && (!normalized.codeagentModelProvider || m.provider === normalized.codeagentModelProvider)))) throw new Error('所选后端或模型当前不可用，请恢复默认');
+    // 自有接口 / 自有 API 账号可以不写模型名（用接口自己的默认模型），其余来源要选具体模型。
+    if (harness && !normalized.model && !['own', 'api'].includes(normalized.source)) throw new Error('请选择模型');
+    if (!b || ((normalized.model || harness) && !b.models.some(m => !m.unavailable && (harness ? sameModel(m, normalized) : m.id === normalized.model) && (!normalized.codeagentModelProvider || m.provider === normalized.codeagentModelProvider)))) throw new Error('所选后端或模型当前不可用，请恢复默认');
     routes.setFeaturePreference(dataDir, id, normalized);
   } else routes.setFeaturePreference(dataDir, id, null);
   return resolve(dataDir, id, options);
@@ -207,6 +257,15 @@ function session(dataDir, id, kind, opts, options) {
     let model = selected.model;
     if (!model) try { model = require('./api-gateway').read(dataDir).model; } catch { model = ''; }
     if (model) { out.model = model; out.fixedModel = model; }
+    return { kind: 'claude', opts: out, warning: '' };
+  }
+  if (selected.kind === 'claude' && selected.source) {
+    // Claude Code 外壳 + 公司模型 / 自有接口 / 自有 API（2026-11-27）：和部门 key 那条同样的受控边界（none 档 MCP + 严格模式），
+    // 连接只改这一个会话（core/assistant-gateway-route.js launchValues 按 source 定）。
+    const out = { ...opts, featureAgent: id, featureAgentChoice: JSON.stringify(selected), apiGatewayRoute: true, mcpProfile: 'none' };
+    for (const k of Object.keys(out)) if (/^codeagent/i.test(k)) delete out[k];
+    delete out.model; delete out.fixedModel;
+    if (selected.model) { out.model = selected.model; out.fixedModel = selected.model; }
     return { kind: 'claude', opts: out, warning: '' };
   }
   const out = { ...opts, featureAgent: id, featureAgentChoice: JSON.stringify(selected), ...require('./codeagent-model-choice').routeFields(selected) };
@@ -236,18 +295,24 @@ function stale(dataDir, id, meta, options) {
 // 会话功能要受控工具（none 档 MCP + 只读边界），只有 Claude Code 经部门 key 那条线做到了（存成 api-gateway，和以前同一条线路）。
 const oneshot = f => f.kinds === ONESHOT;
 function harnessSupport(f, kind) {
-  if (kind === 'deepseek-acp') return { ok: false, reason: 'DSH 暂不能跑后台功能，可在启动中心用 DSH 开会话' };
+  // DSH 单次任务经 ACP 只读作答（core/dsh-oneshot.js）；DSH 没有自有 API 账号表，模型卡里本来就没有这种来源。
   if (oneshot(f)) return { ok: true, sources: HARNESS_SOURCES };
-  if (kind === 'claude') return { ok: true, sources: ['gateway'], store: GATEWAY };
-  return { ok: false, reason: '这个功能要受控工具，目前只支持 CodeAgent 和 Claude Code' };
+  if (kind === 'claude') return { ok: true, sources: HARNESS_SOURCES, store: GATEWAY };
+  return { ok: false, reason: '这个功能要在会话里调用 Hub 工具，目前接通的是 CodeAgent 和 Claude Code（模型来源一样可选）' };
 }
 const SRC = 'src:';
 const sourceValue = (source, id) => `${SRC}${source}:${id}`;
+// 自有 API 账号的值带账号编号：src:api:<账号>:<模型>（账号编号不含冒号，模型名可以含）。
+const sourceValueOf = m => m.source === 'api' ? `${SRC}api:${m.profileId}:${m.id}` : sourceValue(m.source, m.id);
 function parseSourceValue(value) {
   const text = String(value || '');
   if (!text.startsWith(SRC)) return null;
   const rest = text.slice(SRC.length), at = rest.indexOf(':');
-  return at > 0 ? { source: rest.slice(0, at), model: rest.slice(at + 1) } : null;
+  if (at <= 0) return null;
+  const source = rest.slice(0, at), tail = rest.slice(at + 1);
+  if (source !== 'api') return { source, model: tail };
+  const cut = tail.indexOf(':');
+  return cut > 0 ? { source, profileId: tail.slice(0, cut), model: tail.slice(cut + 1) } : null;
 }
 function featureOptions(f, backends) {
   const choiceValues = require('./codeagent-model-choice');
@@ -261,28 +326,22 @@ function featureOptions(f, backends) {
     if (!HARNESS.includes(b.kind)) { if (f.kinds.includes(b.kind)) out.push(plain(b, dedupe(b.models || []))); continue; }
     const sup = harnessSupport(f, b.kind);
     if (!sup.ok) { out.push({ value: b.kind, label: b.label, available: false, reason: sup.reason, models: [], defaultModel: '' }); continue; }
-    if (sup.store === GATEWAY) {
-      const gw = backends.find(r => r.kind === GATEWAY) || { available: false, reason: '还没保存部门 API key', models: [] };
-      const cli = b.available || b.reason !== `本机没有 ${b.label}`;
-      const reason = !cli ? b.reason : gw.available ? '' : (gw.reason === '还没保存部门 API key' ? '需要先保存部门 API key' : gw.reason);
-      out.push({ value: b.kind, label: b.label, available: !!gw.available, reason, setup: /部门 API key/.test(reason) && cli ? 'gateway' : '', allowCustom: !!gw.available,
-        defaultModel: gw.defaultModel ? `${SOURCE_LABELS.gateway} · ${gw.defaultModel}` : '', store: GATEWAY,
-        models: (gw.models || []).map(m => ({ value: m.id, id: m.id, label: `${SOURCE_LABELS.gateway} · ${m.label || m.id}`, ...(m.unavailable ? { unavailable: true } : {}) })) });
-      continue;
-    }
     const models = (b.models || []).filter(m => sup.sources.includes(m.source));
-    const preferred = models.find(m => !m.unavailable && m.source === 'gateway') || models.find(m => !m.unavailable);
-    out.push({ value: b.kind, label: b.label, available: !!b.available && !!preferred, reason: b.available && !preferred ? '需要先保存部门 API key（或装好 CodeAgent 用公司模型）' : b.reason || '',
-      setup: b.setup || '', defaultModel: preferred ? preferred.label : '',
-      models: models.map(m => ({ value: sourceValue(m.source, m.id), id: m.id, source: m.source, label: m.label, ...(m.unavailable ? { unavailable: true } : {}) })) });
+    const preferred = models.find(m => !m.unavailable && m.source === b.defaultSource && m.id === b.defaultModel && (m.source !== 'api' || m.profileId === b.defaultProfileId))
+      || models.find(m => !m.unavailable);
+    // 部门 key 可以手填模型（会话功能那条线以前就有）：只在部门 key 已配好时给。
+    const gatewayReady = models.some(m => m.source === 'gateway' && !m.unavailable);
+    out.push({ value: b.kind, label: b.label, available: !!b.available && !!preferred, reason: b.available && !preferred ? NO_SOURCE : b.reason || '',
+      setup: b.setup || '', defaultModel: preferred ? preferred.label : '', allowCustom: !!sup.store && gatewayReady, ...(sup.store ? { store: sup.store } : {}),
+      models: models.map(m => ({ value: sourceValueOf(m), id: m.id, source: m.source, ...(m.profileId ? { profileId: m.profileId } : {}), label: m.label, ...(m.unavailable ? { unavailable: true } : {}) })) });
   }
   return out;
 }
 // 存着的选择 → 下拉当前值（公司版里部门 key 显示为 Claude Code 外壳）。
 function currentValues(f, choice) {
   if (!choice) return { backend: '', model: '' };
-  if (companyEdition() && choice.kind === GATEWAY) return { backend: 'claude', model: choice.model || '' };
-  if (companyEdition() && HARNESS.includes(choice.kind)) return { backend: choice.kind, model: choice.source ? sourceValue(choice.source, choice.model) : choice.model || '' };
+  if (companyEdition() && choice.kind === GATEWAY) return { backend: 'claude', model: choice.model ? sourceValue('gateway', choice.model) : '' };
+  if (companyEdition() && HARNESS.includes(choice.kind)) return { backend: choice.kind, model: choice.source ? sourceValueOf({ ...choice, id: choice.model }) : choice.model || '' };
   return { backend: choice.kind, model: choice.model ? require('./codeagent-model-choice').choiceValue({ id: choice.model, provider: choice.codeagentModelProvider,
     providerLabel: choice.codeagentModelProviderLabel, menuLabel: choice.codeagentModelMenuLabel }) : '' };
 }
@@ -296,18 +355,20 @@ function choiceFromUi(dataDir, id, { backend = '', model = '' } = {}, options = 
   }
   const sup = harnessSupport(f, backend);
   if (!sup.ok) throw new Error(sup.reason);
-  if (sup.store === GATEWAY) return { kind: GATEWAY, model: String(model || '') };
+  // 会话功能里部门 key 仍存成 api-gateway（和分身页、以前存下的同一种）；手填的模型名（不带来源）也算部门 key。
+  const stored = c => sup.store === GATEWAY && c.source === 'gateway' ? { kind: GATEWAY, model: c.model } : c;
   const parsed = parseSourceValue(model);
   if (parsed) {
     if (!sup.sources.includes(parsed.source)) throw new Error('这个功能不支持所选模型来源');
-    return { kind: backend, source: parsed.source, model: parsed.model };
+    return stored({ kind: backend, ...parsed });
   }
+  if (model && sup.store === GATEWAY) return { kind: GATEWAY, model: String(model) };
   const backends = options.backends || catalog(dataDir);
   const row = backends.find(b => b.kind === backend);
-  const preferred = (row?.models || []).find(m => !m.unavailable && m.source === 'gateway' && sup.sources.includes(m.source))
-    || (row?.models || []).find(m => !m.unavailable && sup.sources.includes(m.source));
-  if (!preferred) throw new Error(row?.reason || '需要先保存部门 API key（或装好 CodeAgent 用公司模型）');
-  return { kind: backend, source: preferred.source, model: preferred.id };
+  const usable = (row?.models || []).filter(m => !m.unavailable && sup.sources.includes(m.source));
+  const preferred = usable.find(m => m.source === row?.defaultSource && m.id === row?.defaultModel && (m.source !== 'api' || m.profileId === row?.defaultProfileId)) || usable[0];
+  if (!preferred) throw new Error(row?.reason || NO_SOURCE);
+  return stored({ kind: backend, source: preferred.source, model: preferred.id, ...(preferred.profileId ? { profileId: preferred.profileId } : {}) });
 }
 function setFromUi(dataDir, id, values, options = {}) {
   const backends = options.backends || catalog(dataDir);
@@ -320,10 +381,16 @@ function state(dataDir, options) {
   try { cliModel = JSON.parse(require('node:fs').readFileSync(require('node:path').join(require('./codeagent-config').resolveCodeAgentConfig().configDir, 'settings.json'), 'utf8')).model || ''; } catch { /* CLI 自选 */ }
   const assistant = routes.preference(dataDir), codeagentModel = assistant?.model || config.defaultModels?.codeagent || cliModel || 'CLI 当前模型';
   const defaultLabel = f => {
-    // 没有可用 CodeAgent 时的自动默认（R49-2）：会话功能写部门 key 和网关默认模型，PPT 库地图写所用外壳。
+    // 没有可用 CodeAgent 时的自动默认：写出实际走的外壳、来源和模型。
     const auto = resolve(dataDir, f.id, { backends });
-    if (auto.auto && auto.selected?.kind === GATEWAY) return `${LABELS[GATEWAY]} · ${backends.find(b => b.kind === GATEWAY)?.defaultModel || '网关默认模型'}`;
-    if (auto.auto && auto.selected) return `${SOURCE_LABELS.gateway} · ${HARNESS_LABELS[auto.selected.kind]} · ${auto.selected.model}`;
+    if (auto.auto) {
+      const a = auto.selected;
+      // 来源打头（「部门 API key · …」「自有接口 · …」），和 R49 的写法一致：用户先看到用的是哪把 key / 哪个接口。
+      if (a.kind === GATEWAY) return `${SOURCE_LABELS.gateway} · Claude Code · ${a.model || backends.find(b => b.kind === GATEWAY)?.defaultModel || '网关默认模型'}`;
+      const m = (backends.find(b => b.kind === a.kind)?.models || []).find(x => sameModel(x, a));
+      const name = m?.label ? m.label.split(' · ').slice(1).join(' · ') : a.model;
+      return `${SOURCE_LABELS[a.source]} · ${HARNESS_LABELS[a.kind] || a.kind}${name ? ' · ' + name : ''}`;
+    }
     if (['assistant', 'ppt', 'pptMake', 'pptImgtext'].includes(f.id)) return `CodeAgent · ${codeagentModel}`;
     if (f.id === 'forum' || f.id === 'text') return `CodeAgent · ${config.defaultModels?.codeagent || cliModel || 'CLI 当前模型'}`;
     if (f.id === 'help') {
@@ -395,4 +462,4 @@ function applyPreset(dataDir, preset, options = {}) {
   return { ok: true, preset, changed, skipped: preset === 'codeagent-lite' ? skipped : [], state: state(dataDir, stateOptions) };
 }
 module.exports = { FEATURES, LABELS, GATEWAY, HARNESS, HARNESS_SOURCES, SESSION_KINDS: SESSION, PRESETS, catalog, resolve, set, setFromUi, choiceFromUi, session, stale, state,
-  assertSessionKind, applyPreset, inheritsAssistantChoice, setRuntime, ensureProxy, harnessInUse, harnessDefault, featureOptions };
+  assertSessionKind, applyPreset, inheritsAssistantChoice, setRuntime, ensureProxy, harnessInUse, harnessDefault, featureOptions, workKind };

@@ -134,10 +134,12 @@ function isWirelessSession(item) {
   return item?.purpose === 'wireless-proposal' || /^无线\s*[·・]/.test(String(item?.title || '').trim());
 }
 
+// 「今天 / 3 天」旁边的「无线」在公司版换成「专项」：平时隐藏这些会话，点亮后只看它们。
 function isSideSession(item) {
   return false;
 }
 // 公司版助理会话常驻侧栏顶部（2026-10-18 用户：「希望助理是以一个常驻会话形式出现在左侧栏」）。
+// 公司侧栏有「专项」「置顶」「今天 / 3 天」「项目」「模型」五个筛选，任何一个都可能把助理会话筛掉（他在公司就看不到它）：
 // 助理不进普通分组，单独放在最上面的「助理」一栏，不受筛选影响；有多个（换代留下的旧助理）时只放最新的。
 const backgroundTasks = require('./session-background-tasks.js');
 function companyAssistantOn() {
@@ -1006,6 +1008,7 @@ sessionListEl.addEventListener('keydown', event => {
   const visible = filteredSidebarItems(sessionMap, false);
   const sections = sidebarView(visible, sessionMap, recentDays, { now: renderNow, classify });
   if (sideMode && wirelessControl) {
+    // 藏起来的专项会话里有出错或未读的：按钮上标个数，点亮就能看到（2026-10-17 审核）。
     const hidden = sideOnly ? [] : collectSidebarItems(sessionMap).filter(isSideSession);
     const failed = hidden.length ? new Set(partitionSidebarSessions(hidden, { now: renderNow, classify, sessionMap }).failed.map(x => x.id)) : new Set();
     const attention = hidden.filter(x => failed.has(x.id) || classify(x).unread).length;

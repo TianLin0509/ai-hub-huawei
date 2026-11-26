@@ -131,7 +131,7 @@ class AgentSessions {
     const broken = error => Object.assign(error instanceof Error ? error : new Error(String(error)), { restart: true });
     let submitted = false;
     const current = () => { if (!isCurrent()) throw Object.assign(new Error('登录账号已变化，这次任务已停止'), { code: 'AVATAR_STALE_OWNER', notSent: !submitted }); };
-    const failed = reason => this.d.getSession(session.id)?.apiGatewayRoute ? gatewayError(reason) : broken(reason);
+    const failed = reason => require('../assistant-gateway-route').isGatewaySession(this.d.getSession(session.id)) ? gatewayError(reason) : broken(reason);
     current();
     const errors = require('../company-assistant/turn-api-error');
     const baseline = errors.lastApiError(this.d.getSession(session.id)?.transcriptPath)?.id;
@@ -156,7 +156,7 @@ class AgentSessions {
         if (apiError?.id !== err.id) apiError = { id: err.id, at: this.now() };
         if (this.now() - apiError.at >= 8000) {
           // 部门 API key 会话：按网关口径给一行人话，不套 CodeAgent 供应商的说法和修复卡。
-          const gw = meta?.apiGatewayRoute ? require('../assistant-gateway-route').gatewayFailure(err.text) : null;
+          const gw = require('../assistant-gateway-route').isGatewaySession(meta) ? require('../assistant-gateway-route').gatewayFailure(err.text) : null;
           if (gw) throw gatewayError(err.text);
           const d = errors.describe(err.text, meta);
           throw Object.assign(new Error(`${d.kind}（${d.detail}）`), { raw: err.text }, d.routeRejected ? { providerRepair: require('../codeagent-assistant-route').repairAction(this.d.dataDir, d.account) } : { restart: true });

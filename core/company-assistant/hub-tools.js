@@ -185,7 +185,8 @@ class HubTools {
       const cwd = String(args.cwd || '').trim();
       if (cwd && !(this.deps.isDirectory || (p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } }))(cwd)) throw new Error('工作目录不存在：' + cwd);
       const id = require('node:crypto').randomUUID();
-      const created = await this.deps.createSession('codeagent', { id, title, ...(cwd ? { cwd } : {}), noInheritCursor: true });
+      // 没装 CodeAgent 的用户（部门 key / 自有 API）：用启动中心配好的 Claude Code / Codex 开（core/feature-agent-choice.js workKind）。
+      const created = await this.deps.createSession(require('../feature-agent-choice').workKind(), { id, title, ...(cwd ? { cwd } : {}), noInheritCursor: true });
       if (!created || created.id !== id) throw new Error('新会话没能打开');
       this.a.phone?.watch(id, { baseline: null, title, why: 'create' });
       const receipt = await this.deps.sendPrompt(id, text, require('node:crypto').randomUUID());

@@ -152,6 +152,8 @@
     };
     video.addEventListener('error', fallback);
     video.volume = clip.start > 0 ? 0 : 1;
+    // 默认静音：启动时由 startup 带上偏好，预览 / 重播读当前偏好；只有用户在「播放设置」里打开「播放声音」才出声。
+    video.muted = !(opts.sound ?? data?.preferences?.sound === true);
     // 安装版从 app.asar 页面读取数据目录视频时可能报格式错误，保留主干的 Blob 播放兼容。
     // 文件读取和 Blob 释放都归当前会话；取消或重播不会影响下一轮视频。
     const controller = new AbortController(); session.clean(() => controller.abort());
@@ -239,6 +241,7 @@
   function settings() {
     const f = data.preferences.frequency;
     return `<div class="bsp-settings"><h3>什么时候播放</h3>${FREQ.map(([id, name, note]) => `<label class="bsp-radio"><input type="radio" name="bsp-freq" value="${id}" ${f === id ? 'checked' : ''}><span><b>${name}</b><small>${note}</small></span></label>`).join('')}
+      <h3>声音</h3><label class="bsp-radio"><input type="checkbox" name="bsp-sound" ${data.preferences.sound === true ? 'checked' : ''}><span><b>播放声音</b><small>默认关闭。有声款的台词和配乐只在打开后播放，开会时开 Hub 不会突然出声</small></span></label>
       <h3>下载来源</h3><p>按需下载的开场动画从公司内源取；图片款每套 50–150 KB，有声视频款每套约 2–4 MB。</p>${require('./download-source-view').slotHtml('boot-splash', 'div')}
       <h3>关于「原作」开场</h3><p>Claude、Codex、Gemini 页签里带「原作」的三套，来自 wynneceles 的开源项目 ai-boot-animations（github.com/wynneceles/ai-boot-animations），按 CC BY-NC-ND 4.0 收录、带原声，截取开机用的 3–4 秒片段，画面不做改动；仅供非商业的个人使用；人物为网络流传的同人形象，著作权归原设计者。</p>
       <div class="bsp-row"><button class="appearance-btn" data-action="check">检查新的开场动画</button><button class="appearance-btn" data-preview="${esc(data.preferences.selected)}">预览当前开场动画</button></div></div>`;
@@ -293,6 +296,8 @@
         })();
       });
       dialog.addEventListener('change', e => {
+        const snd = e.target.closest('input[name="bsp-sound"]');
+        if (snd) { void ipcRenderer.invoke('boot-splash:save', { sound: snd.checked }).then(next => { data = next; message = snd.checked ? '已打开声音，下次开场会出声。' : '已静音。'; render(); }).catch(error => { message = error.message; render(); }); return; }
         const r = e.target.closest('input[name="bsp-freq"]'); if (!r) return;
         void ipcRenderer.invoke('boot-splash:save', { frequency: r.value }).then(next => { data = next; message = '已保存。'; render(); }).catch(error => { message = error.message; render(); });
       });
@@ -348,6 +353,6 @@
   });
 
   window.hubBootSplash = { play, stop, openPicker, refresh };
-  ipcRenderer.invoke('boot-splash:startup').then(spec => { if (spec) void play(spec, { hint: spec.showHint, firstHint: spec.firstHint }); })
+  ipcRenderer.invoke('boot-splash:startup').then(spec => { if (spec) void play(spec, { hint: spec.showHint, firstHint: spec.firstHint, sound: spec.sound === true }); })
     .catch(error => console.warn('[boot-splash]', error));
 })();

@@ -1,7 +1,7 @@
 ﻿# Windows PowerShell 5.1+. No Node, Git, admin rights or existing Hub required.
 [CmdletBinding()]
 param(
-  [ValidatePattern('^v?\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$')][string]$Version = 'v5.6.128',
+  [ValidatePattern('^v?\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$')][string]$Version = 'v5.6.129',
   [string]$Destination = (Join-Path $env:LOCALAPPDATA 'Programs\AIHubCommunity'),
   [string]$PackagePath,
   [string]$ChecksumPath,
@@ -11,11 +11,13 @@ param(
   # Compatibility rendering for machines where the GPU path shows a black window: writes
   # gpu-disabled.json into the Hub data folder (delete it to use the GPU again).
   [switch]$DisableGpu,
+  # Optional: base URL that serves the archive and SHA256SUMS.txt. Without it the script uses files already in Downloads.
+  [string]$ReleaseUrl,
   [string]$ResultPath
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$repo = 'TianLin0509/ai-hub-huawei'
+$openxPage = 'the AI Hub project on the company OpenX platform'
 $tag = 'v' + $Version.TrimStart('v')
 $asset = 'AIHubHuawei-' + $tag.Substring(1) + '-win-x64.zip'
 $stage = $null
@@ -74,7 +76,7 @@ try {
   [IO.Directory]::CreateDirectory($base) | Out-Null
   $stage = Join-Path $base ('.install-' + [guid]::NewGuid())
   [IO.Directory]::CreateDirectory($stage) | Out-Null
-  $releaseUrl = "https://github.com/$repo/releases/download/$tag"
+  $releaseUrl = if ($ReleaseUrl) { $ReleaseUrl.TrimEnd('/') } else { '' }
   $packageSource = 'offline'
   if (-not $PackagePath) {
     $localPackage = Find-LocalPackage $asset
@@ -85,6 +87,8 @@ try {
         $localSums = Join-Path (Split-Path -Parent $localPackage) 'SHA256SUMS.txt'
         if ((Test-Path -LiteralPath $localSums -PathType Leaf) -and (Select-String -LiteralPath $localSums -SimpleMatch $asset -Quiet)) { $ChecksumPath = $localSums }
         else { $ChecksumPath = Join-Path $stage 'SHA256SUMS.txt'; Get-ReleaseFile "$releaseUrl/SHA256SUMS.txt" $ChecksumPath 90 }
+      } elseif (-not $releaseUrl) {
+        throw "$asset was not found in the Downloads folder"
       } else {
         Write-Host "Downloading $tag (about 140 MB). Existing versions and user data are retained."
         $PackagePath = Join-Path $stage $asset; $packageSource = 'download'
@@ -93,7 +97,7 @@ try {
         Get-ReleaseFile "$releaseUrl/SHA256SUMS.txt" $ChecksumPath 90
       }
     } catch {
-      throw "$($_.Exception.Message). Fix: open https://github.com/$repo/releases/tag/$tag in the browser, save $asset and SHA256SUMS.txt into the Downloads folder, then run this same command again."
+      throw "$($_.Exception.Message). Fix: download $asset and SHA256SUMS.txt for $tag from $openxPage into the Downloads folder, then run this same command again."
     }
   }
   $archive = (Resolve-Path -LiteralPath $PackagePath).Path

@@ -58,7 +58,6 @@ AI HUB 是一个 Windows 上的 Electron 桌面程序，把多个 AI 命令行�
 | `window-events.log` | 窗口无响应、渲染进程崩溃、内存超过 1/2/3 GB；超过 512 KB 轮转为 `.1` |
 | `session-suspend.log` | 会话休眠与唤醒 |
 | `hub-feedback.log` | 一键反馈的发送过程（被公司网络拦截时附近有 `hub-feedback-*-sample.html`） |
-| `net-unblock*` | 自动放行公司网络拦截页的过程 |
 | `codeagent-*.log` / `codeagent-*.txt` | CodeAgent 相关：命令记录、技能安装、停止、用量菜单、模型选择等 |
 | `company-assistant-*.log` | WeLink 助理：welink-cli 调用、查询、消息刷新 |
 

@@ -744,7 +744,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   function phoneLive() {
     const p = phoneData.phone, st = p.settings;
     // 群消息轮询间隔见 core/company-assistant/phone.js 的 POLL_MS（6 秒）。
-    const line = !st.groupId ? '<span class="ca-chip">还没选群</span>' : !st.enabled ? '<span class="ca-chip">没开启</span>'
+    const bot = p.bot || {};
+    const line = p.transport === 'bot' ? botLine(p, st, bot) : !st.groupId ? '<span class="ca-chip">还没选群</span>' : !st.enabled ? '<span class="ca-chip">没开启</span>'
       : p.lastError ? `<span class="ca-chip warn">出错</span><span class="ca-note">${esc(p.lastError)}</span>`
         : p.lastOkAt ? `<span class="ca-chip ok">已接通</span><span class="ca-note">每 6 秒查一次群消息，上次 ${clock(p.lastOkAt)}${p.pending ? ` · 正在答 ${p.pending} 条` : ''}</span>` : '<span class="ca-chip run">正在接通…</span>';
     const watching = p.watching.length ? `<p class="ca-note">正在盯 ${p.watching.length} 个会话：${p.watching.map(w => esc(w.title || w.id)).join('、')}（答完或卡住时推到手机）</p>` : '';
@@ -752,12 +753,42 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       : '<p class="ca-note">还没有往来。</p>';
     return `<div class="ca-row">${line}</div>${watching}<div class="ca-sec small">最近往来</div>${log}`;
   }
+  // WeLink 私聊助理（beta，2026-11-27）：用户点「绑定到 WeLink」扫码后才启用；没绑定时页面和原来一样，只多一个收起的入口。
+  function botLine(p, st, bot) {
+    if (!bot.hasCred) return '<span class="ca-chip">还没绑定</span><span class="ca-note">在下面点「绑定到 WeLink」，扫一次码就好</span>';
+    if (!st.enabled) return '<span class="ca-chip">没开启</span>';
+    if (bot.phase !== 'ready') return bot.lastError ? `<span class="ca-chip warn">出错</span><span class="ca-note">${esc(bot.lastError)}</span>` : '<span class="ca-chip run">正在连接 WeLink…</span>';
+    if (p.lastError) return `<span class="ca-chip warn">出错</span><span class="ca-note">${esc(p.lastError)}</span>`;
+    return `<span class="ca-chip ok">已接通</span><span class="ca-note">${bot.talked ? `手机 WeLink 私聊「${esc(bot.name || '助手')}」就是和助理说话${p.pending ? ` · 正在答 ${p.pending} 条` : ''}` : `去 WeLink 找到「${esc(bot.name || '助手')}」，私聊它一句就接通，之后的提醒也发到那里`}</span>`;
+  }
+  const REG_TEXT = { waiting: '等你扫码…', scanned: '已扫码，请在手机上点确认', confirmed: '创建好了，正在连接…', expired: '二维码过期了', cancelled: '在 WeLink 里取消了', failed: '没生成二维码' };
+  function botBlock() {
+    const p = phoneData.phone, st = p.settings, bot = p.bot || {}, reg = bot.register;
+    if (reg && ['waiting', 'scanned'].includes(reg.status)) {
+      return `<div class="ca-row ca-bot-reg"><img class="ca-bot-qr" alt="WeLink 私聊助理二维码" src="${esc(reg.qr || '')}" width="170" height="170">
+        <div class="col"><p><b>${REG_TEXT[reg.status]}</b></p>
+          <p class="ca-note">用手机 WeLink「扫一扫」扫左边的码，点确认就创建好了。也可以直接在电脑 WeLink 里确认：</p>
+          <div class="ca-row"><button type="button" class="ca-btn primary" data-x="bot-open">在电脑 WeLink 里打开</button><button type="button" class="ca-btn small" data-x="bot-register">换一个码</button></div>
+          <p class="ca-note">二维码约 5 分钟有效，过期会自动换新码。</p></div></div>`;
+    }
+    if (bot.hasCred) {
+      return `<p class="ca-note">已绑定「${esc(bot.name || '助手')}」${bot.createdAt ? `（${clock(bot.createdAt)}）` : ''}。只有你本人发的话会交给助理，别人私聊它不会执行。</p>
+        <div class="ca-row">${p.transport === 'bot' ? '<button type="button" class="ca-btn small" data-x="bot-group">改回专用群</button>' : '<button type="button" class="ca-btn primary" data-x="bot-use">改用私聊助理</button>'}<button type="button" class="ca-btn small" data-x="bot-recreate">解除绑定并重新绑定</button><button type="button" class="ca-btn small" data-x="bot-forget">解除绑定</button></div>`;
+    }
+    const tip = reg && REG_TEXT[reg.status] ? `<p class="ca-note bad">${REG_TEXT[reg.status]}${reg.error ? '：' + esc(reg.error) : ''}，再点一次就行。</p>` : '';
+    return `<p class="ca-note">可选功能：扫一次码，WeLink 里就多一个只属于你的「助手」，私聊它就是和助理说话，不用建群。不点下面的按钮就什么都不会发生，专用群照常用。</p>${tip}
+      <div class="ca-row"><button type="button" class="ca-btn" data-x="bot-register">绑定到 WeLink</button></div>`;
+  }
+  // 接通方式、开关、助手有无、是否私聊过：任一变化就整页重画（勾选框、测试按钮要跟着变）。
+  const phoneKey = () => { const p = phoneData.phone, b = p.bot || {}; return [p.transport, p.settings.enabled, !!b.hasCred, !!b.talked].join('|'); };
   function phoneTab() {
     const st = phoneData.phone.settings, check = phoneData.phone.groupCheck;
     const groups = (phoneData.conversations || []).filter(c => c.group);
     if (st.groupId && !groups.some(g => g.id === st.groupId)) groups.unshift({ id: st.groupId, name: st.groupName || st.groupId, group: true });
     const options = ['<option value="">从最近会话选择…</option>', ...groups.map(g => `<option value="${esc(g.id)}" data-name="${esc(g.name)}">${esc(g.name)} · ${esc(g.id)}</option>`)].join('');
     const checkLine = check && check.groupId === st.groupId ? `<span class="ca-chip${check.ok ? ' ok' : ' warn'}">${check.ok ? '成员没问题' : '有其他人'}</span><span class="ca-note">${esc(check.note)}</span>` : '';
+    const viaBot = phoneData.phone.transport === 'bot', bot = phoneData.phone.bot || {};
+    const botOpen = viaBot || bot.hasCred || ['waiting', 'scanned'].includes(bot.register?.status);
     return `<fieldset class="col"><legend>接通状态</legend><div data-slot="phone-live">${phoneLive()}</div></fieldset>
       <fieldset class="col"><legend>助理消息群 ID</legend>
         <p class="ca-note">先在 WeLink 建好专用消息群，把群 ID 填在这里。接通后，欢迎消息会发到这个群，之后直接在群里和助理说话。</p>
@@ -774,7 +805,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         <label><input type="checkbox" data-f="phone-enabled"${st.enabled ? ' checked' : ''}>开启手机对话</label>
         <label><input type="checkbox" data-f="phone-pushWatched"${st.pushWatched ? ' checked' : ''}>助理派出的、让它盯着的会话答完或卡住时，推到手机</label>
         <label><input type="checkbox" data-f="phone-pushStuck"${st.pushStuck ? ' checked' : ''}>其他会话卡住等你时也推到手机（电脑前 5 分钟内有人操作就不推）</label></fieldset>
-      <div class="ca-row end"><button type="button" class="ca-btn" data-x="phone-test"${st.groupId ? '' : ' disabled'}>发一条测试消息</button><button type="button" class="ca-btn primary" data-x="phone-save">保存</button></div>`;
+      <div class="ca-row end"><button type="button" class="ca-btn" data-x="phone-test"${(viaBot ? bot.talked : st.groupId) ? '' : ' disabled'}>发一条测试消息</button><button type="button" class="ca-btn primary" data-x="phone-save">保存</button></div>
+      <details class="ca-bot-box"${botOpen ? ' open' : ''}><summary class="ca-note">WeLink 私聊助理（beta，可选，不用建群）</summary><div data-slot="phone-bot">${botBlock()}</div></details>`;
   }
   async function mountPhoneTab(panel) {
     const tabBody = panel.querySelector('.ca-tab-body');
@@ -782,6 +814,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     try { phoneData = await call('phone-status'); } catch (error) { tabBody.innerHTML = `<p class="ca-note bad">手机设置没能打开：${esc(error.message)}</p>`; return; }
     if (panel.dataset.tab !== 'phone' || !tabBody.isConnected) return;
     tabBody.innerHTML = phoneTab();
+    tabBody.dataset.transport = phoneKey();
     const groupSel = tabBody.querySelector('[data-f="phone-group"]');
     const extraIdsInput = tabBody.querySelector('[data-f="phone-extraIds"]');
     const settingsError = tabBody.querySelector('#ca-phone-extra-ids-error');
@@ -800,7 +833,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       if (!g.groupId) { slot.textContent = '请先填入群 ID'; return; }
       e.target.disabled = true; settingsError.textContent = ''; slot.textContent = '正在校验设置并发送欢迎消息…';
       try {
-        const r = await call('phone-settings', { ...g, enabled: true, extraIds: extraIdsInput.value });
+        const r = await call('phone-settings', { ...g, enabled: true, ...(phoneData.phone.transport === 'bot' ? { transport: 'group' } : {}), extraIds: extraIdsInput.value });
         if (!r.ok) { slot.innerHTML = `<p class="ca-note bad">${esc(r.error)}</p>`; return; }
         await mountPhoneTab(panel); showMessage?.('手机对话已接通');
       } catch (error) { slot.innerHTML = `<p class="ca-note bad">没有接通：${esc(error.message)}</p>`; showSettingsError(error); }
@@ -817,16 +850,32 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       try { const r = await call('phone-check-group', { groupId: g.groupId }); slot.innerHTML = `<span class="ca-chip${r.ok ? ' ok' : ' warn'}">${r.ok ? '成员没问题' : '有其他人'}</span><span class="ca-note">${esc(r.note)}</span>`; }
       catch (error) { slot.innerHTML = `<span class="ca-note bad">没查到：${esc(error.message)}</span>`; } finally { e.target.disabled = false; }
     };
+    tabBody.querySelector('[data-slot="phone-bot"]').onclick = async e => {
+      const btn = e.target.closest('[data-x]'), x = btn?.dataset.x;
+      if (!x) return;
+      if ((x === 'bot-recreate' || x === 'bot-forget') && !confirm('解除绑定后旧助手不再接话。继续吗？')) return;
+      btn.disabled = true;
+      try {
+        if (x === 'bot-register') await call('bot-register');
+        else if (x === 'bot-open') { await call('bot-open'); showMessage?.('已在 WeLink 里打开，点确认就创建好了'); }
+        else if (x === 'bot-use') { await call('phone-settings', { transport: 'bot', enabled: true }); showMessage?.('已改用私聊助理'); }
+        else if (x === 'bot-group') { await call('phone-settings', { transport: 'group', enabled: false }); showMessage?.('已改回专用群；在上面填群 ID 后点「接通」'); }
+        else if (x === 'bot-forget') { await call('bot-forget'); showMessage?.('已解除绑定，本机保存的助手身份已删除'); }
+        else if (x === 'bot-recreate') { await call('bot-forget'); await call('bot-register'); }
+        await mountPhoneTab(panel);
+      } catch (error) { btn.disabled = false; showMessage?.('没办成：' + error.message); }
+    };
     tabBody.querySelector('[data-x="phone-test"]').onclick = async e => {
       e.target.disabled = true;
       try { const r = await call('phone-test'); showMessage?.(r.ok ? '测试消息已发到群里，去手机上看看' : '没发出去，原因见「最近往来」'); } catch (error) { showMessage?.('没发出去：' + error.message); } finally { e.target.disabled = false; }
     };
     tabBody.querySelector('[data-x="phone-save"]').onclick = async e => {
       const g = chosen(), on = f => tabBody.querySelector(`[data-f="phone-${f}"]`).checked;
-      if (on('enabled') && !g.groupId) { showMessage?.('请先填群 ID'); return; }
+      const viaBot = phoneData.phone.transport === 'bot';
+      if (on('enabled') && !viaBot && !g.groupId) { showMessage?.('请先填群 ID'); return; }
       e.target.disabled = true; settingsError.textContent = '';
       try {
-        const r = await call('phone-settings', { ...g, enabled: on('enabled'), pushWatched: on('pushWatched'), pushStuck: on('pushStuck'), extraIds: extraIdsInput.value });
+        const r = await call('phone-settings', { ...g, ...(viaBot ? { transport: 'bot' } : {}), enabled: on('enabled'), pushWatched: on('pushWatched'), pushStuck: on('pushStuck'), extraIds: extraIdsInput.value });
         if (!r.ok) { showMessage?.('没有接通：' + r.error); e.target.disabled = false; return; }
         showMessage?.(r.welcome ? '已接通：欢迎消息已发到手机群' : '手机设置已保存');
         await mountPhoneTab(panel);
@@ -836,7 +885,14 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     clearInterval(phoneTimer);
     phoneTimer = setInterval(async () => {
       if (panel.hidden || panel.dataset.tab !== 'phone' || !tabBody.isConnected) { clearInterval(phoneTimer); phoneTimer = null; return; }
-      try { phoneData = await call('phone-status'); const live = tabBody.querySelector('[data-slot="phone-live"]'); if (live) live.innerHTML = phoneLive(); } catch { /* 下次再刷 */ }
+      try {
+        const before = JSON.stringify(phoneData.phone.bot || {});
+        phoneData = await call('phone-status');
+        // 换了接通方式（如扫码确认后自动改用专属助手）就整页重画，否则只换状态和助手这两块（二维码图不闪）。
+        if (phoneKey() !== tabBody.dataset.transport) { await mountPhoneTab(panel); return; }
+        const live = tabBody.querySelector('[data-slot="phone-live"]'); if (live) live.innerHTML = phoneLive();
+        if (JSON.stringify(phoneData.phone.bot || {}) !== before) { const b = tabBody.querySelector('[data-slot="phone-bot"]'); if (b) b.innerHTML = botBlock(); }
+      } catch { /* 下次再刷 */ }
     }, 3000);
   }
 

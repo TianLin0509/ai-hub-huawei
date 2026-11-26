@@ -60,7 +60,7 @@ test('Worker 只回报进度，缩放后继续播放，结束释放图片；绘�
 });
 
 // 执行实际播放器；只替换 DOM、解码和线程边界，精确控制迟到的异步结果。
-function playerFixture({ bitmap, readFile } = {}) {
+function playerFixture({ bitmap, readFile, prefs = {} } = {}) {
   const elements = [], images = [], workers = [], keys = new Set(), resizes = new Set(), timers = new Map(), revoked = [];
   let nextTimer = 0, released = 0;
   function element(tag) {
@@ -82,7 +82,7 @@ function playerFixture({ bitmap, readFile } = {}) {
       prepend() {}, remove() { const i = elements.indexOf(this); if (i >= 0) elements.splice(i, 1); },
     };
   }
-  const preferences = { frequency: 'daily', selected: 'test' };
+  const preferences = { frequency: 'daily', selected: 'test', ...prefs };
   const context = {
     console: { warn() {} }, AbortController, Blob,
     URL: class extends URL {
@@ -201,6 +201,19 @@ test('本地视频转 Blob 并按片段起播，重播与停止只释放各自�
   assert.notEqual(firstSrc, secondSrc); assert.deepEqual(f.revoked, [firstSrc]);
   first.emit('error'); assert.equal(f.elements.length, 1, '旧视频迟到错误不打断新视频');
   f.stop(); assert.deepEqual(f.revoked, [firstSrc, secondSrc]); assert.equal(f.timers.size, 0);
+});
+
+test('开场视频默认静音：老偏好没有声音开关也静音；用户打开「播放声音」才出声，启动时带的偏好优先', async () => {
+  const quiet = playerFixture({ readFile: async () => Buffer.from('video') }); await flush();
+  await quiet.play({ anim: 'video', src: 'file:///D:/Temp/video.mp4' }); await flush();
+  assert.equal(quiet.elements[0].video.muted, true, '没打开过声音就静音');
+  quiet.stop();
+  const loud = playerFixture({ readFile: async () => Buffer.from('video'), prefs: { sound: true } }); await flush();
+  await loud.play({ anim: 'video', src: 'file:///D:/Temp/video.mp4' }); await flush();
+  assert.equal(loud.elements[0].video.muted, false, '预览 / 重播按当前偏好出声');
+  await loud.play({ anim: 'video', src: 'file:///D:/Temp/video.mp4' }, { sound: false }); await flush();
+  assert.equal(loud.elements[0].video.muted, true, '启动时带来的静音偏好优先');
+  loud.stop();
 });
 
 test('本地视频读取中可取消，读取结果迟到时释放 Blob、不再播放或提示错误', async () => {

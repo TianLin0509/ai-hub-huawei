@@ -25,7 +25,7 @@ function createReader(deps = {}, { settleMs = 0 } = {}) {
     read(id, baseline = null) {
       const meta = deps.getSession?.(id);
       if (!meta) { monitors.delete(id); apiSeen.delete(id); return ''; }
-      if (meta.apiGatewayRoute) {
+      if (require('./assistant-gateway-route').isGatewaySession(meta)) {
         const gw = gatewayRead(id, meta, baseline);
         if (gw) return gw;
         const out = readAgent(id, meta, baseline, { skipApi: true });

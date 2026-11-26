@@ -11,4 +11,6 @@ module.exports = {
   projectId: 7938,
   // 附件只接受这个站点同域名及其子域名的 https 地址。
   fileSite: 'https://openx.huawei.com/',
+  // 内源上本产品的项目页（给用户的手动下载入口）。
+  projectPage: 'https://openx.huawei.com/AI-Hub-Huawei',
 };

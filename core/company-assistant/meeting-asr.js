@@ -15,10 +15,8 @@ const { downloadWithFallback, fmtBytes } = require('../app-update/downloader');
 const { resolveFetch } = require('./fetch-util');
 
 const PACK = require('./meeting-speech-pack.json');
-const SOURCES = Object.freeze([
-  { id: 'aliyun-fast', name: '高速下载服务器', files: 'https://dl.lt-stockpartner.tech/hub-update/meeting-speech/{version}/' },
-  { id: 'aliyun', name: '阿里云', files: 'https://me.lt-stockpartner.tech/hub-update/meeting-speech/{version}/' },
-]);
+// 下载只走公司内源（openx）；内源不生效时（纯 Node 单测）由调用方注入源，默认不提供外网源。
+const SOURCES = Object.freeze([]);
 const WORKER = path.join(__dirname, '../../scripts/meeting-speech-worker.py');
 const LEGACY_WORKER = path.join(__dirname, '../../scripts/meeting-asr-worker.py');
 const READY_TIMEOUT_MS = 120000;
@@ -54,7 +52,7 @@ class MeetingAsr {
     this.progress = { phase: 'connecting', message: '正在连接…' };
     this.installing = this.installPack()
       .then(() => { this.phase = ''; this.progress = null; })
-      .catch(e => { this.phase = ''; this.progress = null; this.error = e.blocked ? '下载被公司网络拦下了：先点主界面底栏的「一键放行」，放行后再点「重新安装」。' : '安装未完成，可重试：' + e.message; this.blocked = !!e.blocked; })
+      .catch(e => { this.phase = ''; this.progress = null; this.error = e.blocked ? '下载被公司网络拦下了：确认电脑连着公司网络后再点「重新安装」。' : '安装未完成，可重试：' + e.message; this.blocked = !!e.blocked; })
       .finally(() => { this.installing = null; });
     return this.status();
   }
@@ -72,7 +70,7 @@ class MeetingAsr {
       if (!await this.partReady(file, part)) {
         if (this.closed) throw new Error('Hub 已关闭，安装已中断');
         this.abort = new AbortController();
-        const result = await downloadWithFallback({ gate: true, sources: this.sources, version: this.pack.version, dest: file,
+        const result = await downloadWithFallback({ sources: this.sources, version: this.pack.version, dest: file,
           openx: { release: `meeting-asr-${this.pack.version}` }, fetchImpl: doFetch, signal: this.abort.signal,
           expect: { file: part.file, bytes: part.size, sha256: part.sha256 },
           onProgress: p => { const got = done + p.received, rate = (fetched + p.received) / Math.max(1, (Date.now() - started) / 1000); this.phase = `下载本地转写组件 ${fmtBytes(got)} / ${fmtBytes(total)}${fetched + p.received > 2 * 1024 * 1024 ? ' · 还要' + minutes((total - got) / rate) : ''} · ${p.sourceName}`;

@@ -112,7 +112,7 @@ class Tryouts {
       if (applied.confidence <= 0 && !basis.length) Object.assign(applied, { state: 'remind', draft: '', lowConfidenceFallback: true, why: '依据不足，转你处理' });
       if (R.sensitiveHit(applied.draft)) Object.assign(applied, { state: 'remind', draft: '', why: '试答涉及敏感内容，请本人处理' });
       const meta = f.d.getSession?.(session.id) || {}, model = meta.currentModel?.id || meta.featureAgentChoice?.model || meta.fixedModel || av.backend?.model;
-      const modelLabel = model ? `${meta.apiGatewayRoute ? '部门 API key（网关）' : meta.kind === 'codeagent-lite' ? 'CodeAgent-Lite' : 'CodeAgent'} · ${model}` : agent.label;
+      const modelLabel = model ? `${require('../assistant-gateway-route').isGatewaySession(meta) ? '部门 API key（网关）' : meta.apiGatewayRoute ? 'Claude Code' : meta.kind === 'codeagent-lite' ? 'CodeAgent-Lite' : 'CodeAgent'} · ${model}` : agent.label;
       const entry = { id: 'tr-' + token, at: f.now(), question: safe(question), answer: safe(applied.draft || '', 800),
         action: applied.state === 'ready' ? 'draft' : applied.state === 'skipped' ? 'skip' : 'remind', confidence: applied.confidence, basis,
         why: safe(applied.why || '', 300), durationMs: Math.max(0, f.now() - started), modelLabel,

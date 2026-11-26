@@ -15,13 +15,8 @@ function listAvatarBackends({ dataDir, sessionManager, env = process.env }) {
   const gateway = gatewayRow(dataDir);
   if (gateway) rows.push(gateway);
   const codeagentAvailable = !!require('../../core/community-setup').findCommand('codeagent', env);
-  const choice = require('../../core/feature-agent-choice'), routes = require('../../core/codeagent-assistant-route');
-  let models = [];
-  try { models = routes.modelOptions(dataDir, 'personal', require('../../core/codeagent-config').resolveCodeAgentConfig(env).configDir); } catch { /* 未配置模型 */ }
-  const featureChoice = choice.resolve(dataDir, 'avatar', { backends: [
-    { kind: 'codeagent', available: codeagentAvailable, models }, { kind: 'codeagent-lite', available: codeagentAvailable, models },
-    { kind: 'api-gateway', available: !!gateway?.usable, models: (gateway?.models || []).map(id => ({ id })) },
-  ] });
+  // 和后台会话同一份完整目录判定（11-27：没有可用 CodeAgent 时的自动默认可能是 Claude Code · 自有接口 / 公司模型，不只部门 key）。
+  const featureChoice = require('../../core/feature-agent-choice').resolve(dataDir, 'avatar', { env });
   return { rows, codeagentAvailable, featureChoice };
 }
 
@@ -41,7 +36,13 @@ function gatewayRow(dataDir, deps = {}) {
     const configured = pref?.kind === route.KIND;
     // 没选过、走自动默认（没有可用 CodeAgent + 部门 key 可用，R49-2）也算选中：自检、试答、后台会话三处同一口径（审查 P1-2）。
     let auto = false;
-    if (!pref && a.available) { try { auto = deps.autoDefault ? !!deps.autoDefault() : typeof route.autoDefault === 'function' && route.autoDefault(dataDir, deps.availability || {}); } catch { auto = false; } }
+    // 11-27：自动默认按 feature-agent-choice 的完整判定，只有它真的落在部门 key 上才亮这一行（落在自有接口 / 公司模型时不亮）。
+    if (!pref && a.available) {
+      try {
+        if (deps.autoDefault) auto = !!deps.autoDefault();
+        else { const r = require('../../core/feature-agent-choice').resolve(dataDir, 'avatar', deps.availability || {}); auto = !!r.auto && r.selected?.kind === route.KIND; }
+      } catch { auto = false; }
+    }
     const selected = (configured && a.available && (!pref.model || models.includes(pref.model))) || !!auto;
     return { id: route.KIND, label: route.LABEL, usable: a.available, reason: a.available ? '' : `${a.reason}（设置 → 自有 API → API 网关）`,
       models, defaultModel: view.model || '', pool: false, gateway: true, configured, selected, ...(auto ? { auto: true } : {}), model: selected && pref ? pref.model || '' : '' };

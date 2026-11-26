@@ -48,7 +48,21 @@ function registerCompanyAssistantIpc(ipcMain, service) {
       if (r.canceled || !r.filePaths[0]) return { ok: true, canceled: true };
       return { ok: true, settings: service.setSettings({ workDir: r.filePaths[0] }) };
     },
-    'phone-status': () => ({ ok: true, phone: service.phone.status(), conversations: service.status().conversations }),
+    'phone-status': () => {
+      const phone = service.phone.status(), reg = phone.bot?.register;
+      // 二维码图画不出来时只少一张图，「在电脑 WeLink 里打开」照样能用，不让整页打不开。
+      if (reg?.weUrl && ['waiting', 'scanned'].includes(reg.status)) { try { reg.qr = require('../../core/company-assistant/welink-bot').qrImage(reg.weUrl); } catch (e) { reg.qr = ''; reg.qrError = e.message; } }
+      return { ok: true, phone, conversations: service.status().conversations };
+    },
+    // WeLink 私聊助理（beta）：用户点了才扫码绑定；在电脑 WeLink 里直接打开确认页；解除绑定。
+    'bot-register': async () => { await service.bot.register(); return { ok: true }; },
+    'bot-open': async () => {
+      const url = service.bot.status().register?.pcUrl;
+      if (!url || !/^welink:\/\//i.test(url)) throw new Error('二维码还没生成，先点「绑定到 WeLink」');
+      await require('electron').shell.openExternal(url);
+      return { ok: true };
+    },
+    'bot-forget': async () => { service.bot.forget(); await service.setPhone({ enabled: false, transport: 'group' }); return { ok: true }; },
     'phone-settings': request => service.setPhone(request || {}),
     'phone-test': async () => ({ ok: await service.phone.send('测试消息：Hub 能往这个群发消息。在这里直接跟我说话就行。', 'test') }),
     'phone-check-group': request => service.phone.checkGroup(String(request?.groupId || '')),
@@ -71,6 +85,9 @@ function registerCompanyAssistantIpc(ipcMain, service) {
     'room-schedule': request => ({ ok: true, rooms: service.rooms.saveSchedule(request || {}) }),
     'room-connect': async () => ({ ok: true, rooms: await service.rooms.ensure({ user: true }) }),
     'room-reconnect': async () => ({ ok: true, rooms: await service.rooms.reconnect() }),
+    // 2026-11-27 R51：被别的秘书终结者进程拦下时，「我已退出，重新检测」与「帮我结束它」（页面先二次确认）。
+    'room-recheck': async () => ({ ok: true, rooms: await service.rooms.recheck() }),
+    'room-stop-external': async () => ({ ok: true, rooms: await service.rooms.stopExternal() }),
     'room-discover': async () => ({ ok: true, rooms: await service.rooms.discover() }),
     'room-install': async () => ({ ok: true, rooms: await service.rooms.install() }),
     'room-pick': async () => {
@@ -97,8 +114,9 @@ function registerCompanyAssistantIpc(ipcMain, service) {
   Object.assign(handlers, require('../../core/company-assistant/ppt-ipc').createPptHandlers(service));
   Object.assign(handlers, require('../../core/company-assistant/meeting-ipc').createMeetingHandlers(service));
   for (const [name, handler] of Object.entries(handlers)) {
-    ipcMain.handle('company-assistant:' + name, async (_event, request = {}) => {
-      try { return await handler(request); } catch (error) { return { ok: false, error: error.message }; }
+    ipcMain.handle('company-assistant:' + name, async (event, request = {}) => {
+      // 第二个参数是发起的页面（会议采集要记下是哪个页面在录，页面崩溃时把会议收成「已中断」）。
+      try { return await handler(request, event); } catch (error) { return { ok: false, error: error.message }; }
     });
   }
   return service;

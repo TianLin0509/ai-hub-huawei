@@ -60,7 +60,7 @@
       const backendTitle = selected ? backend?.label || selected.kind : `默认（当前：${f.defaultText}）`;
       const stale = cur.model && !models.some(m => m.value === cur.model);
       const staleLabel = selected?.model ? `${selected.model}（${f.legacy ? '公司里用不了' : '不可用'}）` : '本机默认模型（公司里用不了）';
-      return `<div class="fa-row" data-fa-row="${f.id}"><label for="fa-backend-${host.id}-${f.id}">${esc(f.label)}${!selected && f.auto ? '<span class="fa-auto" data-fa-auto>默认：部门 API key（未检测到 CodeAgent）</span>' : ''}</label>
+      return `<div class="fa-row" data-fa-row="${f.id}"><label for="fa-backend-${host.id}-${f.id}">${esc(f.label)}${!selected && f.auto ? `<span class="fa-auto" data-fa-auto title="${esc(f.defaultText)}">默认：${esc(f.defaultText)}（未检测到可用的 CodeAgent）</span>` : ''}</label>
         <select data-fa-backend id="fa-backend-${host.id}-${f.id}" aria-label="${esc(f.label)}后端" title="${esc(backendTitle)}"><option value="" title="${esc(f.defaultText)}">${esc(defaultBackend)}</option>${backendOptions.map(b => `<option value="${esc(b.value)}"${b.value === cur.backend ? ' selected' : ''}${b.available ? '' : ' disabled'} title="${esc(b.reason || b.label)}">${esc(b.label)}${b.available ? '' : `（${esc(b.reason || '不可用')}）`}</option>`).join('')}</select>
         <select data-fa-model aria-label="${esc(f.label)}模型"${selected && backend?.available ? '' : ' disabled'}><option value="">默认（当前：${esc(backend?.defaultModel || f.defaultText)}）</option>${stale || (f.legacy && !cur.model) ? `<option selected value="${esc(cur.model)}">${esc(staleLabel)}</option>` : ''}${models.map(m => `<option value="${esc(m.value)}"${m.value === cur.model ? ' selected' : ''}${m.unavailable ? ' disabled' : ''}>${esc(m.label || m.id)}</option>`).join('')}${backend?.allowCustom ? '<option value="__custom__">手填模型名…</option>' : ''}</select>
         ${selected ? '<button class="fa-reset" data-fa-reset type="button">恢复默认</button>' : ''}${f.warning ? `<span class="fa-warning" role="status">${esc(f.warning)}</span>` : ''}${gatewayExtras(f, backend, features.length)}</div>`;
@@ -112,18 +112,20 @@
   // 部门 API key（网关）：8 项会话功能都能选（2026-11-24）。说明统一放在底部一行（细节放 ⓘ），和保存结果同一行，不每行挂提示，
   // 设置页「日常功能」不因此变长（一个 Tab 一屏）；ⓘ 在截断文字之外，永不被裁。行内只在「只有助理一项、本机又没有 CodeAgent」时
   // 提示可改用部门 key。手填模型框默认收起，下拉选「手填模型名…」才展开。
-  const GATEWAY_INFO = '选「Claude Code · 部门 API key」的功能由本机 Claude Code 当外壳、经 Hub 的本机反代连部门网关作答，不经 CodeAgent；'
-    + 'key 用设置里「API 网关」已保存的那把（Windows 账户加密，不落明文），会话只挂该功能自己的工具。没有可用的 CodeAgent（没装或没有模型权限）、又保存过部门 key 时，8 项互动功能和 PPT 库地图没选过就默认用它，选过的照旧。'
-    + '模型表来自网关；表里没有但网关能用的模型可以手填，先试跑一句测通再用。报错会写清原因并给出重填 key / 换模型按钮。';
-  const GATEWAY_LINE = 'Claude Code、Codex 只当外壳，模型来自你的部门 API key 或公司模型';
+  const GATEWAY_INFO = 'Claude Code / Codex / DSH 在这里只当外壳：模型来自启动中心同一份来源——部门 API key（经 Hub 本机反代连部门网关，key 用 Windows 账户加密，不落明文）、'
+    + '公司模型（CodeAgent 账号）、「设置 → 自有 API」里的自有接口和自有 API 账号。会话类功能用 Claude Code 外壳（只挂该功能自己的工具）；单次任务（问问 Hub、PPT 库地图、进展卡）三个外壳都能用。'
+    + '没有可用的 CodeAgent（没装或没有模型权限）时，没选过的功能默认沿用启动中心给 Claude Code 选好的线路，没选过再用部门 key；选过的照旧。部门 key 的模型可以手填，先试跑一句测通再用。';
+  const GATEWAY_LINE = 'Claude Code、Codex、DSH 只当外壳，模型来自部门 API key、公司模型或自有 API';
   // 公司版外壳没有可用模型（没存部门 key、也没有 CodeAgent 账号）：底部一行说清缺什么，旁边一键去配置（开箱即用），不每行重复。
   function setupNeed(features) {
-    for (const f of features) for (const o of f.options || []) if (o.setup === 'gateway' && !o.available) return o;
+    for (const f of features) for (const o of f.options || []) if (['gateway', 'source', 'own'].includes(o.setup) && !o.available) return o;
     return null;
   }
   function footer(features, host) {
     const need = setupNeed(features);
-    const setup = need ? `<span class="fa-gw" data-fa-setup><span title="${esc(need.reason)}">Claude Code / Codex 只当外壳，${esc(need.reason || '需要先保存部门 API key')}</span><button type="button" class="fa-reset" data-fa-open-gateway>去配置部门 API key</button><i title="${esc(GATEWAY_INFO)}" aria-label="${esc(GATEWAY_INFO)}">ⓘ</i></span>` : '';
+    // 两种用户各给一个一键入口：有部门 key 的去「API 网关」，有自己接口的去「自有接口」。
+    const setup = need ? `<span class="fa-gw" data-fa-setup><span title="${esc(need.reason)}">Claude Code / Codex / DSH 只当外壳，${esc(need.reason || '需要先配置部门 API key 或自有 API')}</span>`
+      + `${need.setup === 'own' ? '' : '<button type="button" class="fa-reset" data-fa-open-gateway>去配置部门 API key</button>'}<button type="button" class="fa-reset" data-fa-open-own>去配置自有 API</button><i title="${esc(GATEWAY_INFO)}" aria-label="${esc(GATEWAY_INFO)}">ⓘ</i></span>` : '';
     const note = setup || (features.some(f => f.kinds.includes('api-gateway'))
       ? `<span class="fa-gw"><span title="${esc(GATEWAY_LINE)}">${esc(GATEWAY_LINE)}</span><i title="${esc(GATEWAY_INFO)}" aria-label="${esc(GATEWAY_INFO)}">ⓘ</i></span>` : '');
     const status = host?.id === 'fa-settings-page' ? presetNote : '';
@@ -133,7 +135,7 @@
     if (!f.kinds.includes('api-gateway')) return '';
     // 底部已有网关说明：行内只留「只有助理一项、本机没有 CodeAgent」时的引导，不重复「正在用」。
     const noCodeagent = state?.backends.find(b => b.kind === 'codeagent')?.available === false;
-    const line = count === 1 && f.id === 'assistant' && noCodeagent && f.selected?.kind !== 'api-gateway' ? '没有 CodeAgent 也能用：后端选「Claude Code」，模型用部门 API key' : '';
+    const line = count === 1 && f.id === 'assistant' && noCodeagent && !f.selected ? '没有 CodeAgent 也能用：后端选「Claude Code」，模型用部门 API key 或自有 API' : '';
     const hint = line ? `<span class="fa-hint">${line}</span>` : '';
     const custom = backend?.allowCustom ? `<div class="fa-custom" data-fa-custom hidden><input data-fa-custom-input maxlength="128" placeholder="模型名，例如 deepseek-v4.1-flash-1017" aria-label="手填模型名"><button type="button" class="fa-reset" data-fa-custom-check>检测并使用</button><span role="status" data-fa-custom-msg></span></div>` : '';
     return hint + custom;
@@ -215,6 +217,7 @@
     if (entry) { void open(entry.dataset.featureAgent.split(','), entry); return; }
     if (event.target.closest('[data-fa-close]')) { close(); return; }
     if (event.target.closest('[data-fa-open-gateway]')) { close(); window.__companyApiOpen?.('claude', undefined, { mode: 'gateway' }); return; }
+    if (event.target.closest('[data-fa-open-own]')) { close(); window.__companyApiOpen?.('claude', undefined, { mode: 'own' }); return; }
     const check = event.target.closest('[data-fa-custom-check]');
     if (check) { void checkCustom(check.closest('[data-fa-row]')); return; }
     const reset = event.target.closest('[data-fa-reset]');

@@ -21,7 +21,7 @@ for (let i = 2; i < process.argv.length; i++) {
   else throw Error('Expected --entry/--out value or --verify-filters');
 }
 const ENTRY = path.resolve(options.entry);
-const MEMBER = JSON.parse(fs.readFileSync(path.join(ENTRY, 'community-edition.json'), 'utf8')).repo.endsWith('-member');
+const MEMBER = fs.existsSync(path.join(ENTRY, 'core', 'codeagent-member-mcp.js'));  // 公开树里没有成员专用文件
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'accounts-page-m1-'));
 const DATA = path.join(ROOT, 'data'), WORK = path.join(ROOT, 'work'), PERSONAL = path.join(ROOT, 'personal'), SCAN = path.join(ROOT, 'scan');
 const ART = path.resolve(options.out || process.env.HUB_E2E_ARTIFACT_DIR || path.join(REPO, 'artifacts', `20261103-accounts-${Date.now()}-m1`));

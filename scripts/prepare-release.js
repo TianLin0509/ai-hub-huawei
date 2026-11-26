@@ -59,7 +59,9 @@ async function previousIndex(){
     try{const hit=pick(JSON.parse(fs.readFileSync(process.env.AI_HUB_PREVIOUS_INDEX,'utf8')));if(hit){console.log(`上一版文件索引来自本机文件（${hit.index.length} 个文件）`);return hit;}}catch(error){console.warn('读取上一版索引失败：'+error.message);}
   }
   // 成员迁移版（2026-11-19）：自己改从统一渠道更新，但差量要对着老成员手上的上一版做，所以先看 legacyUpdate。
-  for(const src of ((edition.legacyUpdate||edition.update).sources||[])){
+  // 发行包里的更新配置不写外网地址（只走公司内源）；构建侧另有 .github/release-sources.json（make-public 写入，不进安装包）。
+  const releaseSources=(()=>{try{return JSON.parse(fs.readFileSync(path.join(__dirname,'..','.github','release-sources.json'),'utf8')).sources;}catch{return null;}})();
+  for(const src of ((edition.legacyUpdate||{}).sources||releaseSources||(edition.update||{}).sources||[])){
     if(!src||!src.manifest)continue;
     try{
       const response=await fetch(src.manifest,{cache:'no-store'});

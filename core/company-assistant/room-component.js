@@ -45,16 +45,34 @@ function killTree(child) {
     killer.on('close', () => resolve());
   });
 }
-// Replace only a stopped, managed helper at the exact verified cache path.
-// The standalone secretary and any active browser job remain untouched.
-async function stopManagedHelper(helper, exe) {
+// Replace only a stopped helper that Hub itself launched. The standalone secretary and any active browser job remain untouched.
+// 认 Hub 拉起的组件：程序路径和本次组件是同一个文件（取真实路径比），或命令行带 --hub-control——换过助理数据目录或升级后，
+// 自家组件可能还在从旧路径跑（R51 审查）。单文件程序外面还有一层同路径的引导进程，连它一起结束；最多等 5 秒确认都退了再返回。
+function pidAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+async function queryProcess(pid) {
+  const script = `[Console]::OutputEncoding=[Text.Encoding]::UTF8; @(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine) | ConvertTo-Json -Compress`;
+  const raw = JSON.parse((await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script])).trim() || '[]');
+  const p = (Array.isArray(raw) ? raw : [raw])[0];
+  return p ? { pid: Number(p.ProcessId), parent: Number(p.ParentProcessId) || 0, path: p.ExecutablePath || '', commandLine: String(p.CommandLine || '') } : null;
+}
+async function stopManagedHelper(helper, exe, { query = queryProcess, kill = killTree, alive = pidAlive, waitMs = 5000 } = {}) {
   if (!helper?.pid || helper.running || helper.loginBusy || helper.controlBusy) throw new Error('请先停止会议室任务，待浏览器退出后重新接通');
-  if (process.platform !== 'win32') throw new Error('此平台请退出旧会议室组件后重新接通');
+  if (process.platform !== 'win32' && query === queryProcess) throw new Error('此平台请退出旧会议室组件后重新接通');
   const pid = Number(helper.pid);
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('会议室进程编号无效');
-  const actual = (await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid} -ErrorAction Stop).Path`])).trim();
-  if (path.resolve(actual).toLowerCase() !== path.resolve(exe).toLowerCase()) throw new Error('旧进程不属于 Hub 管理的会议室组件，请从原程序退出后重试');
-  await killTree({ pid });
+  const self = await query(pid);
+  if (!self) return;
+  if (!samePath(self.path, exe) && !/--hub-control/.test(self.commandLine)) throw new Error('旧进程不属于 Hub 管理的会议室组件，请从原程序退出后重试');
+  const parent = self.parent ? await query(self.parent) : null;
+  const top = parent && parent.pid !== process.pid && samePath(parent.path, self.path) ? parent.pid : pid;
+  await kill({ pid: top });
+  const pids = [...new Set([pid, top])];
+  for (const end = Date.now() + waitMs; pids.some(alive) && Date.now() < end;) await new Promise(r => setTimeout(r, 200));
+  const left = pids.filter(alive);
+  if (left.length) throw new Error(`会议室组件进程 ${left.join('、')} 没有结束，请在任务管理器里结束后重新接通`);
 }
 // Ask the secretary shell for its version against a throwaway MSZ_HOME so the
 // user's data and boot-retry counter stay untouched; the temp dir is always removed.
@@ -141,12 +159,30 @@ async function prepareRuntime(a, { bundle = BUNDLE, downloader = null } = {}) {
   }
   throw Object.assign(new Error(RUNTIME_MISSING), { code: 'runtime-missing' });
 }
+// 本机同一登录会话里、Hub 当前组件之外的秘书终结者进程（2026-11-27 R51）。
+// 每条带上进程号、程序路径、命令行和父进程号：命令行里有 --hub-control 的是 Hub 早先拉起的组件（不带托盘，
+// 换过助理数据目录或升级前留下的），没有的才是单独安装的旧秘书终结者；--version-json 是 Hub 自己的版本检测，几秒就退，不算。
+// 路径先取真实路径再比（短文件名、大小写、目录链接都可能让同一个文件写法不同）。
+function samePath(a, b) {
+  if (!a || !b) return false;
+  const real = value => { try { return fs.realpathSync.native(value); } catch { return path.resolve(value); } };
+  return real(a).toLowerCase() === real(b).toLowerCase();
+}
 async function foreignInstances(exe, { listProcesses } = {}) {
   if (!listProcesses && (process.platform !== 'win32' || process.env.MSZ_HUB_TEST_INSTANCE)) return [];
-  const script = '[Console]::OutputEncoding=[Text.Encoding]::UTF8; $sid=[Diagnostics.Process]::GetCurrentProcess().SessionId; @((Get-CimInstance Win32_Process -Filter "Name LIKE \'MishuTerminator%\' OR Name = \'秘书终结者.exe\'") | Where-Object { $_.SessionId -eq $sid } | Select-Object ProcessId,ExecutablePath) | ConvertTo-Json -Compress';
+  const script = '[Console]::OutputEncoding=[Text.Encoding]::UTF8; $sid=[Diagnostics.Process]::GetCurrentProcess().SessionId; @((Get-CimInstance Win32_Process -Filter "Name LIKE \'MishuTerminator%\' OR Name = \'秘书终结者.exe\'") | Where-Object { $_.SessionId -eq $sid } | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine) | ConvertTo-Json -Compress';
   const result = listProcesses ? await listProcesses() : JSON.parse((await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script])).trim() || '[]');
-  const same = value => value && path.resolve(value).toLowerCase() === path.resolve(exe).toLowerCase();
-  return (Array.isArray(result) ? result : [result]).filter(p => p && !same(p.ExecutablePath));
+  return (Array.isArray(result) ? result : [result]).filter(p => p && !samePath(p.ExecutablePath, exe))
+    .filter(p => !/--version-json/.test(String(p.CommandLine || '')))
+    .map(p => ({ ...p, pid: Number(p.ProcessId), parent: Number(p.ParentProcessId) || 0, path: p.ExecutablePath || '',
+      managed: /--hub-control/.test(String(p.CommandLine || '')) }));
+}
+// 按进程号结束（连同子进程）；调用方先按上面的名单核对过，这里不按名字杀。
+async function stopProcesses(pids) {
+  for (const pid of pids) {
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) continue;
+    await killTree({ pid });
+  }
 }
 // A pre-existing connected user's data directory stays where it is. Only managed
 // execution preferences change; rules, history and browser login files are retained.
@@ -208,4 +244,4 @@ async function stage(a, exe, home, { probe: allowProbe = false, probeOptions, ba
   return { installed: true, version: m.version };
 }
 module.exports = { manifest, verified, discover, install, stage, probe, killTree, stopManagedHelper, PROBE_TIMEOUT_MS, NEED_CONNECT,
-  bundledRuntime, runtimeSourcePaths, runtimeInfo, runtimeCachePath, prepareRuntime, foreignInstances, initializeHome, RUNTIME_MISSING };
+  bundledRuntime, runtimeSourcePaths, runtimeInfo, runtimeCachePath, prepareRuntime, foreignInstances, stopProcesses, samePath, initializeHome, RUNTIME_MISSING };

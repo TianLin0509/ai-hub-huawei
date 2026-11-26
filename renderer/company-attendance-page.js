@@ -104,6 +104,12 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     else if (m.willExceed && m.workdays >= 2) out.push(`<div class="att-alert"><b>加班过长预警</b>按当前节奏，本月净加班约 <b>${Math.round(m.projected / 60)}</b> 小时，会超过 80 小时红线。想守住：剩下 ${m.leftWorkdays} 个工作日，每天净加班不超过 <b>${h1(Math.max(0, m.perDayAllowance))}</b> 小时${m.leaveBy != null ? `，约 <b>${A.fmtClock(m.leaveBy)}</b> 前离开` : ''}，周末不来。</div>`);
     // 有历史数据时空状态页不显示，地址解析失败的提示和改域名的框放在这里。
     if (status.lastResult?.dnsFail && !status.syncing) out.push(`<div class="att-alert warn">${esc(status.lastResult.error)}${domainRow()}</div>`);
+    // 员工助手读到的考勤首页摘要（当天的才显示）：待处理考勤异常、月结截止提示。
+    const ws = status.weclawSummary;
+    if (ws && String(ws.at || '').slice(0, 10) === new Date().toISOString().slice(0, 10) && (ws.anomalies > 0 || ws.deadline)) {
+      out.push(`<div class="att-alert warn">${ws.anomalies > 0 ? `考勤系统里有 <b>${ws.anomalies}</b> 条待处理考勤异常，记得去处理。` : ''}${ws.deadline ? esc(ws.deadline) + '。' : ''}</div>`);
+    }
+    if (status.lastResult?.needsLogin && status.lastResult?.weclawHint === 'open' && status.records.length) out.push(`<div class="att-alert warn">${require('./weclaw-hint').hintHtml('data-att', 'att-btn', 'attendance')}</div>`);
     if (status.gapRisk) out.push(`<div class="att-alert warn">已经 ${status.staleDays} 天没读到考勤了。考勤页只保留最近 8 天，再过 ${Math.max(0, 8 - status.staleDays)} 天会出现记录缺口，请点「刷新」或检查登录。</div>`);
     return out.join('');
   }
@@ -167,6 +173,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       return `<div class="att-empty"><h2>还没有考勤数据</h2><p>${status.syncing ? '正在打开考勤页读取最近 8 天，通常半分钟，最长约 3 分钟。' : esc(status.lastResult?.error || '开启后每天会在后台读一次；也可以现在就读。')}</p>
         ${(status.lastResult?.needsDomain && !status.settings?.domain) || status.lastResult?.dnsFail ? domainRow() : ''}
         ${status.lastResult?.triedPages || (status.lastResult && !status.lastResult.ok && status.settings?.page && status.settings.page !== 'auto') ? `<div class="att-row"><span>考勤页</span>${pageSelect(status.settings?.page, 'quickPage')}<button type="button" class="att-btn primary" data-att="quick-page">保存并读取</button></div>` : ''}
+        ${status.lastResult?.needsLogin && status.lastResult?.weclawHint === 'open' ? require('./weclaw-hint').hintHtml('data-att', 'att-btn', 'attendance') : ''}
         <div class="att-row">${status.lastResult?.needsLogin ? '<button type="button" class="att-btn primary" data-att="login">登录考勤</button>' + require('./launch-field-hint').iconHintHtml(require('./credential-hints').attendanceLogin()) : ''}<button type="button" class="att-btn${status.lastResult?.needsLogin ? '' : ' primary'}" data-att="sync"${status.syncing ? ' disabled aria-busy="true"' : ''}>${status.syncing ? '读取中…' : '现在读取'}</button></div></div>`;
     }
     const m = vm.month;
@@ -325,6 +332,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       await call('set-settings', { domain: v('domain').value, autoDaily: v('autoDaily').checked, page: v('page').value, workTime, flex });
       panelOpen = false; await load(); showMessage?.('考勤设置已保存'); return;
     }
+    if (name === 'open-weclaw') { try { await require('./weclaw-hint').openWeclaw(); showMessage?.('已打开员工助手；登录后再点「现在读取」'); } catch (e) { showMessage?.(e.message); } return; }
     if (name === 'login') { el.disabled = true; try { const r = await call('login'); showMessage?.(r?.ok ? '已登录，正在读取考勤' : (r?.error || '登录窗口已关闭')); } finally { el.disabled = false; await load(); } return; }
     if (name === 'drawer') { drawer = { open: true, ym: vm.ym, view: drawer.view, focus: '' }; renderDrawer(); return; }
     if (name === 'day') { drawer = { open: true, ym: el.dataset.date.slice(0, 7), view: drawer.view, focus: el.dataset.date }; renderDrawer(); return; }

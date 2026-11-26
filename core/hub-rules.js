@@ -10,8 +10,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 
-// 服务器地址是公开的（2026-10-12 确认公开版也从这里拉）；测试用 AI_HUB_RULES_BASE_URL 改到本机。
-const DEFAULT_BASE_URL = 'https://me.lt-stockpartner.tech/hub-rules/';
+// 通用规则随 Hub 安装包内置、随 Hub 一起更新，默认不联网另取；测试或自建服务可用 AI_HUB_RULES_BASE_URL / baseUrl 指定地址。
+const DEFAULT_BASE_URL = '';
 const CHANNELS = new Set(['public', 'company']);
 const OFFICIAL_LIMIT = 64 * 1024;
 const MINE_LIMIT = 32 * 1024;
@@ -75,7 +75,7 @@ function createHubRulesStore(options = {}) {
   const stateFile = path.join(root, 'state.json');
   const mineFile = path.join(root, 'mine.md');
   const channel = CHANNELS.has(options.channel) ? options.channel : 'public';
-  const baseUrl = String(env.AI_HUB_RULES_BASE_URL || options.baseUrl || DEFAULT_BASE_URL).replace(/\/?$/, '/');
+  const baseUrl = String(env.AI_HUB_RULES_BASE_URL || options.baseUrl || DEFAULT_BASE_URL).replace(/\/?$/, '/').replace(/^\/$/, '');
   const builtinFile = options.builtinFile || BUILTIN.file;
   const loadPersonal = options.loadPersonal || (() => require('./agent-user-context').loadUserContext(env, dataDir));
   const runSync = options.runSync || defaultRunSync;
@@ -133,7 +133,7 @@ function createHubRulesStore(options = {}) {
       ? { mode: 'personal', path: context.source, text: context.content, sha: sha256(context.content), syncScript: syncScriptPath(context.home), error }
       : { mode: 'local', path: mineFile, text: readMine(), sha: sha256(readMine()), error };
     return {
-      channel, url: `${baseUrl}${channel}/latest.json`,
+      channel, url: baseUrl ? `${baseUrl}${channel}/latest.json` : '',
       official: { ...active, text, textError, enabled: enabledFor(state, !!context), enabledIsDefault: state.enabled === null, previous: state.previous, previousText, lastCheck: state.lastCheck },
       mine,
     };
@@ -146,15 +146,13 @@ function createHubRulesStore(options = {}) {
     return snapshot();
   }
 
-  // 定时在后台取规则：被公司网络确认页拦住时只做后台自动放行，不弹窗（core/own-gate.js）。
-  const gated = fetchImpl => require('./own-gate').gatedFetch(fetchImpl, { interactive: false });
   async function fetchJSON(url, fetchImpl) {
-    const response = await gated(fetchImpl)(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: 'no-store' });
+    const response = await fetchImpl(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: 'no-store' });
     if (!response || !response.ok) throw new Error(`服务器返回 ${response ? response.status : '无响应'}`);
     return JSON.parse(await response.text());
   }
   async function fetchText(url, fetchImpl) {
-    const response = await gated(fetchImpl)(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: 'no-store' });
+    const response = await fetchImpl(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: 'no-store' });
     if (!response || !response.ok) throw new Error(`服务器返回 ${response ? response.status : '无响应'}`);
     const bytes = Buffer.from(await response.arrayBuffer());
     if (bytes.length > OFFICIAL_LIMIT) throw new Error('服务器上的规则超过 64 KB，未采用');
@@ -177,6 +175,11 @@ function createHubRulesStore(options = {}) {
       const state = readState();
       const current = effective(state);
       const at = new Date().toISOString();
+      if (!baseUrl) {
+        state.lastCheck = { at, ok: true, latestVersion: current.version, message: `通用规则随 Hub 一起更新，当前是 v${current.version}` };
+        saveState(state);
+        return { updated: false, message: state.lastCheck.message, snapshot: snapshot() };
+      }
       try {
         const fetchImpl = resolveFetch(options.fetchImpl);
         if (typeof fetchImpl !== 'function') throw new Error('运行环境不能联网');

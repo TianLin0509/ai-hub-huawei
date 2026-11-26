@@ -3,8 +3,9 @@
 // MP4 first: it opens in ordinary players. WebM stays as the fallback for machines whose encoder refuses MP4.
 const MIMES = ['video/mp4;codecs=avc1.42E01F,mp4a.40.2', 'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp8', 'video/webm'];
 class MeetingRecorder {
-  constructor({ window, streams, elapsed, save, onError, waitMs = 10000 }) {
-    Object.assign(this, { w: window, streams, elapsed, save, onError, waitMs }); this.active = new Set(); this.mimes = []; this.queue = []; this.pending = Promise.resolve(); this.error = ''; this.running = false;
+  // segment：「继续录制」时新录的画面存成这一场的续录片段（整场录像只有一份，已录到中断那一刻）。
+  constructor({ window, streams, elapsed, save, onError, waitMs = 10000, segment = false }) {
+    Object.assign(this, { w: window, streams, elapsed, save, onError, waitMs, segment }); this.active = new Set(); this.mimes = []; this.queue = []; this.pending = Promise.resolve(); this.error = ''; this.running = false;
   }
   async wait(promise, message, progressAt) {
     let timer;
@@ -55,9 +56,10 @@ class MeetingRecorder {
     const recorder = new this.w.MediaRecorder(this.stream, { mimeType: this.mime, videoBitsPerSecond: 2500000, audioBitsPerSecond: 96000, videoKeyFrameIntervalDuration: 2000 });
     const key = this.w.crypto.randomUUID(), at = this.elapsed(), mime = this.mime; let offset = 0, finish, announced = false;
     const settings = this.stream.getVideoTracks()[0].getSettings();
-    const part = { recorder, full: true, key, mediaMs: 0, resumedAt: at, done: new Promise(r => { finish = r; }) }; this.active.add(part);
+    const whole = !this.segment;
+    const part = { recorder, full: whole, key, mediaMs: 0, resumedAt: at, done: new Promise(r => { finish = r; }) }; this.active.add(part);
     const duration = () => part.mediaMs + (part.resumedAt == null ? 0 : Math.max(0, this.elapsed() - part.resumedAt));
-    const announce = () => { if (!announced) { announced = true; this.push({ kind: 'recording-start', key, full: true, at, mime, width: settings.width, height: settings.height }); } };
+    const announce = () => { if (!announced) { announced = true; this.push({ kind: 'recording-start', key, full: whole, at, mime, width: settings.width, height: settings.height }); } };
     recorder.ondataavailable = event => {
       if (part.abandoned) return;
       const end = this.elapsed();

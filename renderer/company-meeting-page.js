@@ -8,6 +8,7 @@ const { questionQueue, questionStatus, cardVersion, chatCardHtml, applyQuestionP
 const { backstageHtml, fallbackLog, logText, isMissingHandler } = require('./company-meeting-backstage');
 const { tickWait } = require('./wait-progress');
 const understandingView = require('./company-meeting-understanding');
+const replay = require('./company-meeting-replay');
 const { createStatusPuller } = require('./company-meeting-delta');
 // 会议页轮询（2026-11-25 后台开销）：显示时每 2.5 秒按版本增量拉（只回新增和改过的部分）；会议页隐藏时一律不拉，切回立即全量补齐；
 // 低开销模式下显示时放慢到 5 秒。录音、录屏、转写、理解、问答都在主进程和采集模块里跑，不靠这条轮询。
@@ -19,7 +20,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   let root, id = null, capture, state, poll, sourceList = [], playback = null, playRequest = 0;
   let busy = false, refreshing = false, evidenceRequest = 0, thumbsObserver, meterTimer, activeSeq = null, refreshAgain = false, lastPollAt = 0;
   const puller = createStatusPuller({ call, hidden: () => !root || root.hidden }); // 隐藏不拉、切回全量的规则都在这里
-  const EXCLUSIVE_ACTS = new Set(['start', 'start-without-asr', 'pause', 'stop', 'new', 'delete-meeting', 'delete-video', 'cancel-record-only', 'retry-save']);
+  const EXCLUSIVE_ACTS = new Set(['start', 'start-without-asr', 'continue', 'pause', 'stop', 'new', 'delete-meeting', 'delete-video', 'cancel-record-only', 'retry-save']);
   const running = new Set();
   // 右栏 tab、聊天列表、角标、后台抽屉（2026-11-24）。
   let asideTab = 'minutes', chatReveal = false, chatFollow = true, chatTimer = null, backstage = null, backstageUnsupported = false, pushBound = false;
@@ -397,6 +398,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       const videoTotal = state.meetings.reduce((n, x) => n + (x.videoBytes || 0), 0);
       el('video-total').textContent = videoTotal ? `全部录像占用 ${size(videoTotal)}` : '';
       renderStorage(state.storage);
+      renderResume(state.lastInterrupted);
       if (el('history').dataset.html !== history) { el('history').innerHTML = history; el('history').dataset.html = history; }
       el('asr').textContent = asr.error || (asr.progress ? '正在安装本地转写组件，可以先录音，装好后自动补转写。' : asr.phase) || (asr.upgrade ? `本地转写可用（旧引擎，较慢）。升级到新引擎更快、中文更准，约 ${asr.sizeText}。` : asr.ready ? `本地转写已就绪 · ${asr.voiceprint ? '自动区分发言人 · ' : ''}CPU 模式` : `首次使用需下载本地转写组件（约 ${asr.sizeText || '300 MB'}，断了可续）；未安装也可先录音，之后补转写。`);
       asrBar(asr.progress);
@@ -444,7 +446,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       el('history').disabled = busy || !!capture?.running;
       for (const name of ['source','title','system','mic']) el(name).disabled = !!capture?.running;
       root.querySelectorAll('[data-crop]').forEach(input => { input.disabled = !!capture?.running; });
-      const rec = m?.recording, replayable = canReplayFull(rec) || !!rec?.segments.some(s => s.status === 'ready');
+      const rec = m?.recording, replayable = canReplayFull(rec) || !!rec?.segments.some(replay.playable);
       for (const op of ['open-full','save-video']) root.querySelector(`[data-act="${op}"]`).disabled = !canReplayFull(rec);
       for (const op of ['play','extract']) root.querySelector(`[data-act="${op}"]`).disabled = !replayable;
       root.querySelector('[data-act="delete-video"]').disabled = !replayable || !!capture?.running;
@@ -512,6 +514,43 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       scrollGuard.check(root);
     } finally { refreshing = false; if (refreshAgain) { refreshAgain = false; void refresh().catch(e => message(e.message)); } }
   }
+  // 意外中断后的一行提示（R51）：最近一场会议录制中途闪退、界面崩溃或重新载入时，顶部提示已保存到哪，给「继续录制」「查看记录」。
+  function renderResume(li) {
+    const box = el('resume'), show = !!li && !capture?.running;
+    box.hidden = !show; if (!show) return;
+    const text = `上次录制《${li.title || '未命名会议'}》意外中断，已保存到 ${time(li.savedMs)}`;
+    if (el('resume-text').textContent !== text) { el('resume-text').textContent = text; el('resume-text').title = li.reason ? `中断原因：${li.reason}` : ''; }
+  }
+  // 「继续录制」：接着往中断的那一场里录。共享窗口优先用原来那个（按名字找），声音来源沿用原来的。
+  // 原窗口找不到时回到准备页（只有准备页露出选窗网格），让人在网格里选好再点一次；第二次点时不重刷列表，免得冲掉刚选的。
+  async function continueInterrupted() {
+    const li = state?.lastInterrupted; if (!li) throw new Error('没有可以继续的中断会议');
+    if (capture?.running) throw new Error('已有会议在采集，请先结束它');
+    const m = (await call('meeting-status', { id: li.id }))?.meeting; if (!m || m.id !== li.id) throw new Error('这场会议暂时读不出，请稍后再试');
+    const picking = root.dataset.resumePick === li.id;
+    if (!picking || !sourceList.length) await action('sources');
+    const select = root.querySelector('[data-m="source"]'), same = sourceList.find(s => s.name && s.name === m.sourceName);
+    if (same) { select.value = same.id; preview(); }
+    else if (!picking) {
+      root.dataset.resumePick = li.id; if (id) selectMeeting('');
+      throw new Error(`原来共享的窗口「${m.sourceName || '未记录'}」现在找不到了，请在下面选好要共享的窗口，再点一次「继续录制」`);
+    }
+    delete root.dataset.resumePick;
+    const selected = select.value; if (!selected) throw new Error('先刷新并选择共享窗口');
+    const crop = {}; for (const k of ['x', 'y', 'w', 'h']) crop[k] = Number(root.querySelector(`[data-crop="${k}"]`).value) / 100;
+    if (Object.values(crop).some(v => !Number.isFinite(v)) || crop.x < 0 || crop.y < 0 || crop.w <= 0 || crop.h <= 0 || crop.x + crop.w > 1 || crop.y + crop.h > 1) throw new Error('截图区域应在画面范围内');
+    const tracks = Array.isArray(m.audio) ? m.audio : [], audio = { system: tracks.includes('system'), mic: tracks.includes('mic') };
+    const meetingId = li.id;
+    // 先打开共享窗口和声音，再把会议改回「采集中」：设备打不开时这一场仍是「已中断」，什么都不动。
+    const next = new MeetingCapture({ document, window, save: x => call('meeting-capture', { id: meetingId, ...x }), status: message, segment: true });
+    await next.open(selected, audio);
+    let resumeAt;
+    try { const r = await call('meeting-control', { id: meetingId, op: 'continue' }); resumeAt = r?.meeting?.resumeAt ?? r?.meeting?.capturedMs ?? 0; }
+    catch (e) { try { await next.dispose(); } catch (_) { /* 设备关不上不掩盖原因 */ } throw e; }
+    next.offsetMs = resumeAt;
+    id = meetingId; resetPlayer(); capture = next; capture.start(crop); el('live').srcObject = capture.video.srcObject; await el('live').play(); view('live'); el('setup').open = false;
+    message(next.warning || `已接着录，从 ${time(resumeAt)} 往后记；之前的截图、原话、纪要和录像都保留。`);
+  }
   async function action(op) {
     if (op === 'live') { evidenceRequest++; view('live'); return; }
     if (op === 'new') { if (capture?.running) throw new Error('请先点「结束会议」，没存完的内容会留在这一场里。'); selectMeeting(''); el('title').value = ''; el('title').focus({ preventScroll: true }); return; }
@@ -549,7 +588,8 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
         }
         throw cleanupError || e;
       }
-    } else if (op === 'retry-save') { await capture?.retry(); message(capture?.ending || capture?.released ? '已补存好，请再点一次「结束会议」。' : capture?.recorder?.full?.recorder.state === 'inactive' ? '已补存好。录像已中断，请点「结束会议」，再新开一场。' : '已重试保存，点击继续恢复采集。'); }
+    } else if (op === 'continue') await continueInterrupted();
+    else if (op === 'retry-save') { await capture?.retry(); message(capture?.ending || capture?.released ? '已补存好，请再点一次「结束会议」。' : capture?.recorder?.full?.recorder.state === 'inactive' ? '已补存好。录像已中断，请点「结束会议」，再新开一场。' : '已重试保存，点击继续恢复采集。'); }
     else if (op === 'pause') { if (capture.paused) { capture.assertCanResume(); await call('meeting-control', { id, op: state.meeting.state === 'paused' ? 'resume' : 'auto', value: state.meeting.autoUnderstand }); capture.resume(); } else { await capture.pause(); await call('meeting-control', { id, op: 'pause' }); } }
     else if (op === 'stop') {
       await capture.stop(); capture.running = true;
@@ -587,7 +627,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       selectMeeting(''); message(done.warning || `已删除「${done.title || title}」，其他会议不受影响。${keptNote}`); await refresh(); return;
     }
     else if (op === 'save-video') { if (!id) throw new Error('先选择会议'); const saved = await call('meeting-save-video', { id }); if (saved.file) message('视频已保存：' + saved.file); }
-    else if (op === 'play') { const rec=state.meeting?.recording, first=canReplayFull(rec)?rec.full:rec?.segments.find(s=>s.status==='ready'); await playAt(Number(root.querySelector('[data-m="seek-seconds"]').value)*1000 || first?.at || 0,true); }
+    else if (op === 'play') { const rec=state.meeting?.recording, first=canReplayFull(rec)?rec.full:rec?.segments.find(replay.playable); await playAt(Number(root.querySelector('[data-m="seek-seconds"]').value)*1000 || first?.at || 0,true); }
     else if (op === 'extract') { const at=playback ? playbackTime(root.querySelector('[data-m="player"]').currentTime) : Number(root.querySelector('[data-m="seek-seconds"]').value)*1000; const requested = id; const result=await call('meeting-frames',{id,timesMs:[Math.round(at)]}); if(requested!==id)return; view('evidence', '录像回查'); const frame=result.frames[0]; root.querySelector('[data-m="evidence"]').innerHTML=`<p>录像回查 · ${time(frame.at)}</p><img class="meeting-slide" src="data:image/jpeg;base64,${frame.data}" alt="从录像提取的画面">`; addPptLookup(frame.path); }
     else if (op === 'ask') { const input = el('question'), value = input.value, requested = id; if (!requested) throw new Error('先选择会议'); await call('meeting-control', { id: requested, op: 'ask', value }); if (id === requested) { if (input.value === value) input.value = ''; chatReveal = true; switchTab('chat'); } }
     else { if (!id) throw new Error('先选择会议'); await call('meeting-control', { id, op }); }
@@ -644,6 +684,8 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
         }
         if (!e.target.closest('.meeting-more')) el('more').open = false;
         if (e.target.closest('[data-act-local="dismiss"]')) dismissMessage();
+        if (e.target.closest('[data-act-local="view-interrupted"]') && state?.lastInterrupted && !capture?.running) selectMeeting(state.lastInterrupted.id);
+        if (e.target.closest('[data-act-local="dismiss-resume"]') && state?.lastInterrupted) { const mid = state.lastInterrupted.id; el('resume').hidden = true; void call('meeting-control', { id: mid, op: 'dismiss-interruption' }).then(() => refresh()).catch(err => message(err.message)); }
         if (e.target.closest('[data-act-local="rename-title"]')) startRename();
         if (e.target.closest('[data-act-local="add-hints"]')) addGlossaryHints();
         const transcriptToggle = e.target.closest('[data-act-local="toggle-transcript"]');
@@ -712,7 +754,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       root.querySelector('[data-m="seek"]').addEventListener('change',e=>{root.querySelector('[data-m="seek-seconds"]').value=e.target.value;void playAt(Number(e.target.value)*1000,false).catch(e=>message(e.message));});
             player.addEventListener('timeupdate',()=>{if(!playback)return;const at=playbackTime(player.currentTime);root.querySelector('[data-m="seek"]').value=String(at/1000);root.querySelector('[data-m="play-time"]').textContent=time(at);root.querySelector('[data-m="seek-seconds"]').value=(at/1000).toFixed(1);});
       el('rate').addEventListener('change',e=>{const rate=Number(e.target.value);player.defaultPlaybackRate=rate;player.playbackRate=rate;});
-      player.addEventListener('ended',()=>{if(!playback||playback.spans)return;const next=state.meeting?.recording?.segments.find(s=>s.status==='ready'&&s.at>playback.segment.at);if(next){if(next.at>playback.segment.end+1000)message(`跳过未录制时段 ${time(playback.segment.end)}—${time(next.at)}`);void playAt(Math.max(next.at,playback.segment.end),true).catch(e=>message(e.message));}});
+      player.addEventListener('ended',()=>{if(!playback)return;const next=replay.nextSegment(state.meeting?.recording,playback.segment);if(next){if(next.at>playback.segment.end+1000)message(`跳过未录制时段 ${time(playback.segment.end)}—${time(next.at)}`);void playAt(Math.max(next.at,playback.segment.end),true).catch(e=>message(e.message));}});
       poll = setInterval(() => {
         if (root.hidden) return; // 隐藏时不拉：采集和问答推送都不依赖它，切回时 open() 立即全量刷新
         const slow = window.__hubLowOverhead?.isEnabled?.() === true, now = Date.now();
@@ -823,7 +865,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   function plainMinutes(s){return String(s||'').replace(/^(\s*[-*]\s*)\[[TFDAQ]\d{1,3}\]\s*/gm,'$1');}
   function size(bytes){return bytes>=1024**3?(bytes/1024**3).toFixed(1)+' GB':Math.max(1,Math.round(bytes/1024**2))+' MB';}
   function canReplayFull(rec){return !!rec?.full?.bytes&&rec.full.status!=='writing';}
-  function canReplayAt(at){const rec=state.meeting?.recording;return canReplayFull(rec)||!!rec?.segments.some(s=>s.status==='ready'&&s.at<=at&&s.end>at);}
+  function canReplayAt(at){return replay.canReplayAt(state.meeting?.recording,at);}
   function playbackTime(seconds){const ms=seconds*1000;if(!playback.spans)return playback.segment.at+ms;const span=[...playback.spans].reverse().find(x=>x.mediaAt<=ms)||playback.spans[0];return span.at+ms-span.mediaAt;}
   function resetPlayer(){playRequest++;playback=null;const p=root.querySelector('[data-m="player"]');p.pause();p.removeAttribute('src');p.load();root.querySelector('[data-m="seek-seconds"]').value='0';root.querySelector('[data-m="seek"]').value='0';}
   async function playAt(at,autoplay){

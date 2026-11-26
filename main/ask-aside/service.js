@@ -277,8 +277,13 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     // 与会话可用性检查同一套查找（~/.local/bin 等处也找得到）；查不到再交给 PATH。
     let command = '';
     try { command = findCommand('claude', env) || ''; } catch { command = ''; }
-    // 部门 API key（网关）会话：本机反代的连接变量用 --settings 覆盖层带上，用户 settings.json 里的 env 盖不掉它（core/claude-connection-settings.js）。
-    const settingsEnv = session.apiGatewayRoute ? require('../../core/claude-connection-settings').connectionEnv({ COMPANY_CLI: true, CLAUDE_BACKEND: 'proxy' }, env, model) : null;
+    // 功能固定线路的会话（部门 key / 公司模型 / 自有接口 / 自有 API）：连接变量用 --settings 覆盖层带上，用户 settings.json 里的 env 盖不掉它（core/claude-connection-settings.js）。
+    let settingsEnv = null;
+    if (session.apiGatewayRoute) {
+      let values = { COMPANY_CLI: true, CLAUDE_BACKEND: 'proxy' };
+      try { values = require('../../core/assistant-gateway-route').launchValues({}, session.featureAgentChoice ?? null); } catch { /* 旧记录没有选型：按部门 key */ }
+      settingsEnv = require('../../core/claude-connection-settings').connectionEnv(values, env, model);
+    }
     return { supported: true, reason: '', engine, config: { command: command || 'claude', flavor: 'claude', configDirEnv: 'CLAUDE_CONFIG_DIR', configDir,
       ...(settingsEnv ? { settingsEnv, settingsDir: path.join(getHubDataDir(), 'native-agent-settings') } : {}) },
       env, cwd, ccSessionId, model };
@@ -343,12 +348,12 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     return true;
   }
   // Internal only. Meeting data never enters the public ask IPC argument surface.
-  function askMeeting({ sessionId: sid, meetingId, questionId, question, context, responseHint = '', speed = 'fast', mode = 'fork', engine = '', model = '', cwd = '', onPhase, logDir = '', understanding = {}, gatewayRoute = false, inheritModel = true } = {}) {
+  function askMeeting({ sessionId: sid, meetingId, questionId, question, context, responseHint = '', speed = 'fast', mode = 'fork', engine = '', model = '', cwd = '', onPhase, logDir = '', understanding = {}, gatewayRoute = false, featureChoice = null, inheritModel = true } = {}) {
     if (!UUID_RE.test(String(meetingId || '')) || !UUID_RE.test(String(questionId || ''))) throw new Error('会议问题编号无效');
     if (typeof context !== 'string') throw new Error('会议材料无效');
     if (typeof responseHint !== 'string' || responseHint.length > 1000) throw new Error('会议答复要求无效，未发送');
     const trimmed = trimContext(context, MAX_MEETING_CONTEXT);
-    return enqueue({ sid, question, context: trimmed.context, responseHint, meetingId, questionId, speed, questionMode: mode, engine, model, cwd, onPhase, logDir, understanding, gatewayRoute, inheritModel, contextTrimmed: trimmed.trimmed });
+    return enqueue({ sid, question, context: trimmed.context, responseHint, meetingId, questionId, speed, questionMode: mode, engine, model, cwd, onPhase, logDir, understanding, gatewayRoute, featureChoice, inheritModel, contextTrimmed: trimmed.trimmed });
   }
   function meetingResult({ sessionId: sid, meetingId, id } = {}) {
     if (!UUID_RE.test(String(meetingId || '')) || !UUID_RE.test(String(id || ''))) throw new Error('会议问题编号无效');
@@ -362,7 +367,7 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     runtimes.delete(result.questionId);
     persist(request.sessionId); return true;
   }
-  function enqueue({ sid, question, context = '', responseHint = '', meetingId = '', questionId = '', speed = 'fast', questionMode = 'fork', engine = '', model = '', cwd = '', onPhase, logDir = '', understanding = {}, contextTrimmed = false, gatewayRoute = false, inheritModel = true }) {
+  function enqueue({ sid, question, context = '', responseHint = '', meetingId = '', questionId = '', speed = 'fast', questionMode = 'fork', engine = '', model = '', cwd = '', onPhase, logDir = '', understanding = {}, contextTrimmed = false, gatewayRoute = false, featureChoice = null, inheritModel = true }) {
     if (abort.signal.aborted) throw new Error('Hub 正在关闭');
     const q = String(question || '').trim();
     const maxQuestion = meetingId ? MAX_MEETING_QUESTION : MAX_QUESTION;
@@ -378,7 +383,7 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     if (meetingId && questionMode === 'fresh') {
       try {
         first = freshTarget({ session: source, entry: sessionManager.sessions?.get?.(sid),
-          selection: engine, model, cwd, resolveConfig, accountDir, findCommand, hubDataDir: getHubDataDir(), resolveClaudeProfile, gatewayRoute, applyGatewayEnv, inheritModel });
+          selection: engine, model, cwd, resolveConfig, accountDir, findCommand, hubDataDir: getHubDataDir(), resolveClaudeProfile, gatewayRoute, featureChoice, applyGatewayEnv, inheritModel });
       } catch (error) {
         const fork = target(sid, true);
         const [wanted, wantedModel] = engine.split('|');

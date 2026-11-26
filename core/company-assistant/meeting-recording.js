@@ -11,8 +11,12 @@ const SYNC_MS = 10000;
 const syncFile = async file => { const h = await fs.promises.open(file, 'r+'); try { await h.sync(); } finally { await h.close(); } }; // 出错如实抛出，由调用方记录并重试
 const keyOK = key => /^[a-f0-9-]{36}$/.test(String(key));
 const hash = b => createHash('sha256').update(b).digest('hex');
+// 能回放的分段：正常结束的，或续录中途中断但已有内容的（R51）。
+const playable = s => !!s && s.bytes > 0 && (s.status === 'ready' || (s.status === 'interrupted' && isMp4(s)));
 const isMp4 = s => /^video\/mp4/.test(s.mime || '');
-const fileName = s => s.full ? `recording-full.${isMp4(s) ? 'mp4' : 'webm'}` : `recording-${s.key}.webm`;
+// 续录片段（2026-11-27 R51「继续录制」）按编码取扩展名；更早的分段一律是 .webm，照旧认。
+const fileName = s => s.full ? `recording-full.${isMp4(s) ? 'mp4' : 'webm'}` : `recording-${s.key}.${isMp4(s) ? 'mp4' : 'webm'}`;
+const nameOK = s => s.file === fileName(s) || (!s.full && s.file === `recording-${s.key}.webm`);
 // First bytes a container must start with; MP4 has a 4-byte box size first, then "ftyp".
 function headerOK(segment, offset, bytes) {
   const [at, magic] = isMp4(segment) ? [4, Buffer.from('ftyp')] : [0, Buffer.from([0x1a, 0x45, 0xdf, 0xa3])];
@@ -113,7 +117,7 @@ class MeetingRecording {
   view(id) { return typeof this.m.peek === 'function' ? this.m.peek(id) : this.m.load(id); }
   state(m) { return m.recording ||= { segments: [], gaps: [], bytes: 0, savedThrough: 0 }; }
   file(id, segment) {
-    if (!keyOK(segment.key) || segment.file !== fileName(segment)) throw new Error('录制文件无效');
+    if (!keyOK(segment.key) || !nameOK(segment)) throw new Error('录制文件无效');
     return path.join(this.m.dir(id), segment.file);
   }
   accept(m, r) {
@@ -178,6 +182,7 @@ class MeetingRecording {
         return;
       }
       segment.end = at; segment.status = 'ready'; rec.savedThrough = Math.max(rec.savedThrough, at);
+      if (isMp4(segment)) this.repairSegment(m.id, segment.key);
       return;
     }
     throw new Error('录制操作无效');
@@ -191,6 +196,13 @@ class MeetingRecording {
     }
     this.ensureRepair(m.id, rec.full);
     if(rec.openGap) { rec.gaps.push({...rec.openGap,end:Math.max(rec.openGap.at,m.capturedMs),open:true,reason:rec.openGap.reason+'后中断，缺口结束时间未知'}); delete rec.openGap; }
+    // 续录片段（.mp4，R51）在续录中途又崩溃时，已写进文件的部分照样能放：记下实际字节、补索引，不整段记成缺口。
+    for (const s of rec.segments) if (s.status === 'writing' && isMp4(s)) {
+      s.status = 'interrupted';
+      try { s.bytes = fs.statSync(this.file(m.id, s)).size; } catch { s.bytes = 0; }
+      if (s.bytes > 0) { this.repairSegment(m.id, s.key); continue; }
+      rec.gaps.push({ at: s.at, end: Math.max(s.end, s.at), reason: '续录片段没有录到内容' });
+    }
     for (const s of rec.segments) if (s.status === 'writing') { const next = rec.segments.filter(x => x.at > s.at).sort((a,b)=>a.at-b.at)[0]; s.status = 'interrupted'; rec.gaps.push({ at: s.at, end: Math.min(Math.max(s.end, m.capturedMs), next?.at ?? Infinity), reason: '异常退出：此分段可能不完整，已写入文件保留' }); }
   }
   failure(id, full) {
@@ -302,6 +314,19 @@ class MeetingRecording {
     const title = String(m.title || '会议').replace(/[\\/:*?"<>|\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || '会议';
     return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${title}${path.extname(m.recording.full.file)}`;
   }
+  // 续录片段收尾后补 MP4 索引（和整场录像同一套，补了才能拖动进度条）。补不成只记一条提示，原片照常可播。
+  repairSegment(id, key) {
+    const task = Promise.resolve().then(async () => {
+      if (typeof this.drain === 'function') await this.drain(id);
+      const s = this.m.load(id).recording?.segments?.find(x => x.key === key); if (!s || !playable(s) || s.durationFixed) return;
+      const bytes = await fixMp4Index(this.file(id, s));
+      const latest = this.m.load(id), seg = latest.recording?.segments?.find(x => x.key === key); if (!seg) return;
+      Object.assign(seg, { bytes, durationFixed: true });
+      latest.recording.bytes = latest.recording.segments.reduce((n, x) => n + x.bytes, latest.recording.full?.bytes || 0); this.m.save(latest);
+    }).catch(e => { this.errors.set(id, '续录片段已保存，补写索引失败（原片可播放，拖动可能不准）：' + e.message); });
+    (this.segmentRepairs ||= new Map()).set(id + ':' + key, task); void task.finally(() => this.segmentRepairs.delete(id + ':' + key));
+    return task;
+  }
   // 只读：录像索引直接看会议正本（不复制、不读盘），调用方不改它。
   index(id) {
     const m = this.m.load(id), rec = this.state(m);
@@ -317,14 +342,19 @@ class MeetingRecording {
     at = this.m.time(at); const m = this.view(id), rec = m.recording || { segments: [], gaps: [], bytes: 0, savedThrough: 0 };
     if (rec.openGap && at >= rec.openGap.at || rec.gaps.some(g=>at>=g.at&&(g.open||at<g.end))) throw new Error('此时间位于暂停或中断缺口，没有完整录像');
     const full = rec.full;
-    if (full?.bytes && full.status !== 'writing') {
+    // 续录片段：时间落在整场录像结束之后、又有片段覆盖时，放续录片段（整场录像只录到中断那一刻）。
+    const seg = rec.segments.filter(s => playable(s) && s.at <= at && s.end > at).sort((a,b) => b.at - a.at)[0];
+    if (seg && (!full || at >= (full.end || 0))) return { segment: seg, url: pathToFileURL(this.file(id, seg)).href, offsetMs: at - seg.at };
+    // 整场录像中断过（或后面接了续录）时只录到 full.end，之后的时间不能拿整场录像去放。
+    const capped = full && (full.status === 'interrupted' || rec.segments.length > 0) && at > (full.end || 0);
+    if (full?.bytes && full.status !== 'writing' && !capped) {
       this.ensureRepair(id, full);
       // Pausing leaves no gap in the video, so meeting time and video time drift apart at every pause.
       const spans = this.spans(full, rec.gaps), span = [...spans].reverse().find(x => x.at <= at) || spans[0];
       return { segment: full, spans, url: pathToFileURL(this.file(id, full)).href, offsetMs: span.mediaAt + Math.max(0, at - span.at) };
     }
     if (full?.status === 'writing') throw new Error('录像还在保存，结束会议后可回放');
-    const s = rec.segments.filter(s => s.status === 'ready' && s.at <= at && s.end > at).sort((a,b) => b.at - a.at)[0];
+    const s = rec.segments.filter(s => playable(s) && s.at <= at && s.end > at).sort((a,b) => b.at - a.at)[0];
     if (!s) throw new Error('此时间没有已完成的录制片段：可能正在保存、曾暂停或录制中断');
     return { segment: s, url: pathToFileURL(this.file(id, s)).href, offsetMs: at - s.at };
   }

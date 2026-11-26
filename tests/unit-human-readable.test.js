@@ -79,10 +79,10 @@ test('原生授权与 Codex 命令：字段换成中文名和人话取值，内�
 });
 
 test('卡片只带结果开头一段（半截 JSON）时也摘要点，不露半截 JSON', () => {
-  const full = JSON.stringify({ ok: true, tasks: [{ id: 'T-1', title: '评估远程器作为仿真通道' }, { id: 'T-2', title: '二' }] });
+  const full = JSON.stringify({ ok: true, tasks: [{ id: 'T-1', title: '评估新仿真通道' }, { id: 'T-2', title: '二' }] });
   const s = h.toolHumanSummary({ name: 'mcp__hub_assistant__list_tasks', input: { limit: 12 }, result: full.slice(0, 60) });
   assert.equal(s.tone, 'ok');
-  assert.match(s.lines[0], /第一项：评估远程器/);
+  assert.match(s.lines[0], /第一项：评估新仿真通道/);
   assert.match(s.lines.at(-1), /全文见原始数据/);
   const wrapped = JSON.stringify([{ type: 'text', text: JSON.stringify({ ok: false, error: '目标会话未打开' }) }]).slice(0, 70);
   const bad = h.toolHumanSummary({ name: 'mcp__hub_assistant__send_session', input: {}, result: wrapped });

@@ -272,7 +272,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
         if (op === 'up' && Number(b.dataset.index) === 0 || op === 'down' && Number(b.dataset.index) === draft.优先会议室.length - 1) b.disabled = true;
       }
       if (op === 'pause') b.disabled = busy || !state.connected || !state.running;
-      if (op === 'connect' || op === 'install') b.disabled = busy || state.preparing || state.download?.phase === 'downloading';
+      if (op === 'connect' || op === 'install' || op === 'recheck' || op === 'stop-external') b.disabled = busy || state.preparing || state.download?.phase === 'downloading';
       // One guard button at a time: start while idle, stop while a task runs.
       if (op === 'plan') b.hidden = readiness.plan || !!state.running;
       if (op === 'start') { b.hidden = !!state.running; b.disabled ||= !readiness.ready; b.classList.toggle('cr-btn-pri', readiness.ready); b.classList.toggle('cr-btn-sec', !readiness.ready); }
@@ -330,7 +330,9 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       const progress = d.phase === 'downloading' ? require('./download-progress-view').html({ ...d, total: d.total || d.bytes || 0 }, { title: '下载会议室组件' }) : '';
       const message = state.error || d.error || (state.loginNeeded ? '会议室网页登录已失效，请重新登录。' : state.connected ? '控制组件需要更新，请停止任务后重新接通。' : state.preparing ? '正在准备组件，首次可能需要约 2 分钟。' : available ? '会议室组件已就绪，接通后即可操作。' : '首次使用需下载约 77 MB 的会议室组件，无需另外安装秘书终结者。');
       connection.dataset.tone = state.error || d.error || state.loginNeeded ? 'warn' : 'info';
-      connection.innerHTML = `<span>${escape(message)}${progress}</span>${state.loginNeeded ? button('login', '打开登录', 'sec', 'cr-btn-sm') : available ? button('connect', '重新接通', 'sec', 'cr-btn-sm') : button('install', d.error ? '重新下载会议室组件' : '下载会议室组件', 'sec', 'cr-btn-sm')}`;
+      // 2026-11-27 R51：被别的秘书终结者进程拦下时，就地给「重新检测」和「帮我结束它」。
+      const blocked = (state.external || []).length ? button('recheck', '我已退出，重新检测', 'sec', 'cr-btn-sm') + button('stop-external', '帮我结束它', 'ghost', 'cr-btn-sm') : '';
+      connection.innerHTML = `<span>${escape(message)}${progress}</span>${blocked ? blocked : state.loginNeeded ? button('login', '打开登录', 'sec', 'cr-btn-sm') : available ? button('connect', '重新接通', 'sec', 'cr-btn-sm') : button('install', d.error ? '重新下载会议室组件' : '下载会议室组件', 'sec', 'cr-btn-sm')}`;
       // r58：会议室组件还要下载时，旁边显示公司内源状态。
       if (!d.installed) { connection.insertAdjacentHTML('beforeend', require('./download-source-view').slotHtml('room-runtime', 'span')); void require('./download-source-view').fill(connection, { ipcRenderer }); }
     }
@@ -473,10 +475,19 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       draft.优先会议室 = all; dirty = true; changed.add('优先会议室'); render(); return;
     }
     if (['up', 'down', 'delete'].includes(op)) { const i = Number(b.dataset.index), rooms = draft.优先会议室; if (op === 'delete') rooms.splice(i, 1); else { const j = i + (op === 'up' ? -1 : 1); if (j >= 0 && j < rooms.length) [rooms[i], rooms[j]] = [rooms[j], rooms[i]]; } dirty = true; changed.add('优先会议室'); render(); return; }
-    busy = true; slot('message').textContent = op === 'install' ? '正在下载组件…可以切页，下载会继续。' : op === 'connect' ? '正在接通，首次可能需要约 2 分钟…' : '正在处理…'; updateControls();
+    if (op === 'stop-external') {
+      const list = state.external || [], managed = list.length && list.every(p => p.managed);
+      const ok = await require('./ui-feedback').confirmHubAction((managed ? '将结束进程 {0}。它是 Hub 早先拉起的会议室组件，如果它正在等放号抢订，这次抢订会落空；结束后 Hub 会自动重新接通，抢订规则和历史都保留。'
+        : '将结束进程 {0}。它是单独运行的旧秘书终结者，如果它正在等放号抢订，这次抢订会落空；结束后 Hub 会自动重新接通，抢订规则和历史都保留。')
+        .replace('{0}', list.map(p => p.pid).join('、') + (list[0]?.path ? '（' + list[0].path + '）' : '')), { title: '结束旧的会议室程序？', confirm: true, danger: true, acceptLabel: '结束它' });
+      if (!ok) return;
+    }
+    busy = true; slot('message').textContent = op === 'install' ? '正在下载组件…可以切页，下载会继续。' : op === 'connect' ? '正在接通，首次可能需要约 2 分钟…' : op === 'recheck' ? '正在重新检测…' : op === 'stop-external' ? '正在结束旧程序并重新接通…' : '正在处理…'; updateControls();
     try {
       if (op === 'refresh') await refresh();
       else if (op === 'connect' || op === 'install') { await call(op === 'connect' ? 'room-reconnect' : 'room-install'); }
+      else if (op === 'recheck') await call('room-recheck');
+      else if (op === 'stop-external') await call('room-stop-external');
       else {
         if (['start', 'test', 'once'].includes(op)) {
           try { validate(true); }
@@ -485,7 +496,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
         if (op === 'save' || dirty && ['start', 'test', 'once', 'test-message', 'read-rooms'].includes(op)) await save();
         if (op !== 'save') await call('room-command', { op, rules: op === 'remove-pending' ? { id: b.dataset.id } : {} });
       }
-      slot('message').textContent = ({ save: '设置已保存', pause: '已请求停止，待浏览器退出后即可修改', start: '已启动守护', once: '已启动本次抢订，请在流程和记录中查看结果', test: '正在测试填表，不会提交预订', login: '请在打开的浏览器中完成登录', 'read-rooms': '正在读取会议室，通常约 20 秒', 'test-message': '正在发送测试消息，请查看下方发送结果' })[op] || '操作已完成';
+      slot('message').textContent = ({ save: '设置已保存', pause: '已请求停止，待浏览器退出后即可修改', start: '已启动守护', once: '已启动本次抢订，请在流程和记录中查看结果', test: '正在测试填表，不会提交预订', login: '请在打开的浏览器中完成登录', 'read-rooms': '正在读取会议室，通常约 20 秒', 'test-message': '正在发送测试消息，请查看下方发送结果', recheck: '已重新检测并接通', 'stop-external': '旧程序已结束，已重新接通' })[op] || '操作已完成';
     } catch (error) { slot('message').textContent = '操作未完成：' + error.message; if (error.focusPlan) host.dataset.focusPlan = '1'; }
     finally { busy = false; await refresh(); updateControls(); if (host.dataset.focusPlan) { delete host.dataset.focusPlan; host.querySelector('[data-cr-new-room]')?.focus(); } }
   }

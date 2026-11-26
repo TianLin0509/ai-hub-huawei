@@ -1,4 +1,5 @@
 'use strict';
+// CodeAgent 号池（2026-10-16 用户要求，扩展功能专用）：新建 CodeAgent 会话时可选「个人账号」或「号池」。
 //
 // 依据（公司真机 Q-1016-03/04/09 实测）：
 //   - 登录凭证是配置目录里的 .credentials.json，换 CODEAGENT3_CONFIG_DIR 就换号；一台电脑可同时登多个号；

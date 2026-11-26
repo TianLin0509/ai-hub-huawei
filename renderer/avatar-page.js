@@ -851,7 +851,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (op === 'source-del') { await save({ sources: av.sources.filter((_, n) => n !== Number(b.dataset.i)) }); return; }
     // 部门 API key（网关）：写「功能使用的 Agent → 分身」那一项（所有分身共用）；点回 CodeAgent 账号时撤掉它。
     if (op === 'account' && b.dataset.id === 'api-gateway') { await setGateway({ kind: 'api-gateway', model: '' }, '已改用部门 API key，下一条消息起生效'); return; }
-    if (op === 'account') { const back = accountSwitchChoice(data?.backends?.rows); if (back && !(await setGateway(back))) return; await save({ backend: { ...av.backend, account: b.dataset.id, model: '' } }); return; }
+    if (op === 'account') { const back = accountSwitchChoice(data?.backends?.rows, data?.backends?.featureChoice); if (back && !(await setGateway(back))) return; await save({ backend: { ...av.backend, account: b.dataset.id, model: '' } }); return; }
     if (op === 'model' && gatewayOn()) { await setGateway({ kind: 'api-gateway', model: b.dataset.id }, '已换模型，下一条消息起生效'); return; }
     if (op === 'model') { await save({ backend: { ...av.backend, model: b.dataset.id } }); return; }
     if (op === 'effort') { await save({ backend: { ...av.backend, effort: b.dataset.k } }); }
@@ -976,8 +976,10 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
 // 点回 CodeAgent 账号卡时「功能使用的 Agent → 分身」要存成什么（R49-2 窄复审 P2-1）：网关行此刻选中（手动选的或自动默认）
 // 或存着部门 key 选择时，存明确的 CodeAgent；只撤掉选择（null）的话，没有可用 CodeAgent 时自动默认会马上把部门 key 盖回来。
 // 返回 null 表示不用改。
-function accountSwitchChoice(rows) {
-  return (Array.isArray(rows) ? rows : []).some(r => r && r.gateway && (r.selected || r.configured)) ? { kind: 'codeagent', model: '' } : null;
+// 正走部门 key 或 Claude Code 外壳线路（选过的或自动默认）时点回 CodeAgent 账号卡：存明确的 CodeAgent，不被自动默认盖回。
+function accountSwitchChoice(rows, featureChoice = null) {
+  const onHarness = featureChoice?.selected?.kind === 'claude' || featureChoice?.choice?.kind === 'claude';
+  return onHarness || (Array.isArray(rows) ? rows : []).some(r => r && r.gateway && (r.selected || r.configured)) ? { kind: 'codeagent', model: '' } : null;
 }
 
 module.exports = { accountSwitchChoice, createAvatarPage, paginate, waited, scopeText, modeText, scopeSummary, humanScanError, tryoutLow, externalRows, markCards, cardNo };

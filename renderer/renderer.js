@@ -105,7 +105,6 @@ const { createMemoPanel } = require('./memo-panel.js');
 const { installSessionFirstNavigation } = require('./session-first-navigation.js');
 installSessionFirstNavigation();
 require('./coldwhite-shell.js').installColdwhiteShell();
-try { require('./net-pass-global.js').mount({ ipcRenderer, toast: message => showToast(message) }); } catch (error) { console.warn('[net-pass-global]', error.message); }
 const { createTerminalSearch } = require('./terminal-search.js');
 const { mountTerminalPresentation } = require('./terminal-presentation.js');
 const {
@@ -145,6 +144,7 @@ const { speedControl } = require('../core/session-speed.js');
 const { describeCodexModelTuning } = require('../core/codex-model-catalog.js');
 const { createTerminalLinkRegistrar } = require('./terminal-link-provider.js');
 const { createPreviewPanelController } = require('./preview-panel-controller.js');
+const { createPreviewReturnScroll } = require('./preview-return-scroll.js');
 const { createClipboardController } = require('./clipboard-controller.js');
 const { createSessionReadyNotifier } = require('./session-ready-notifier.js');
 const { createTerminalActivityMonitor } = require('./terminal-activity-monitor.js');
@@ -2540,6 +2540,7 @@ function showTerminal(sessionId, opts = { focus: true }) {
   if (opts.reuseCardHistory && !opts.mountTarget && currentView === 'card'
       && existingInput?.dataset.sessionId === sessionId && cardHistoryViews.ready(session)) {
     if (opts.forceScrollBottom) cardFollowScroll.follow();
+    replyReturnAnchor.apply(sessionId);
     if (opts.focus) existingInput.querySelector('.floating-input-box')?.focus();
     return;
   }
@@ -2893,6 +2894,19 @@ function syncTurnPresentationToSession(sessionId, presentation, turn) {
 }
 const { createCardFollowScroll } = require('./card-follow-scroll');
 const cardFollowScroll = createCardFollowScroll({ element: document.getElementById('msg-overlay'), window, document });
+// 长回复回来看：没在看时跑完的长回复，切回来停在回复开头（见 reply-return-anchor.js）。
+const { createReplyReturnAnchor, isSessionInView } = require('./reply-return-anchor');
+const replyReturnAnchor = createReplyReturnAnchor({
+  element: document.getElementById('msg-overlay'), follow: cardFollowScroll,
+  isViewing: id => isSessionInView(id, {
+    activeSessionId, currentView, hasFocus: document.hasFocus(), hidden: document.hidden,
+    homeActive: terminalPanelEl.classList.contains('home-active'),
+    conversationVisible: terminalPanelEl.style.display !== 'none', appToolbarView: currentAppToolbarView(),
+  }),
+});
+const applyReplyReturnAnchor = () => { if (activeSessionId) replyReturnAnchor.apply(activeSessionId); };
+window.addEventListener('focus', applyReplyReturnAnchor);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) applyReplyReturnAnchor(); });
 require('./turn-error-help').install({ document, window, ipcRenderer });
 // 统一错误卡与一键求助（5.5.24）：window.HubErrorCard / window.HubAssist，见 hub-error-card.js。
 require('./hub-error-card').install({ document, window, ipcRenderer, sessionKind: id => sessions.get(id)?.kind });
@@ -3558,6 +3572,7 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
   }
   if (mounted > 0 && (!opts.incremental || view.hydrated)) cardHistoryViews.markHydrated(sessions.get(sessionId) || viewSession);
 
+  if (sessionId === activeSessionId) replyReturnAnchor.apply(sessionId);
   _updateStreamingIndicator(sessionId);
   return { mounted, error: null };
 }
@@ -3720,6 +3735,7 @@ ipcRenderer.on('turn-complete-event', async (_event, payload) => {
 
   // 1. AI 群聊 path — meeting-room.js handles its own card rendering
   if (meetingId) return;
+  replyReturnAnchor.replyFinished(hubSessionId);
 
   // 2. multi-session safety — only render for currently active session
   if (hubSessionId !== activeSessionId) return;
@@ -7289,6 +7305,16 @@ const previewClipboard = process.env.CLAUDE_HUB_E2E === '1'
       },
     }
   : clipboard;
+const previewReturnScroll = createPreviewReturnScroll();
+function previewConversationOverlay(key) {
+  if (String(key).startsWith('meeting:')) return document.querySelector('#meeting-room-panel .mr-gc-messages');
+  return sessionSplit?.isSecondaryFocused() ? sessionSplit.secondary().overlay : document.getElementById('msg-overlay');
+}
+// 回到对话时照常跟随最新的，顺带补上「预览期间跑完、超过一屏的回复停在开头」。
+function returnFromPreview(key) {
+  const sid = String(key).startsWith('session:') ? String(key).slice('session:'.length) : null;
+  previewReturnScroll.back(key, previewConversationOverlay(key), { onFollow: sid ? () => replyReturnAnchor.applySoon(sid, fn => requestAnimationFrame(fn)) : undefined });
+}
 const previewPanel = createPreviewPanelController({
   document,
   onBeforeOpen: () => sessionImmersive?.exit(),
@@ -7309,18 +7335,15 @@ const previewPanel = createPreviewPanelController({
     ...openOptions,
   }),
   refitActiveTerminal: refitActiveTerminalFromPreview,
-  onReturnToConversation: (key) => {
-    // Resume the existing follow controller after the source becomes visible;
-    // it also owns subsequent resize/layout changes and respects manual scrolling.
-    if (key.startsWith('meeting:')) {
-      document.querySelector('#meeting-room-panel .mr-gc-messages')?._cardFollowController?.follow();
-      return;
-    }
+  onLeaveConversation: (key) => previewReturnScroll.leave(key, previewConversationOverlay(key)),
+  // 全屏切回分屏：对话区重新露出，回到进入预览前的位置。
+  onConversationShown: (key) => returnFromPreview(key),
+  onReturnToConversation: (key, { sourceWasHidden = true } = {}) => {
+    // 关掉全屏预览：回到点开预览前的位置（原本在底部跟随的照旧跟随，往上翻着看的停回原处）。
+    // 关掉半窗预览：对话一直可见、用户可能已经滚过，不动它的位置。
+    if (sourceWasHidden) returnFromPreview(key); else previewReturnScroll.forget(key);
     if (!key.startsWith('session:')) return;
     const sid = key.slice('session:'.length);
-    const overlay = sessionSplit?.isSecondaryFocused()
-      ? sessionSplit.secondary().overlay : document.getElementById('msg-overlay');
-    overlay?._cardFollowController?.follow();
     const cached = terminalCache.get(sid);
     if (cached) {
       cached._codexFollowBottom = true;

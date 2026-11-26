@@ -1280,6 +1280,7 @@ function registerSessionIpc(ipcMain, deps) {
   }
   // 列表里从没获取过、或获取已超过 3 天的号（含个人账号）自动补一次（每次运行 Hub 每个号最多一次）。
   // 2026-10-29 公司真机（Q-1029-12）：个人账号 10-16 获取的清单只有 GLM，后来账号加了 DeepSeek，模型下拉一直只列 GLM。
+  // startup（开 Hub 后 20 秒那次）：开通过扩展功能的电脑上，清单不是经 serve 读的号也读一次（2026-10-30 用户定 5.3.9：
   // 装上就能看到 serve 真跑了；读到的是 CodeAgent 自己的模型名，启动时只传 --model 就够，见 session-manager 的 cli-flag）。
   function autoProbeMissing(status, { startup = false } = {}) {
     if (!status || status.ok === false) return;

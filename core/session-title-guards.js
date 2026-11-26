@@ -2,6 +2,7 @@
 
 const { KIND_LABELS, HARNESS_LABELS } = require('./ai-kinds.js');
 const { isBackgroundPurpose } = require('./session-background-purpose');
+const LEGACY_BRIDGE_PREFIX = /^AI\u7279\u6218\u961f\s*[·・]\s*/;
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

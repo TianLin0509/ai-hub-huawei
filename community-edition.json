@@ -1,7 +1,6 @@
 {
   "edition": "community",
   "target": "company",
-  "repo": "TianLin0509/ai-hub-huawei",
   "features": {
     "assistant": false,
     "quotaBar": false,
@@ -35,33 +34,14 @@
   "shortcutName": "AI Hub",
   "editionBadge": "内测先锋版",
   "update": {
-    "sources": [
-      {
-        "id": "github",
-        "name": "GitHub",
-        "manifest": "https://github.com/TianLin0509/ai-hub-huawei/releases/latest/download/latest.json",
-        "files": "https://github.com/TianLin0509/ai-hub-huawei/releases/download/v{version}/"
-      },
-      {
-        "id": "aliyun-fast",
-        "name": "阿里云高速",
-        "mirror": true,
-        "manifest": "https://dl.lt-stockpartner.tech/hub-update/company/latest.json",
-        "files": "https://dl.lt-stockpartner.tech/hub-update/company/v{version}/"
-      },
-      {
-        "id": "aliyun",
-        "name": "阿里云",
-        "manifest": "https://me.lt-stockpartner.tech/hub-update/company/latest.json",
-        "files": "https://me.lt-stockpartner.tech/hub-update/company/v{version}/"
-      }
-    ],
-    "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
+    "sources": []
   },
   "releaseNotes": [
-    "WeLink 公共黑板 Beta；部门 key/自有接口选模型只见自己接口模型；网关 400 system 合并"
+    "会议闪退后恢复；开场默认静音、长回复切回停在开头、关预览回原位、API 网关/自有接口说明；后台功能来源与启动中心一致",
+    "更新与组件只走公司内源；发行包精简对外信息",
+    "员工助手 Beta 页（四步清单：版本、在线、接入、测一下）；帖子和考勤在员工助手在线时优先经它取数，不在线自动走原路径；WeLink 续期失败先请员工助手免密代登；助理新增 WeLink 私聊（beta，需手动绑定）"
   ],
-  "version": "5.6.128",
+  "version": "5.6.129",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

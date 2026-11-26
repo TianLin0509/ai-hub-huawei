@@ -57,6 +57,17 @@ test('默认每天第一次启动播 Claude 原作（内置视频）；同一天
   assert.strictEqual(store.startup(), null);
 });
 
+test('开场声音默认关，打开后启动带上声音偏好，再关掉又静音；乱传的值按关处理', () => {
+  const store = createBootSplashStore({ dataDir: tmp(), now: () => Date.now() });
+  assert.strictEqual(store.snapshot().preferences.sound, false);
+  store.savePreferences({ frequency: 'always' });
+  assert.strictEqual(store.startup().sound, false, '新用户默认静音');
+  assert.strictEqual(store.savePreferences({ sound: true }).preferences.sound, true);
+  assert.strictEqual(store.startup().sound, true);
+  store.savePreferences({ sound: 'yes' });
+  assert.strictEqual(store.startup().sound, false);
+});
+
 test('选内置的 Codex 18 号；没下载的不能选；选中的包被删后退回默认群星', () => {
   const dataDir = tmp();
   const store = createBootSplashStore({ dataDir, now: () => Date.now() });
@@ -82,6 +93,7 @@ test('旧版写进偏好的默认群星改跟新默认 Claude；亲手选过的�
   assert.strictEqual(store.startup().id, DEFAULT_ID, '旧版顺手写下的群星不算用户选择');
   store.savePreferences({ selected: FALLBACK_ID });
   assert.strictEqual(store.startup().id, FALLBACK_ID, '用户亲手选的群星要保留');
+  assert.strictEqual(store.startup().sound, false, '老用户没开过声音，开场一律静音');
   const cat = validateCatalog(JSON.parse(fs.readFileSync(path.join(PACKS, 'catalog.json'), 'utf8')));
   assert.ok(cat.packs.some(p => p.id === 'gemini-orig' && p.who === 'gemini'));
 });

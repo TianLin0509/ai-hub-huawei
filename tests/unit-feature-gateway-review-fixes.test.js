@@ -36,6 +36,8 @@ function resumeFixture(t, { saved = null, available = true } = {}) {
   const { createResumeSessionHandler } = require('../main/ipc/resume-session-handlers');
   t.mock.method(require('../core/session-store'), 'loadSessionFile', () => (saved ? JSON.parse(JSON.stringify(saved)) : null));
   t.mock.method(route, 'availability', () => (available ? { available: true, reason: '' } : { available: false, reason: '还没保存部门 API key' }));
+  // 恢复鉴权改走 routeAvailability（网关来源在模块内部直接调 availability，导出上的 mock 拦不到），这里一并替换
+  t.mock.method(route, 'routeAvailability', () => (available ? { available: true, reason: '' } : { available: false, reason: '还没保存部门 API key' }));
   const auth = [], created = [], live = new Map();
   const resume = createResumeSessionHandler({ fs, os, path, getHookPort: () => 0, getHubDataDir: () => tmp(t),
     isClaudeFamily: () => false, isCodexBaseKind: () => false, meetingManager: { getAllMeetings: () => [] },
@@ -214,6 +216,8 @@ test('手填模型：不支持网关的功能、没存 key 时不试跑不写配
   t.mock.method(featureAgents, 'state', () => ({ ok: true, features: [], backends: [] }));
   let available = false;
   t.mock.method(route, 'availability', () => (available ? { available: true, reason: '' } : { available: false, reason: '还没保存部门 API key' }));
+  // 恢复鉴权改走 routeAvailability（网关来源在模块内部直接调 availability，导出上的 mock 拦不到），这里一并替换
+  t.mock.method(route, 'routeAvailability', () => (available ? { available: true, reason: '' } : { available: false, reason: '还没保存部门 API key' }));
   require('../main/ipc/config-handlers').registerConfigIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} },
     { companyProxyService: { applyGatewayChange: async () => { order.push('apply'); return { state: 'running' }; } }, sendToRenderer() {} });
   const call = request => handlers.get('feature-agents:custom-model')({}, request);

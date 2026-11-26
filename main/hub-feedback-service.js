@@ -2,10 +2,9 @@
 // 一键反馈的主进程部分（2026-10-29）：界面点「一键反馈」→ 预览要发哪些内容 → 发送。
 // r42（2026-11-18）起发到哪儿：
 //   成员版：只经公司内网发到维护人黄区电脑上的「反馈收件机」（main/feedback-receiver.js），彻底不再发阿里云。
-//   公开版：能读到公司内源（= 在公司内）时与成员版相同；读不到内源（公司外用户）才照旧提交到阿里云。
+//   公开版：与成员版相同，走公司内网收件机；只有调用方显式给了 endpoint（旧单测）才直接提交到该地址。
 // 收件地址从内源的固定小发布读（core/feedback-receiver-address.js）。内网发不到就进本地「待发队列」（hub-feedback-outbox/），
 // 后台每 10 分钟补发、最多 30 天；同时照旧存一份到「下载」，界面给「复制内容」，用户可以贴到 WeLink 发给维护人。
-// 阿里云路径被公司网络放行页拦住时，自动在看不见的窗口里放行一次再重发（core/net-unblock.js，只对自家地址）；内网路径不需要。
 const fs = require('node:fs');
 const path = require('node:path');
 const { feedbackScenes } = require('../core/hub-feedback');
@@ -33,12 +32,8 @@ let outboxSeq = 0;
 const SUBMIT_ID_RE = /^[a-f0-9]{32}$/;
 const newSubmitId = () => require('node:crypto').randomBytes(16).toString('hex');
 
-// 同一张页常要点 2–3 次、隔 20–30 秒才通过。所以点一次后按这个间隔重发，还被拦就再点，最多点 3 次（约 2 分钟）。
-const RETRY_AFTER_CLICK_MS = [2000, 6000, 15000];
-const MAX_CLICKS = 3;
-
-function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock = null, onPassed = () => {}, downloadsDir, now = () => Date.now(), logger = console,
-  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), onProgress = () => {}, windowPost = null,
+function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, downloadsDir, now = () => Date.now(), logger = console,
+  onProgress = () => {},
   edition = null, receiverAddress = null, intranetFetch = null, outboxDir = null, welink = null, collectMcpDiagnostics = null }) {
   // welink（2026-11-21）：{ to, hasCli(), run(args, opts), parseJson, openDesktop(), writeClipboard(text) }。
   // 给了就在公司内（成员版恒是；公开版连得上内源时）改走 WeLink：一键发送 / 复制并打开 WeLink，内网收件机入口隐藏。
@@ -108,10 +103,11 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
   // 这次发到哪儿：'intranet'（公司内网收件机）或 'aliyun'。
   // 成员版：最先判断，永远是内网——缺地址服务、缺地址等任何缺参都只会进待发队列，绝不走阿里云（r42 返工）。
   // 公开版：内源连得上，或以前拿到过有效的收件地址（缓存），都按公司内走内网；发不出就进队列。
-  //   只有从没拿到过地址、且这次内源也连不上，才按公司外用户发阿里云。
+  //   没有直连地址（endpoint 为空，发行版默认）时也一律走内网，发不出就进队列。
   async function route() {
     if (edition === 'member') return 'intranet';
     if (!receiverAddress || edition !== 'public') return 'aliyun';
+    if (!endpoint) return 'intranet';
     try {
       const addr = await receiverAddress.resolve();
       if (addr && (addr.openxReachable || (Array.isArray(addr.urls) && addr.urls.length))) return 'intranet';
@@ -414,7 +410,7 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
         const title = (/<title[^>]*>([\s\S]*?)<\/title>/i.exec(raw) || [])[1];
         logEvent({ via: 'fetch', status: res.status, type: String(type || ''), bytes: raw.length, title: title ? title.trim().slice(0, 120) : null, sent: JSON.stringify(body).length });
         saveSample('fetch', raw);
-        return { ok: false, blocked: true, reason: '被公司网络的放行页拦住' };
+        return { ok: false, blocked: true, reason: '收到的是网页而不是回执，可能被公司网络拦截' };
       }
       let json = null; try { json = JSON.parse(raw); } catch {}
       if (res.ok && json && json.ok) return { ok: true, id: json.id };
@@ -460,45 +456,14 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
       return { ok: false, via: 'intranet', queued: !!queued, reason: r.reason, savedTo: saveLocal(b.text), text: b.text };
     }
     if (!endpoint) return { ok: false, reason: '这个版本没有配置反馈地址', savedTo: saveLocal(b.text), text: b.text };
-    let r = await post(body);
-    for (let click = 1; !r.ok && r.blocked && unblock && click <= MAX_CLICKS; click++) {
-      progress({ phase: 'unblocking', click, maxClicks: MAX_CLICKS });
-      let passed = false;
-      try { passed = await unblock(endpoint); } catch (error) { logger.warn?.('[hub-feedback] 自动放行出错：', error.message); }
-      if (!passed) break; // 没点到按钮（或放行器在冷却）：再点也没用
-      for (const wait of RETRY_AFTER_CLICK_MS) {
-        await sleep(wait);
-        progress({ phase: 'retrying', click, maxClicks: MAX_CLICKS });
-        r = await post(body);
-        if (r.ok || !r.blocked) break;
-      }
-    }
-    // 还被拦：改在看不见的窗口里直接提交（2026-10-30 公司真机：放行页的 GET 已放行、只拿到自家页面，提交的 POST 仍被拦成网页）。
-    // 拦截页就出现在这个窗口里：点了放行就隔一会儿再交，最多点 MAX_CLICKS 次。
-    for (let click = 1; !r.ok && r.blocked && windowPost && click <= MAX_CLICKS + 1; click++) {
-      progress({ phase: 'window', click, maxClicks: MAX_CLICKS });
-      let w;
-      try { w = await windowPost(endpoint, body); } catch (error) { w = { error: error.message }; }
-      logEvent({ via: 'window', try: click, status: w?.status ?? null, title: w?.title || null, clicked: !!w?.clicked, button: w?.text || null,
-        ok: !!(w?.json && w.json.ok), error: w?.error || (w?.json && !w.json.ok ? (w.json.error && w.json.error.message) || 'not-ok' : null),
-        candidates: w?.json || w?.clicked ? undefined : (w?.candidates || []).slice(0, 10) });
-      if (w?.json) {
-        r = w.json.ok ? { ok: true, id: w.json.id } : { ok: false, reason: (w.json.error && w.json.error.message) || '服务器没收下' };
-        break;
-      }
-      if (w?.html) saveSample('window', w.html);
-      if (!w?.clicked) break; // 窗口里也没有放行按钮：再试没用
-      if (click <= MAX_CLICKS) await sleep(RETRY_AFTER_CLICK_MS[Math.min(click, RETRY_AFTER_CLICK_MS.length) - 1]);
-    }
-    if (r.ok) { try { onPassed(); } catch {} }
+    const r = await post(body);
     const akey = 'a:' + now().toString(36) + Math.random().toString(36).slice(2, 6);
     if (r.ok) {
       recordHistory(akey, { summary: firstLine(description), via: 'aliyun', status: 'delivered', receiptId: r.id, deliveredAt: now(), reason: '' });
       return { ok: true, id: r.id, chars: b.chars };
     }
     recordHistory(akey, { summary: firstLine(description), via: 'aliyun', status: 'failed', reason: r.reason || '没发出去' });
-    // blocked：仍被放行页拦着，界面据此给「打开放行页」让用户自己点（公开版不在后台自动点）。
-    return { ok: false, reason: r.reason, savedTo: saveLocal(b.text), ...(r.blocked ? { blocked: true, url: endpoint } : {}) };
+    return { ok: false, reason: r.reason, savedTo: saveLocal(b.text), ...(r.blocked ? { blocked: true } : {}) };
   }
 
   // ---- WeLink（2026-11-21）----

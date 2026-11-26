@@ -3,10 +3,11 @@ function createMeetingHandlers(service) {
   const m = service.meetings;
   return {
     'meeting-status': r => { m.start(); return m.status(r.id, r.since || null); }, // since：页面手里那一版，对得上只回增量
-    'meeting-start': async r => { const meeting = m.create(r); return { ok: true, meeting, diskWarning: await m.recording.diskWarning() }; },
+    // 采集类请求记下发起页面：页面崩溃、关闭或整页重新载入时，这场会议收成「已中断」，重开会议页能接着录或查看（R51）。
+    'meeting-start': async (r, event) => { const meeting = m.create(r); m.bindOwner(meeting.id, event?.sender); return { ok: true, meeting, diskWarning: await m.recording.diskWarning() }; },
     'meeting-rename': r => ({ ok: true, meeting: m.rename(r.id, r.title) }),
-    'meeting-capture': r => m.capture(r.id, r),
-    'meeting-control': r => m.control(r.id, r.op, r.value),
+    'meeting-capture': (r, event) => { const result = m.capture(r.id, r); if (event?.sender && m.owners?.get(r.id) !== event.sender.id) m.bindOwner(r.id, event.sender); return result; },
+    'meeting-control': (r, event) => { const result = m.control(r.id, r.op, r.value); if (r.op === 'continue') m.bindOwner(r.id, event?.sender); return result; },
     'meeting-question-log': r => require('./meeting-questions').log(m, r),
     'meeting-search': r => require('./meeting-search').searchMeetings(m, r),
     'meeting-asset': r => ({ ok: true, ...m.asset(r.id, r.seq) }),

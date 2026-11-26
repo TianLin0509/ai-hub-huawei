@@ -26,7 +26,7 @@ const JOB_TIMEOUT_MS = 10 * 60000;
 const EXCERPT_CHARS = 3000;
 const KEEP_DAYS = 7;
 const SEEN_KEEP = 600;
-const ROUTE_NAME = { edge: 'Edge', hub: 'Hub 窗口' };
+const ROUTE_NAME = { edge: 'Edge', hub: 'Hub 窗口', weclaw: '员工助手' };
 const pad = n => String(n).padStart(2, '0');
 const dayKey = (at = Date.now()) => { const d = new Date(at); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const minutesOf = hhmm => { const [h, m] = String(hhmm).split(':').map(Number); return h * 60 + m; };
@@ -168,6 +168,47 @@ class CompanyForum {
     throw new Error(errors.join('；') || '浏览器窗口不可用');
   }
 
+  // 只在员工助手在线、已登录、没被熔断时试；每个榜都要认出至少一条有标题和链接的帖子才算数，否则按失败处理、计入熔断，
+  async applyWeclaw(site, base, limit, entry, fresh) {
+    const wf = this.deps.weclaw;
+    if (!wf || !site.weclaw || !base) return false;
+    try {
+      if (!(await wf.usable('forum'))) return false;
+      this.setProgress(`正在经员工助手打开${site.name}…`);
+      const r = await wf.fetchPage(S.homeUrl(site, base), { format: 'html' });
+      if (!r.ok) { wf.fail('forum', r.code); return false; }
+      const cap = require('../weclaw-fetch').captureFromHtml(r.content, { finalUrl: r.finalUrl, headings: site.lists.map(l => l.heading) });
+      if (X.looksLikeLogin(cap, base)) { wf.fail('forum', 'login'); return false; }
+      const min = site.weclaw.prefer ? (site.weclaw.minPerList || 10) : 1;
+      const all = X.postsForSite(site.weclaw.postLink ? { ...site, postLink: site.weclaw.postLink } : site, cap, { base, limit: Math.max(limit || 20, min) });
+      const good = all.length === site.lists.length && all.every(l => l.posts.length >= min && l.posts.every(p => p.title && p.url));
+      if (!good) { wf.fail('forum', 'parse'); return false; }
+      const lists = all.map(l => ({ ...l, posts: l.posts.slice(0, limit || 20) }));
+      wf.succeed('forum');
+      Object.assign(entry, { ok: true, needsLogin: false, error: '', via: 'weclaw', lists });
+      if (site.docs) fresh.push(...this.markNewDocs(entry));
+      // 不写诊断文件：员工助手这条路取的是整页渲染结果，只在内存里解析。
+      return true;
+    } catch (error) { try { wf.fail('forum', error.message); } catch { /* 忽略 */ } return false; }
+  }
+  // 帖子正文：员工助手取页面文字，像样（不是登录页、不太短）才用。
+  async weclawDetail(url, base) {
+    const wf = this.deps.weclaw;
+    if (!wf || !url) return '';
+    try {
+      if (!(await wf.usable('forum-detail'))) return '';
+      const r = await wf.fetchPage(url, { format: 'text' });
+      const text = r.ok ? String(r.content).replace(/\s+/g, ' ').trim() : '';
+      if (!text || text.length < 80 || X.looksLikeLogin({ finalUrl: r.finalUrl, text, textLength: text.length }, base)) { wf.fail('forum-detail', r.code || 'short'); return ''; }
+      wf.succeed('forum-detail');
+      return text;
+    } catch { return ''; }
+  }
+  weclawHint() {
+    const wf = this.deps.weclaw;
+    try { return wf && wf.isInstalled() ? 'open' : ''; } catch { return ''; }
+  }
+
   // ---- 同步 ----
   sync({ sites = null, reason = 'manual' } = {}) {
     if (this.syncing) {
@@ -211,19 +252,24 @@ class CompanyForum {
       const entry = { id: site.id, name: site.name, short: site.short, base: base || '', home, ok: false, needsLogin: false, error: '', lists: [], at: this.now() };
       if (!base) { entry.error = '还不知道公司站点的域名：在「设置」里填一次（一般就是公司邮箱 @ 后面那段）。'; snap.sites.push(entry); continue; }
       if (!haveRoute) { entry.error = '浏览器窗口不可用'; snap.sites.push(entry); continue; }
-      this.setProgress(`正在打开${site.name}…`);
-      try {
-        const cap = await this.open('capture', { url: S.entryUrl(site, base, snap.domain.domain, this.deps.env || process.env), base, clickText: site.clickText, clickUnless: site.clickUnless || null, sections: site.lists.map(l => l.heading), api: site.api, loginGraceMs: 25000, until: site.docsApi || null });
-        entry.via = cap.via || '';
-        if (cap.needsLogin) { entry.needsLogin = true; entry.error = `${site.name}没能自动登录：点「登录」在弹出的窗口里登录一次，以后自动同步（平时用 Edge 打开过公司网页的话，一般不用这一步）。`; }
-        else {
-          entry.lists = X.postsForSite(site, cap, { base, limit: s.perList });
-          entry.ok = entry.lists.some(l => l.posts.length);
-          if (entry.ok && site.docs) fresh.push(...this.markNewDocs(entry));
-          if (!entry.ok) entry.error = `${site.name}打开了，但没认出热帖（页面可能改版了）。诊断信息存在本机，可以让 CodeAgent 帮忙看。`;
-        }
-        this.writeDiagnostic(site, cap, entry);
-      } catch (error) { entry.error = `${site.name}没打开：${short(error.message, 120)}`; }
+      const viaWeclaw = site.weclaw?.prefer && await this.applyWeclaw(site, base, s.perList, entry, fresh);
+      if (!viaWeclaw) {
+        this.setProgress(`正在打开${site.name}…`);
+        try {
+          const cap = await this.open('capture', { url: S.entryUrl(site, base, snap.domain.domain, this.deps.env || process.env), base, clickText: site.clickText, clickUnless: site.clickUnless || null, sections: site.lists.map(l => l.heading), api: site.api, loginGraceMs: 25000, until: site.docsApi || null });
+          entry.via = cap.via || '';
+          if (cap.needsLogin) { entry.needsLogin = true; entry.error = `${site.name}没能自动登录：点「登录」在弹出的窗口里登录一次，以后自动同步（平时用 Edge 打开过公司网页的话，一般不用这一步）。`; }
+          else {
+            entry.lists = X.postsForSite(site, cap, { base, limit: s.perList });
+            entry.ok = entry.lists.some(l => l.posts.length);
+            if (entry.ok && site.docs) fresh.push(...this.markNewDocs(entry));
+            if (!entry.ok) entry.error = `${site.name}打开了，但没认出热帖（页面可能改版了）。诊断信息存在本机，可以让 CodeAgent 帮忙看。`;
+          }
+          this.writeDiagnostic(site, cap, entry);
+        } catch (error) { entry.error = `${site.name}没打开：${short(error.message, 120)}`; }
+        if (!entry.ok && site.weclaw && !site.weclaw.prefer) await this.applyWeclaw(site, base, s.perList, entry, fresh);
+        if (!entry.ok && entry.needsLogin) entry.weclawHint = this.weclawHint();
+      }
       snap.sites.push(entry);
     }
     // 排在前面的帖子读正文摘录（给摘要用）；上一次同步读过的不重读。
@@ -252,8 +298,9 @@ class CompanyForum {
       if (oldExcerpt.has(key)) { p.excerpt = oldExcerpt.get(key); continue; }
       if (!p.url) { if (p.abstract) p.excerpt = p.abstract; continue; }
       this.setProgress(`正在读帖子正文 ${n}/${picked.length}…`);
+      const detailBase = snap.sites.find(e => e.id === x.site)?.base;
       try {
-        const d = await this.open('detail', { url: p.url, base: snap.sites.find(e => e.id === x.site)?.base, api: S.siteById(x.site).api });
+        const d = await this.open('detail', { url: p.url, base: detailBase, api: S.siteById(x.site).api });
         if (d && !d.needsLogin) {
           p.excerpt = short(d.text, EXCERPT_CHARS);
           // 排行里没有的数字（心声只有标题和链接）从详情页的接口数据补上。
@@ -261,6 +308,10 @@ class CompanyForum {
           for (const k of ['views', 'replies', 'likes', 'favs', 'time']) if (p[k] == null && extra[k] != null) p[k] = extra[k];
         }
       } catch { /* 读不到正文就只按标题写 */ }
+      if (!p.excerpt && S.siteById(x.site)?.weclaw) {
+        const text = await this.weclawDetail(p.url, detailBase);
+        if (text) p.excerpt = short(text, EXCERPT_CHARS);
+      }
       if (!p.excerpt && p.abstract) p.excerpt = p.abstract; // 发文接口自带的摘要
     }
     snap.picked = picked.map(x => ({ source: x.source, site: x.site, title: x.post.title }));
@@ -446,7 +497,8 @@ class CompanyForum {
     return { ok: true, now: this.now(), day: dayKey(this.now()), settings: s, domain: dom.domain, domainFrom: dom.from,
       sites: S.SITES.map(x => ({ id: x.id, name: x.name, short: x.short, base: this.bases()[x.id] || '', login: this.logins[x.id] || null, loginError: this.loginErrors[x.id] || '' })),
       snapshot: snap, today: !!(snap && snap.day === dayKey(this.now())), needsRefresh: !!(snap && snap.day === dayKey(this.now()) && snap.extractionVersion !== X.EXTRACTION_VERSION), syncing: !!this.syncing, progress: this.progress, syncError: this.syncError,
-      route: this.state().route || '', job: this.job ? { sentAt: this.job.sentAt || null } : null, nextSyncAt: this.nextSyncAt(s), session: this.state().sessionId || null };
+      route: this.state().route || '', job: this.job ? { sentAt: this.job.sentAt || null } : null, nextSyncAt: this.nextSyncAt(s), session: this.state().sessionId || null,
+      weclaw: (() => { try { return this.deps.weclaw ? this.deps.weclaw.status() : null; } catch { return null; } })() };
   }
 }
 

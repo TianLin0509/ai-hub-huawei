@@ -15,12 +15,8 @@ const MAX_PACK_BYTES = 12 * 1024 * 1024;
 const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/;
 const DEFAULT_PREFERENCES = Object.freeze({ pack: 'default', overrides: {}, icons: 'brand', iconOverrides: {} });
-const SOURCES = Object.freeze([
-  // 高速下载镜像（2026-11-07）排第一：内容每 5 分钟从旧阿里云同步，没有时自动换下一个源。
-  { id: 'aliyun-fast', name: '阿里云高速', manifest: 'https://dl.lt-stockpartner.tech/hub-update/appearance/catalog.json', files: 'https://dl.lt-stockpartner.tech/hub-update/appearance/' },
-  { id: 'github', name: 'GitHub', manifest: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/appearance-v1/catalog.json', files: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/appearance-v1/' },
-  { id: 'aliyun', name: '阿里云', manifest: 'https://me.lt-stockpartner.tech/hub-update/appearance/catalog.json', files: 'https://me.lt-stockpartner.tech/hub-update/appearance/' },
-]);
+// 下载只走公司内源（openx）；内源不生效时（纯 Node 单测）由调用方注入源，默认不提供外网源。
+const SOURCES = Object.freeze([]);
 function validImage(value) {
   if (typeof value !== 'string' || value.length > 1300000) return false;
   // Portable pack payloads use PNG. Uploaded JPEG/WebP are normalized by Chromium first.
@@ -152,7 +148,7 @@ function createAppearanceStore({ dataDir, bundledDir = path.join(__dirname, '../
     if (downloading) return state;
     checking = (async () => {
       notify({ phase: 'checking', error: null, checks: [], attempts: [], progress: null });
-      // R29：只走内源时读程序自带的目录快照，不碰外网、不弹放行窗。
+      // R29：只走内源时读程序自带的目录快照，不碰外网。
       const results = require('./app-update/openx-source').active(env) ? [require('./app-update/bundled-catalog').bundledCatalog(snapshotFile, validateCatalog)]
         : await checkManifests({ sources, fetchImpl: boundedCatalogFetch(fetchImpl, catalogBodyTimeoutMs), validate: validateCatalog, gate: true });
       const best = results.filter(r => r.ok).sort((a, b) => compareVersion(b.manifest.version, a.manifest.version))[0];
@@ -184,7 +180,7 @@ function createAppearanceStore({ dataDir, bundledDir = path.join(__dirname, '../
       const dest = path.join(root, 'downloads', entry.file);
       const activeAbort = abort;
       const cancellableFetch = (url, options) => fetchImpl(url, { ...options, signal: AbortSignal.any([options.signal, activeAbort.signal]) });
-      const result = await downloadWithFallback({ gate: true, sources, version: entry.version, openx: { release: `appearance-${entry.version}` }, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
+      const result = await downloadWithFallback({ sources, version: entry.version, openx: { release: `appearance-${entry.version}` }, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
         onProgress: progress => notify({ progress }), onAttempt: attempts => notify({ attempts }) });
       if (!result.ok) return notify({ phase: result.cancelled ? 'cancelled' : 'error', error: result.cancelled ? '下载已取消，可以重新下载' : (require('./app-update/bundled-catalog').onlyFailReason(result) || '下载失败，可重试') + '；原有头像没有改变。' });
       install(readJson(dest), entry);

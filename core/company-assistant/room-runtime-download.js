@@ -9,14 +9,8 @@ const { createHash } = require('node:crypto');
 const { downloadWithFallback, fmtBytes } = require('../app-update/downloader');
 const { resolveFetch } = require('./fetch-util');
 
-// 官方公开 release 就是这个 exe（公司版 CI 打包时也取这里）；公司代理会把阿里云上的大文件换成拦截页，
-// 所以 GitHub 在前、阿里云在后。
-const SOURCES = Object.freeze([
-  // 高速下载镜像（2026-11-07）排第一：内容每 5 分钟从旧阿里云同步，没有时自动换下一个源。
-  { id: 'aliyun-fast', name: '阿里云高速', files: 'https://dl.lt-stockpartner.tech/hub-update/room-runtime/' },
-  { id: 'github', name: 'GitHub', files: 'https://github.com/TianLin0509/mishu-terminator/releases/download/v{version}/' },
-  { id: 'aliyun', name: '阿里云', files: 'https://me.lt-stockpartner.tech/hub-update/room-runtime/' },
-]);
+// 下载只走公司内源（openx）；内源不生效时（纯 Node 单测）由调用方注入源，默认不提供外网源。
+const SOURCES = Object.freeze([]);
 
 function verified(file, asset) {
   try {
@@ -68,11 +62,11 @@ function createRuntimeDownload({ dataDir, baseline, sources = SOURCES, fetchImpl
       notify({ phase: 'downloading', received: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null, error: null, attempts: [] });
       // 清单里是 size，下载器要的是 bytes；文件名、字节数、sha256 一个都不能少。
       const expect = { file: baseline.exe.file, bytes: baseline.exe.size, sha256: baseline.exe.sha256 };
-      const result = await downloadWithFallback({ gate: true, sources, version: baseline.version, expect, dest: exe,
+      const result = await downloadWithFallback({ sources, version: baseline.version, expect, dest: exe,
         openx: { release: `room-runtime-${baseline.version}` },
         fetchImpl: doFetch, signal, idleTimeoutMs, connectTimeoutMs,
         onProgress: p => notify({ received: p.received, total: p.total, speed: p.speed, etaSec: p.etaSec, sourceId: p.sourceId, sourceName: p.sourceName }),
-        // url 带上：被公司代理拦截时，界面要让用户自己去浏览器里放行这个网址。
+        // url 带上：界面据此显示每个来源的状态。
         onAttempt: attempts => notify({ attempts: attempts.map(a => ({ id: a.id, name: a.name, url: a.url, status: a.status, reason: a.reason, blocked: !!a.blocked })) }) });
       if (!result.ok) {
         const reason = result.cancelled ? '下载已取消' : `会议室组件没下载成功（${attemptsText(result.attempts)}）`;

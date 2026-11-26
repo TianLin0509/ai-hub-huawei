@@ -65,12 +65,6 @@
       button.disabled = false;
       if (!r || !r.ok) {
         msg().className = 'edn-msg err'; msg().textContent = (r && r.message) || '没能核对口令';
-        // 被公司网络放行页拦着：给按钮在 Hub 里打开放行页，用户点完回来再点「升级」（公开版不在后台自动点，2026-11-08 用户）。
-        if (r && (r.reason === 'blocked' || r.reason === 'network') && r.url) {
-          const a = document.createElement('a'); a.href = '#'; a.textContent = ' 打开放行页';
-          a.addEventListener('click', event => { event.preventDefault(); void ipcRenderer.invoke('net-pass:open-window', r.url).catch(error => window.__hubToast?.('放行页没打开：' + (error?.message || '未知原因'))); });
-          msg().appendChild(a);
-        }
         input.select(); return;
       }
       if (r.sealed) { dialog.close(); showSealedDone(); return; }

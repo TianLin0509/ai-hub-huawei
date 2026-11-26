@@ -28,7 +28,7 @@ const OWN_HOSTS = (() => {
   try { return [...new Set((require('../community-edition.json').update?.sources || []).map(s => new URL(s.manifest).hostname.split('.').slice(-2).join('.')))]; } catch (_) { return []; }
 })();
 const escRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const OWN_RE = OWN_HOSTS.length ? new RegExp(OWN_HOSTS.map(escRe).join('|'), 'i') : /$^/;
+const OWN_RE = OWN_HOSTS.length ? new RegExp(OWN_HOSTS.map(escRe).join('|'), 'i') : /(?!)/;  // 没有自家主机时永不命中（/$^/ 会命中空行）
 const EXTERNAL = new RegExp(['github', 'aliyun', 'example\\.invalid', ...OWN_HOSTS.map(escRe)].join('|'), 'i');
 // 老用户手上的发行配置：GitHub + 阿里云高速 + 阿里云，外加 GitHub 发布页。
 const OLD_SOURCES = [
@@ -445,13 +445,17 @@ test('内源上有效清单比本机还旧：显示「已是最新」，不报�
 
 test('放行（R35）：下载服务器不再参与放行和心跳，首次准备页校时用内源；更新窗不再探测放行', () => {
   const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
-  assert.match(main, /createNetPass\(\{ hosts: \[\],/);
+  // 网络确认模块只随扩展功能（加密模块）发布，公开明文树里没有。
+  const hasNetPass = fs.existsSync(path.join(ROOT, 'core/net-pass.js'));
+  if (hasNetPass) assert.match(main, /createNetPass\(\{ hosts: \[\],/);
   assert.doesNotMatch(main, /downloadHosts\(|GateHeartbeat|openxOnly/);
   assert.match(fs.readFileSync(path.join(ROOT, 'main/ipc/first-run-handlers.js'), 'utf8'), /const page = require\('\.\.\/\.\.\/core\/app-update\/openx-config'\)\.fileSite/);
   for (const f of ['renderer/app-update.js', 'renderer/company-api-settings.js']) assert.doesNotMatch(fs.readFileSync(path.join(ROOT, f), 'utf8'), /net-pass:status|net-pass-view/, f);
   assert.equal(fs.existsSync(path.join(ROOT, 'renderer/net-pass-view.js')), false);
-  const { createNetPass } = require('../core/net-pass');
-  assert.equal(createNetPass({ hosts: [], fetchImpl: recorder().fetchImpl }).status().available, false, '没有下载服务器时底栏不因下载显示放行');
+  if (hasNetPass) {
+    const { createNetPass } = require(path.join(ROOT, 'core', 'net-pass'));
+    assert.equal(createNetPass({ hosts: [], fetchImpl: recorder().fetchImpl }).status().available, false, '没有下载服务器时底栏不因下载显示放行');
+  }
 });
 
 test('环境体检：只走内源且内源读不到时，说内源和公司网络，不提「所有下载源」或放行', async () => {

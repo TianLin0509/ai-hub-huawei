@@ -127,7 +127,7 @@ const KNOWN_ISSUES = [
     // core/app-update/downloader.js「收到的是网页…可能被公司代理拦截」；R35 起更新窗已没有逐个网址放行的按钮。
     test: /可能被公司代理拦截|被公司网络拦截/,
     title: '更新被公司网络拦住了',
-    fix: '更新只走公司内源：确认电脑连着公司网络（公司内网或 VPN），或点主界面底栏的「一键放行」，再点「重新检查」。',
+    fix: '更新只走公司内源：确认电脑连着公司网络（公司内网或 VPN），再点「重新检查」。',
     action: { label: '重新检查', act: 'known:update-check' } },
   { id: 'port-in-use',
     // main/lan-pool-service.js「共享端口已被其他程序占用；关闭共享后换一个端口」；core/company-proxy/server.mjs 遇 EADDRINUSE 换端口。
