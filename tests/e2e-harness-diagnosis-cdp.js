@@ -169,7 +169,7 @@ async function main() {
 
     // 4. 一键反馈：附带内容里列出诊断，发送时接在描述后面。
     await cdp.eval('document.getElementById("options-feedback").click()');
-    await until('/本机 CLI 识别诊断/.test(document.querySelector(".hub-feedback-dialog [data-hf=items]")?.textContent || "")', 'feedback items', 30000);
+    await until('/本机 CLI 识别结论/.test(document.querySelector(".hub-feedback-dialog [data-hf=items]")?.textContent || "")', 'feedback items', 30000);
     check('一键反馈预览列出「本机 CLI 识别诊断（用户名已打码）」', true);
     await shot('08-feedback-with-diagnosis');
     await click('.hub-feedback-dialog [data-hf="desc"]');

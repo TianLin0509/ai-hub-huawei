@@ -8,7 +8,9 @@
 // 阿里云路径被公司网络放行页拦住时，自动在看不见的窗口里放行一次再重发（core/net-unblock.js，只对自家地址）；内网路径不需要。
 const fs = require('node:fs');
 const path = require('node:path');
-const { collectBundle, feedbackScenes } = require('../core/hub-feedback');
+const { feedbackScenes } = require('../core/hub-feedback');
+// 2026-11-26 精简：发出去、存下来的都是同一份精简 Markdown（core/hub-feedback-slim.js），不再附日志原文。
+const { slimFeedback } = require('../core/hub-feedback-slim');
 // 出问题时的会话类型（kind）和页面（view）由界面随请求带来，据此优先带相关日志。
 const scenesOf = ({ kind = '', view = '', description = '' } = {}) => feedbackScenes({ kind, view, description });
 const { looksLikeWebPage } = require('../core/app-update/downloader');
@@ -80,8 +82,8 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
   let mcpDiagnostics = '';
   let mcpRead = Promise.resolve();
   const bundleInfo = () => ({ ...info(), ...(mcpDiagnostics ? { mcpDiagnostics } : {}) });
-  function preview({ description = '', contact = '', sessionId = null, kind = '', view = '' } = {}) {
-    const ctx = { kind, view };
+  function preview({ description = '', contact = '', sessionId = null, kind = '', view = '', wantGroup = false } = {}) {
+    const ctx = { kind, view, wantGroup };
     if (collectMcpDiagnostics) {
       const read = Promise.resolve().then(() => collectMcpDiagnostics(sessionId))
         .catch(() => '本会话加载的 MCP 插件名单：未确认（读取失败）');
@@ -94,8 +96,13 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
     return previewBundle(description, contact, mcpDiagnostics, ctx);
   }
   function previewBundle(description, contact, diagnostic = mcpDiagnostics, ctx = {}) {
-    const b = collectBundle({ info: { ...bundleInfo(), mcpDiagnostics: diagnostic }, description, contact, logsDir, dataDir: path.dirname(logsDir), now: now(), scenes: scenesOf({ ...ctx, description }) });
+    const b = slim(description, contact, ctx, { ...bundleInfo(), mcpDiagnostics: diagnostic });
     return { ok: true, available: edition === 'member' || !!endpoint || !!receiverAddress, pending: outboxItems().length, items: b.items, chars: b.chars, contact: defaultContact() };
+  }
+  // 精简反馈：版本系统、描述、当时状态、近期关键错误、CLI 结论；脱敏后自查。ctx：{ kind, view, wantGroup }。
+  function slim(description, contact, ctx = {}, i = bundleInfo()) {
+    return slimFeedback({ info: i, description, contact, logsDir, dataDir: path.dirname(logsDir), now: now(), scenes: scenesOf({ ...ctx, description }),
+      ctx: { kind: ctx.kind || '', view: ctx.view || '' }, wantGroup: !!ctx.wantGroup });
   }
 
   // 这次发到哪儿：'intranet'（公司内网收件机）或 'aliyun'。
@@ -422,18 +429,18 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
       const dir = downloadsDir();
       fs.mkdirSync(dir, { recursive: true });
       const stamp = new Date(now()).toISOString().replace(/[-:]/g, '').slice(0, 15);
-      const file = path.join(dir, `AIHub-反馈-${stamp}.txt`);
+      const file = path.join(dir, `AIHub-反馈-${stamp}.md`);
       fs.writeFileSync(file, text, 'utf8');
       return file;
     } catch (error) { logger.warn?.('[hub-feedback] 本地保存失败：', error.message); return null; }
   }
 
-  async function send({ description = '', contact = '', kind = '', view = '', onProgress: progress = onProgress } = {}) {
+  async function send({ description = '', contact = '', kind = '', view = '', wantGroup = false, onProgress: progress = onProgress } = {}) {
     if (!String(description).trim()) return { ok: false, reason: '请先写一句遇到了什么问题' };
     await mcpRead;
     saveContact({ contact });
     const i = bundleInfo();
-    const b = collectBundle({ info: i, description, contact, logsDir, dataDir: path.dirname(logsDir), now: now(), scenes: scenesOf({ kind, view, description }) });
+    const b = slim(description, contact, { kind, view, wantGroup }, i);
     const body = { text: b.text, summary: b.summary, version: String(i.version || ''), edition: String(i.edition || ''), platform: String(i.platform || ''), contact: String(contact || ''), ...(i.target ? { target: String(i.target) } : {}) };
     if (await route() === 'intranet') {
       progress({ phase: 'intranet' });
@@ -505,32 +512,30 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
     try { const m = cli && welink.accounts ? welink.accounts().mismatch : null; mismatch = m ? { client: m.client, cli: m.cli } : null; } catch { /* 读不到不提示 */ }
     return { ok: true, enabled: true, to: welink.to, cli, ...(mismatch ? { accountMismatch: mismatch } : {}) };
   }
-  function compactFor(description, contact, ctx = {}) {
-    return require('../core/hub-feedback-welink').compactFeedback({ info: bundleInfo(), description, contact, logsDir, now: now(), scenes: scenesOf({ ...ctx, description }) });
-  }
-  function fullBundle(description, contact, ctx = {}) {
-    return collectBundle({ info: bundleInfo(), description, contact, logsDir, dataDir: path.dirname(logsDir), now: now(), scenes: scenesOf({ ...ctx, description }) }).text;
-  }
+  // WeLink 消息与本地兜底文件是同一份精简 Markdown；只有没发出去时才存到「下载」，发成功不再留文件。
+  const compactFor = (description, contact, ctx = {}) => slim(description, contact, ctx).text;
   // 一键发送：用本机 welink-cli 以用户自己的身份私聊维护人；长的切成两段。发不出去时界面引导改用「复制并打开 WeLink」。
-  async function sendWelink({ description = '', contact = '', kind = '', view = '' } = {}) {
+  async function sendWelink({ description = '', contact = '', kind = '', view = '', wantGroup = false } = {}) {
     if (!String(description).trim()) return { ok: false, reason: '请先写一句遇到了什么问题' };
     await mcpRead;
     if (!welink) return { ok: false, reason: '这个版本没有开 WeLink 反馈' };
     saveContact({ contact });
     const W = require('../core/hub-feedback-welink');
-    const text = compactFor(description, contact, { kind, view });
-    const savedTo = saveLocal(fullBundle(description, contact, { kind, view }));
+    const text = compactFor(description, contact, { kind, view, wantGroup });
+    // 没发出去才存一份到「下载」，方便用户自己发；同一次只存一份。
+    let saved;
+    const saveOnce = () => (saved === undefined ? (saved = saveLocal(text)) : saved);
     const hkey = 'w:' + now().toString(36) + Math.random().toString(36).slice(2, 6);
     const hbase = { summary: firstLine(description), via: 'welink' };
     let hasCli = false;
     try { hasCli = !!welink.hasCli(); } catch { /* 当没装 */ }
     if (!hasCli) {
       recordHistory(hkey, { ...hbase, status: 'failed', reason: '本机没装 welink-cli' });
-      return { ok: false, noCli: true, reason: '本机没装 welink-cli，没法自动发送', text, savedTo };
+      return { ok: false, noCli: true, reason: '本机没装 welink-cli，没法自动发送', text, savedTo: saveOnce() };
     }
     const selfSend = () => {
       recordHistory(hkey, { ...hbase, status: 'failed', reason: W.SELF_SEND_REASON });
-      return { ok: false, selfSend: true, reason: W.SELF_SEND_REASON, text, savedTo };
+      return { ok: false, selfSend: true, reason: W.SELF_SEND_REASON, text, savedTo: saveOnce() };
     };
     // R32 换过工号：WeLink 桌面端是新账号、welink-cli 还登着旧账号时，发出去会被网关拒成「proxy failed」。
     // 先比一次两边的账号（只读两个本机小文件），对不上就直说原因，并给「重新登录」和复制兜底，不去白发。
@@ -540,7 +545,7 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
       const m = accounts.mismatch;
       recordHistory(hkey, { ...hbase, status: 'failed', reason: m.text });
       logEvent({ via: 'welink', error: 'account-mismatch' });
-      return { ok: false, accountMismatch: { client: m.client, cli: m.cli }, reason: `${m.text}，这条反馈发不出去（WeLink 会拒收）`, text, savedTo };
+      return { ok: false, accountMismatch: { client: m.client, cli: m.cli }, reason: `${m.text}，这条反馈发不出去（WeLink 会拒收）`, text, savedTo: saveOnce() };
     }
     // 是不是维护人自己：以 WeLink 桌面端当前账号为准，每次现读（换号后不沿用旧结论）；读不到才问 CLI 的登录状态。
     // 问 CLI 时总预算 3 秒且查到一次就记住：CLI 排队或限流时不能把普通用户的发送拖慢（Codex 审：最坏可多等 90 秒）。
@@ -571,28 +576,27 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
         if (nice.selfSend) return selfSend();
         if (nice.clientDown) {
           recordHistory(hkey, { ...hbase, status: 'failed', reason: 'WeLink 客户端没打开或没登录' });
-          return { ok: false, clientDown: true, reason: (i ? `前 ${i} 段已发出；` : '') + nice.reason, text, savedTo };
+          return { ok: false, clientDown: true, reason: (i ? `前 ${i} 段已发出；` : '') + nice.reason, text, savedTo: saveOnce() };
         }
         if (nice.gateway) {
           recordHistory(hkey, { ...hbase, status: 'failed', reason: 'WeLink 拒收（proxy failed）' });
-          return { ok: false, gateway: true, reason: (i ? `前 ${i} 段已发出；` : '') + nice.reason, text, savedTo };
+          return { ok: false, gateway: true, reason: (i ? `前 ${i} 段已发出；` : '') + nice.reason, text, savedTo: saveOnce() };
         }
         recordHistory(hkey, { ...hbase, status: 'failed', reason });
-        return { ok: false, reason: (i ? `前 ${i} 段已发出，第 ${i + 1} 段没发出去：` : '') + reason, text, savedTo };
+        return { ok: false, reason: (i ? `前 ${i} 段已发出，第 ${i + 1} 段没发出去：` : '') + reason, text, savedTo: saveOnce() };
       }
     }
     logEvent({ via: 'welink', sent: parts.length });
     recordHistory(hkey, { ...hbase, status: 'delivered', receiptId: 'WeLink', deliveredAt: now(), reason: '' });
-    return { ok: true, via: 'welink', parts: parts.length, to: welink.to, savedTo };
+    return { ok: true, via: 'welink', parts: parts.length, to: welink.to };
   }
   // 复制并打开 WeLink：精简版写进剪贴板，再把 WeLink 桌面客户端打开（已开着就是切到前台）。用户自己搜维护人账号、粘贴发送。
-  async function copyOpenWelink({ description = '', contact = '', kind = '', view = '' } = {}) {
+  async function copyOpenWelink({ description = '', contact = '', kind = '', view = '', wantGroup = false } = {}) {
     if (!String(description).trim()) return { ok: false, reason: '请先写一句遇到了什么问题' };
     await mcpRead;
     if (!welink) return { ok: false, reason: '这个版本没有开 WeLink 反馈' };
     saveContact({ contact });
-    const text = compactFor(description, contact, { kind, view });
-    const savedTo = saveLocal(fullBundle(description, contact, { kind, view }));
+    const text = compactFor(description, contact, { kind, view, wantGroup });
     let copied = false;
     try { const c = await welink.writeClipboard(text); copied = !!(c && c.ok); } catch { /* 下面提示 */ }
     let opened = { ok: false, reason: '' };
@@ -600,7 +604,7 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
     logEvent({ via: 'welink-copy', copied, opened: !!opened.ok, openVia: opened.via || null, openError: opened.ok ? null : (opened.reason || null) });
     recordHistory('c:' + now().toString(36) + Math.random().toString(36).slice(2, 6), { summary: firstLine(description), via: 'welink', status: copied ? 'delivered' : 'failed',
       receiptId: copied ? '已复制，待本人在 WeLink 发送' : '', reason: copied ? '' : '复制失败' });
-    return { ok: copied, copied, opened: !!opened.ok, openReason: opened.reason || '', to: welink.to, text, savedTo };
+    return { ok: copied, copied, opened: !!opened.ok, openReason: opened.reason || '', to: welink.to, text, ...(copied ? {} : { savedTo: saveLocal(text) }) };
   }
 
   return { preview, send, saveContact, route, flushOutbox, startRetry, stopRetry, outboxItems, diagnose, status, retryNow, mine, fixedInFor, welinkState, sendWelink, copyOpenWelink };

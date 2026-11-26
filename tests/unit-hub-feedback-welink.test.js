@@ -57,7 +57,8 @@ test('one-click send DMs the maintainer through welink-cli with a redacted compa
   assert.match(text, /spawn codex ENOENT/);
   assert.doesNotMatch(text, /abcdefghijk/, '日志里的令牌已脱敏');
   assert.ok(text.length <= FW.MAX_CHARS);
-  assert.ok(fs.existsSync(r.savedTo), '完整诊断包仍存到下载');
+  assert.equal(r.savedTo, undefined, '发成功不再往下载存文件（2026-11-26 精简）');
+  assert.match(text, /## 问题描述/, '精简版是分节 Markdown');
   assert.equal(f.intranetCalls(), 0);
   const mine = f.svc.mine();
   assert.equal(mine.items[0].status, 'delivered');
@@ -83,9 +84,11 @@ test('long descriptions are split into numbered parts within the chunk size', as
   const desc = Array.from({ length: 60 }, (_, i) => `第 ${i} 行：` + '现象描述'.repeat(10)).join('\n');
   const r = await f.svc.sendWelink({ description: desc });
   assert.equal(r.ok, true);
-  assert.ok(fk.calls.run.length >= 2);
+  // 2026-11-26 精简：描述超过 1200 字截断，整条不超过 3000 字，最多两段。
+  assert.ok(fk.calls.run.length >= 1 && fk.calls.run.length <= 2);
+  assert.match(fk.calls.run.map(c => c.args[5]).join(''), /已截断/);
   for (const [i, c] of fk.calls.run.entries()) {
-    assert.ok(c.args[5].startsWith(`（${i + 1}/${fk.calls.run.length}）`));
+    if (fk.calls.run.length > 1) assert.ok(c.args[5].startsWith(`（${i + 1}/${fk.calls.run.length}）`));
     assert.ok(c.args[5].length <= FW.CHUNK + 10);
   }
 });

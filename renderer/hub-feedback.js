@@ -30,7 +30,10 @@
   .hub-feedback-dialog .hf-outbox .au-btn { margin-left: 8px; }
   #hub-feedback-outbox-marker { flex: none; height: 22px; padding: 0 7px; border: 1px solid var(--border-subtle, #d7dde6); border-radius: 11px; background: transparent;
     color: var(--status-warning, #b66a12); font: 500 11px var(--font-sans, 'Microsoft YaHei', sans-serif); white-space: nowrap; cursor: pointer; }
-  #hub-feedback-outbox-marker:hover { background: var(--brand-tint, #eaf2ff); }`;
+  #hub-feedback-outbox-marker:hover { background: var(--brand-tint, #eaf2ff); }
+  .hub-feedback-dialog .hf-group { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; font-size: 12px; line-height: 1.6; color: var(--fg-default, #1f2330); cursor: pointer; }
+  .hub-feedback-dialog .hf-group[hidden] { display: none; }
+  .hub-feedback-dialog .hf-group input { margin: 3px 0 0; accent-color: var(--brand, #3478f6); }`;
 
   function ensureDialog() {
     if (dialog) return dialog;
@@ -45,7 +48,8 @@
         <textarea data-hf="desc" placeholder="例如：CodeAgent 会话卡片一直不显示回答，后台终端里是有的"></textarea>
         <div class="au-section">联系方式（可不填）</div>
         <input class="hf-contact" data-hf="contact" maxlength="160" placeholder="工号或姓名，方便回访">
-        <div class="au-section" data-hf="items-title">会一起附带（已自动隐去密钥、口令、邮箱和用户目录）</div>
+        <label class="hf-group" data-hf="group-row" hidden><input type="checkbox" data-hf="group"><span><b>建议进群交流</b>：发完后帮我一键加入 AI HUB-H 用户群，维护人和其他用户都在群里，问题回得更快</span></label>
+        <div class="au-section" data-hf="items-title">会一起附带一份精简说明（已自动隐去密钥、口令、邮箱和用户目录）</div>
         <ul class="hf-items" data-hf="items"><li>正在整理…</li></ul>
         <div data-hf="outbox" hidden></div>
         <div data-hf="msg"></div>
@@ -100,6 +104,8 @@
         window.__hubToast?.('没能开始重新登录：' + (error?.message || '未知原因') + '。可以到助理页 WeLink 一行点「清除并重新扫码」');
       }
     });
+    const joinNow = box.querySelector('[data-hf-join]');
+    if (joinNow) joinNow.addEventListener('click', event => { event.preventDefault(); joinAfterSend(true, 0); });
     const unblock = box.querySelector('[data-hf-unblock]');
     if (unblock) unblock.addEventListener('click', event => { event.preventDefault(); void ipcRenderer.invoke('net-pass:open-window', unblock.dataset.hfUnblock, { method: 'POST' }).catch(error => window.__hubToast?.('放行页没打开：' + (error?.message || '未知原因'))); });
   }
@@ -116,6 +122,8 @@
       dialog.querySelector('[data-hf="wl-send"]').textContent = '一键发到 WeLink';
       message('', '');
     }
+    // 「建议进群交流」只在有用户群的成员版出现（renderer.js 里挂 window.__hubUserGroups）。
+    dialog.querySelector('[data-hf="group-row"]').hidden = !groups();
     const desc = dialog.querySelector('[data-hf="desc"]');
     const text = prefill && typeof prefill.description === 'string' ? prefill.description.trim() : '';
     if (text && !sending) desc.value = desc.value.trim() && !desc.value.includes(text) ? desc.value.trimEnd() + '\n\n' + text : text;
@@ -128,8 +136,9 @@
       const items = (p && p.items) || [];
       const diag = await diagnosis();
       // 诊断放第一条：清单区域只露出前几行，这条最需要同事知道。
-      const rows = (diag ? [`<li>本机 CLI 识别诊断 · 各 CLI 查过的位置和结论（${diag.split(/\r?\n/).length} 行，用户名已打码）</li>`] : [])
-        .concat(items.map(i => `<li>${esc(i.name)}${i.detail ? ' · ' + esc(i.detail) : ''}</li>`));
+      const rows = items.map(i => `<li>${esc(i.name)}${i.detail ? ' · ' + esc(i.detail) : ''}</li>`)
+        .concat(diag ? ['<li>本机 CLI 识别结论 · 每个 CLI 一行（能不能用、用的哪一份），用户目录已隐去</li>'] : [])
+        .concat(p && p.chars ? [`<li>合计约 ${Number(p.chars)} 字，不再附日志原文；只有没发出去时才在「下载」里存一份 .md</li>`] : []);
       dialog.querySelector('[data-hf="items"]').innerHTML = rows.join('') || '<li>只有问题描述</li>';
       void refreshOutbox();
     } catch (error) {
@@ -152,7 +161,7 @@
   function applyWelinkMode() {
     const q = name => dialog.querySelector(`[data-hf="${name}"]`);
     q('to').textContent = `直接发到维护人的 WeLink（账号 ${wl.to}）`;
-    q('items-title').textContent = 'WeLink 消息里带：问题描述、版本与系统、最近报错几行（已隐去密钥、口令、邮箱）；下面这些完整内容存到你的「下载」文件夹';
+    q('items-title').textContent = 'WeLink 消息里就是这份精简说明（已隐去密钥、口令、邮箱和用户目录），发成功不再往「下载」存文件';
     q('send').hidden = true;
     q('wl-copy').hidden = false;
     q('wl-send').hidden = !wl.cli;
@@ -170,13 +179,15 @@
   function welinkInput() {
     const desc = dialog.querySelector('[data-hf="desc"]').value;
     if (!desc.trim()) { message('warn', '请先写一句遇到了什么问题'); dialog.querySelector('[data-hf="desc"]').focus(); return null; }
-    return { description: desc, contact: dialog.querySelector('[data-hf="contact"]').value, ...ctx };
+    return { description: desc, contact: dialog.querySelector('[data-hf="contact"]').value, wantGroup: wantGroup(), ...ctx };
   }
-  const savedLine = r => r && r.savedTo ? `<br><small>完整诊断包存在：<span class="hf-path">${esc(r.savedTo)}</span> <a href="#" data-hf-open="${esc(r.savedTo)}">打开所在文件夹</a></small>` : '';
+  const savedLine = r => r && r.savedTo ? `<br><small>反馈内容存在：<span class="hf-path">${esc(r.savedTo)}</span> <a href="#" data-hf-open="${esc(r.savedTo)}">打开所在文件夹</a></small>` : '';
   async function sendWelink() {
     if (sending) return;
     const input = welinkInput(); if (!input) return;
     welinkBusy(true, 'wl-send', '正在发送…');
+    // CLI 识别诊断也带上（精简版里每个 CLI 只占一行）。
+    input.description = require('./harness-view').appendDiagnosis(input.description, await diagnosis());
     message('info', '正在用 welink-cli 发到维护人的 WeLink…');
     let r;
     try { r = await ipcRenderer.invoke('hub-feedback:welink-send', input); } catch (error) { r = { ok: false, reason: error.message }; }
@@ -189,6 +200,7 @@
     if (r && r.ok) {
       message('ok', `已发到维护人的 WeLink（${esc(r.to)}）${r.parts > 1 ? `，分 ${r.parts} 条` : ''}，在你的 WeLink 聊天记录里也能看到。${savedLine(r)}`);
       dialog.querySelector('[data-hf="desc"]').value = '';
+      joinAfterSend(input.wantGroup);
       return;
     }
     // 发送失败一律写清原因，旁边直接给兜底：复制内容 / 复制并打开 WeLink；账号对不上或网关拒收时再给「重新登录」。
@@ -205,6 +217,8 @@
     if (sending) return;
     const input = welinkInput(); if (!input) return;
     welinkBusy(true, 'wl-copy', '正在复制…');
+    // CLI 识别诊断也带上（精简版里每个 CLI 只占一行）。
+    input.description = require('./harness-view').appendDiagnosis(input.description, await diagnosis());
     let r;
     try { r = await ipcRenderer.invoke('hub-feedback:welink-copy-open', input); } catch (error) { r = { ok: false, reason: error.message }; }
     welinkBusy(false, 'wl-copy', '复制并打开 WeLink');
@@ -214,7 +228,16 @@
       return;
     }
     const opened = r.opened ? '已打开 WeLink' : `WeLink 没能自动打开（${esc(r.openReason || '未知原因')}），请自己打开 WeLink`;
-    message('ok', `已复制反馈内容，${opened}。在 WeLink 里搜 <b>${esc(r.to)}</b>，打开对话后粘贴（Ctrl+V）发送。${savedLine(r)}`);
+    // 复制只是第一步，用户还要自己去 WeLink 粘贴发送：不自动关弹窗入群，给一个「发完了，去入群」让用户自己点（审查 #5）。
+    const joinBtn = input.wantGroup && groups() ? ' <button type="button" class="au-btn small primary" data-hf-join>发完了，去入群</button>' : '';
+    message('ok', `已复制反馈内容，${opened}。在 WeLink 里搜 <b>${esc(r.to)}</b>，打开对话后粘贴（Ctrl+V）发送。${joinBtn}${savedLine(r)}`);
+  }
+  const groups = () => window.__hubUserGroups || null;
+  const wantGroup = () => { const box = dialog && dialog.querySelector('[data-hf="group"]'); return !!(box && groups() && !box.closest('[hidden]') && box.checked); };
+  // 勾了「建议进群交流」：反馈发出后直接走现有的一键入群（底栏「用户群」弹层，结果和补填账号都在弹层里）。
+  function joinAfterSend(want, delayMs = 1200) {
+    if (!want || !groups()) return;
+    setTimeout(() => { try { if (dialog.open) dialog.close(); groups().joinNow(); } catch (error) { window.__hubToast?.('没能打开用户群：' + (error?.message || '未知原因')); } }, delayMs);
   }
 
   async function send() {
@@ -229,14 +252,16 @@
     ipcRenderer.on('hub-feedback:progress', onProgress);
     let r;
     const full = require('./harness-view').appendDiagnosis(desc, await diagnosis());
-    try { r = await ipcRenderer.invoke('hub-feedback:send', { description: full, contact: dialog.querySelector('[data-hf="contact"]').value, ...ctx }); }
+    const want = wantGroup();
+    try { r = await ipcRenderer.invoke('hub-feedback:send', { description: full, contact: dialog.querySelector('[data-hf="contact"]').value, wantGroup: want, ...ctx }); }
     catch (error) { r = { ok: false, reason: error.message }; }
     finally { ipcRenderer.removeListener('hub-feedback:progress', onProgress); }
     sending = false;
     if (r && r.ok) {
       btn.textContent = '已发送';
-      message('ok', `${r.via === 'intranet' ? '已发给维护人（公司内网）' : '已发送'}，反馈编号 <b>${esc(r.id)}</b>。维护人会根据附带的日志排查。`);
+      message('ok', `${r.via === 'intranet' ? '已发给维护人（公司内网）' : '已发送'}，反馈编号 <b>${esc(r.id)}</b>。维护人会根据附带的说明排查。`);
       dialog.querySelector('[data-hf="desc"]').value = '';
+      joinAfterSend(want);
       return;
     }
     lastText = (r && r.text) || '';
@@ -333,6 +358,33 @@
     mineItem.addEventListener('click', () => { menu.style.display = 'none'; void openMine(); });
     const update = document.getElementById('options-check-update');
     if (update) update.after(item, mineItem); else menu.append(item, mineItem);
+    addGroupEntry();
+  }
+  // 一键入群（2026-11-26）：紧跟「一键反馈」，带一句引导；点了直接走底栏「用户群」现有的一键入群。
+  // 只在有用户群的成员版出现：renderer.js 挂好 window.__hubUserGroups 后再调一次本函数。
+  function addGroupEntry() {
+    const menu = document.getElementById('options-menu');
+    const feedback = document.getElementById('options-feedback');
+    if (!menu || !feedback || !groups() || document.getElementById('options-join-group')) return;
+    if (!document.getElementById('hub-feedback-menu-style')) {
+      const style = document.createElement('style'); style.id = 'hub-feedback-menu-style';
+      style.textContent = '#options-join-group .options-sub { font-size: 11px; line-height: 1.4; margin-top: 2px; color: var(--fg-muted, #6b7080); white-space: normal; }';
+      document.head.appendChild(style);
+    }
+    const item = document.createElement('div');
+    item.className = 'options-item'; item.id = 'options-join-group';
+    item.title = '用本机登录的 WeLink 账号直接加入 AI HUB-H 用户群';
+    item.innerHTML = '👥 一键入群<div class="options-sub">用着有疑问、想交流用法？建议进用户群和大家聊</div>';
+    item.addEventListener('click', () => {
+      menu.style.display = 'none';
+      try { groups().joinNow(); } catch (error) { window.__hubToast?.('没能打开用户群：' + (error?.message || '未知原因')); }
+    });
+    feedback.after(item);
+    // 快捷键、可选功能等入口也以「一键反馈」为锚插在它后面，会把本入口挤开：菜单有变动就把它放回紧跟的位置。
+    new MutationObserver(() => {
+      const fb = document.getElementById('options-feedback');
+      if (fb && item.isConnected && fb.nextElementSibling !== item) fb.after(item);
+    }).observe(menu, { childList: true });
   }
 
   // 待发队列看得见（2026-11-19 反馈黑洞复盘）：有没送到的反馈时，底栏显示「反馈待发 N」，点开反馈窗口能看到原因和「立即重试」。
@@ -380,5 +432,5 @@
   addMenuEntry();
   void ipcRenderer.invoke('hub-feedback:welink-state').then(st => { wl = st; paintOutbox(outbox); }).catch(() => {}).finally(() => void refreshOutbox());
   setInterval(() => void refreshOutbox(), 60 * 1000);
-  window.__hubFeedback = { open, refreshOutbox, openMine };
+  window.__hubFeedback = { open, refreshOutbox, openMine, addGroupEntry };
 })();

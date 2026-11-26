@@ -59,9 +59,10 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "全界面主题适配：6 套主题（冷白/暖米/紫留白/灰白/深色/冷杉）下消除浅色配深色等错配，界面颜色统一跟随主题"
+    "设置菜单「一键反馈」下方新增「一键入群」，一键进用户群交流；反馈弹窗可勾「建议进群交流」，发完自动入群",
+    "一键反馈精简：只发一份几屏内能看完的说明（版本系统、问题描述、当时状态、近期关键错误、CLI 结论），不再附日志原文，发成功不再往「下载」存文件；脱敏自查"
   ],
-  "version": "5.6.123",
+  "version": "5.6.124",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

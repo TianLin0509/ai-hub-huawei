@@ -832,5 +832,20 @@
   "请到「设置 → 自有 API」接部门 API 网关或自己的接口": "Go to \"Settings → Own API\" to connect the department API gateway or your own endpoint",
   "正在安排…": "Scheduling…",
   "正在取消…": "Cancelling…",
-  "正在启动升级程序，窗口马上关闭，随后屏幕中间会出现升级进度小窗。": "Starting the updater. This window will close in a moment, then a small update progress window will appear in the middle of the screen."
+  "正在启动升级程序，窗口马上关闭，随后屏幕中间会出现升级进度小窗。": "Starting the updater. This window will close in a moment, then a small update progress window will appear in the middle of the screen.",
+  "建议进群交流": "Join the group to discuss",
+  "：发完后帮我一键加入 AI HUB-H 用户群，维护人和其他用户都在群里，问题回得更快": ": after sending, add me to the AI HUB-H user group; maintainers and other users are there, so questions get answered faster",
+  "会一起附带一份精简说明（已自动隐去密钥、口令、邮箱和用户目录）": "A short summary is attached (keys, passwords, emails and user folders are removed automatically)",
+  "本机 CLI 识别结论 · 每个 CLI 一行（能不能用、用的哪一份），用户目录已隐去": "Local CLI detection results · one line per CLI (usable or not, which copy), user folders removed",
+  "合计约 {0} 字，不再附日志原文；只有没发出去时才在「下载」里存一份 .md": "About {0} characters in total, no raw logs; a .md copy is saved to Downloads only if sending fails",
+  "WeLink 消息里就是这份精简说明（已隐去密钥、口令、邮箱和用户目录），发成功不再往「下载」存文件": "The WeLink message contains this short summary (keys, passwords, emails and user folders removed); nothing is saved to Downloads after a successful send",
+  "反馈内容存在：": "Feedback saved at: ",
+  "没能打开用户群：": "Could not open the user group: ",
+  "👥 一键入群": "👥 One-click join group",
+  "一键入群": "One-click join group",
+  "用着有疑问、想交流用法？建议进用户群和大家聊": "Questions or tips to share? Join the user group and chat with everyone",
+  "用本机登录的 WeLink 账号直接加入 AI HUB-H 用户群": "Join the AI HUB-H user group directly with the WeLink account signed in on this computer",
+  "未知原因": "Unknown reason",
+  "。维护人会根据附带的说明排查。": ". The maintainer will troubleshoot with the attached summary.",
+  "发完了，去入群": "Sent it, join the group"
 }
