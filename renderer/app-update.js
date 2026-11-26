@@ -12,6 +12,18 @@
   const subtitle = `${productName}${distribution.editionBadge ? ' · ' + distribution.editionBadge : ''}`;
   let state = null, dialog = null, manualError = '';
   let confirmInfo = null;
+  // R48（2026-11-26）：点了「立即重启」到主进程回话之间，按钮立刻变「正在重启…」并置灰，不再看起来像卡住（公司电脑以前要等 10–15 秒才有变化）。
+  let applyPending = null;
+  function paintPending() {
+    if (!applyPending || !dialog || !state || !(state.phase === 'ready' || confirmInfo || state.restartWait)) return;
+    dialog.querySelectorAll('.au-foot button').forEach(b => { b.disabled = true; });
+    const btn = dialog.querySelector(`.au-foot [data-au="${applyPending}"]`) || dialog.querySelector('.au-foot .au-btn.primary');
+    if (btn) btn.textContent = applyPending === 'apply-wait' ? '正在安排…' : applyPending === 'wait-cancel' ? '正在取消…' : '正在重启…';
+    const bodyEl = dialog.querySelector('.au-body');
+    if (bodyEl && ['apply', 'apply-now'].includes(applyPending) && !bodyEl.querySelector('[data-au-restarting]')) {
+      bodyEl.insertAdjacentHTML('afterbegin', '<div class="au-msg info" data-au-restarting>正在启动升级程序，窗口马上关闭，随后屏幕中间会出现升级进度小窗。</div>');
+    }
+  }
 
   // 按钮栏常驻（2026-11-21）：弹窗竖排，标题与按钮栏固定，只有中间说明区（.au-body）滚动；发布说明再长，「下载更新」也一直在视口里。
   const css = `
@@ -182,6 +194,7 @@
       dialog.innerHTML = `<div class="au-head"><img src="../claude-wx.ico" alt=""><div class="au-title"><strong>软件更新</strong><span>${esc(subtitle)}</span></div>`
         + '<button class="au-close" data-au="close" aria-label="关闭">×</button></div>'
         + `<div class="au-body">${body0}</div><div class="au-foot">${foot0}</div>`;
+      paintPending();
       return;
     }
     const s = state, latest = s.latest, plan = s.plan;
@@ -261,6 +274,7 @@
     dialog.innerHTML = `<div class="au-head"><img src="../claude-wx.ico" alt=""><div class="au-title"><strong>软件更新</strong><span>${esc(subtitle)}</span></div>`
       + '<button class="au-close" data-au="close" aria-label="关闭">×</button></div>'
       + `<div class="au-body">${body}${quietBox}${openxRecordBox}</div><div class="au-foot">${foot}</div>`;
+    paintPending();
   }
 
   function openDialog() {
@@ -293,7 +307,10 @@
       else if (action === 'cancel') await ipcRenderer.invoke('app-update:cancel');
       else if (['apply', 'apply-wait', 'apply-now', 'wait-cancel'].includes(action)) {
         const mode = { apply: 'auto', 'apply-wait': 'wait', 'apply-now': 'now', 'wait-cancel': 'cancel' }[action];
-        const next = await ipcRenderer.invoke('app-update:apply', { mode });
+        if (applyPending) return;
+        applyPending = action; paintPending();
+        let next;
+        try { next = await ipcRenderer.invoke('app-update:apply', { mode }); } finally { applyPending = null; }
         confirmInfo = next && next.needsConfirm ? next.confirm : null;
         if (next && next.phase) update(next); else render();
       }
@@ -418,10 +435,14 @@
       line.id = 'hub-update-ready'; line.className = 'au-ready-line'; line.setAttribute('role', 'status');
       line.addEventListener('click', event => {
         const v = pendingVersion(); if (v) { writeKey(SEEN_KEY, v); renderUnread(); }
-        if (event.target.closest('[data-au-line="apply"]')) {
+        const lineBtn = event.target.closest('[data-au-line="apply"]');
+        if (lineBtn) {
+          if (lineBtn.disabled) return;
+          // R48：底栏「立即重启」同样当场变「正在重启…」。
+          lineBtn.disabled = true; lineBtn.textContent = '正在重启…';
           void ipcRenderer.invoke('app-update:apply', { mode: 'auto' }).then(next => {
             if (next && next.needsConfirm) { confirmInfo = next.confirm; openDialog(); } else if (next && next.phase) update(next);
-          }).catch(() => openDialog());
+          }).catch(() => openDialog()).finally(() => renderReadyLine());
           return;
         }
         openDialog();

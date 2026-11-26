@@ -489,7 +489,9 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
           elevateMode: env.AI_HUB_UPDATE_ELEVATE_MODE || null,
           expectedAsar: plan.variant === 'delta' ? manifest.incrementalDelta?.resultAsar : null,
           // 升级进度小窗（core/app-update/progress-ui.js，2026-11-13）：只在用户点「立即重启」的替换里出现；测试可设 AI_HUB_UPDATE_PROGRESS_UI=0 关掉。
-          progressUi: env.AI_HUB_UPDATE_PROGRESS_UI !== '0', productName: productName() });
+          progressUi: env.AI_HUB_UPDATE_PROGRESS_UI !== '0', productName: productName(),
+          // R48：换好后等新版窗口出现最多这么久，超时在进度小窗给「手动启动」（冷启动读注册表、杀软扫新文件，留 15 秒）。隐藏窗口跑的测试 Hub 没有可见窗口，不等。
+          launchWaitSeconds: env.CLAUDE_HUB_E2E_WINDOW_MODE === 'hidden' ? 0 : 15 });
         fs.rmSync(dest, { force: true });
       } else {
         staged = { installer: dest };
@@ -666,9 +668,11 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
           emit({ phase: 'error', error: '更新程序没能启动（可能被安全软件或组策略拦截），Hub 没有退出，仍是当前版本。可以点「重试」，或改用完整安装包更新。' });
           return;
         }
-        setTimeout(poll, 150);
+        setTimeout(poll, 50);
       };
-      setTimeout(poll, 300);
+      // R48（2026-11-26）：公司电脑实测替换脚本 0.29–0.45 秒就留下「已开始」标记；以前先等 300 毫秒、之后每 150 毫秒看一次，
+      // 平白多出最多 0.3 秒。改成每 50 毫秒看一次（只是查一个文件在不在），看到就立刻关窗口。
+      setTimeout(poll, 50);
       return state;
     }
   }

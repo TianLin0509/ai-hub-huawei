@@ -91,7 +91,21 @@ function Relaunch {
 # 一次进程快照（WMI，约 0.8 秒）同时给出「安装目录里还在跑的」和「哪些是 Hub 主程序」，0.7 秒内重复调用直接复用，
 # 免得每个判断各查一遍（11-13 实测逐个读 Path 0.4 秒、逐个查命令行 0.7 秒，叠起来一步多花 4 秒）。
 # WMI 被禁用时退回逐个读 Path，这时分不清主程序和子进程（Main 为 $null）。
-$script:snap = $null; $script:snapAt = [DateTime]::MinValue; $script:snapWmi = $true
+$script:snap = $null; $script:snapAt = [DateTime]::MinValue; $script:snapWmi = $true; $script:extSeen = @{}
+# 命令行里跑的脚本（R48，2026-11-26）：exe 之后第一个不以 - 开头的参数是 .js/.mjs/.cjs 时，这是借本程序当 Node 跑的脚本，不是 Hub 窗口。
+# 返回脚本路径；不是脚本返回空串。
+function Script-Arg($cmd) {
+  $i = 0
+  # 一个参数 = 连续的「引号段或非空白字符」，--k="a b" 这种带引号的值不会被拆开。
+  foreach ($x in [regex]::Matches([string]$cmd, '(?:"[^"]*"|\S)+')) {
+    $t = $x.Value.Replace('"', '')
+    $i++
+    if ($i -eq 1 -or $t.StartsWith('-')) { continue }
+    if ($t -match '\.(c|m)?js$') { return $t.Replace('/', '\') }
+    return ''
+  }
+  return ''
+}
 function Snap {
   if ($null -ne $script:snap -and ((Get-Date) - $script:snapAt).TotalMilliseconds -lt 700) { return $script:snap }
   $list = @()
@@ -99,8 +113,16 @@ function Snap {
     $dir = ([string]$p.appDir).TrimEnd('\') + '\'
     try {
       if ($p.simulateNoWmi) { throw 'simulateNoWmi' }
+      # 借本程序当 Node 跑、脚本在安装目录之外的外部工具（R48：公司电脑上一个常驻脚本 11-23 起每次升级都被当成「别的 Hub 开着」，
+      # 要用户点一次「关闭」、关不掉再白等约 11 秒；它不占程序文件，8 次升级照样换成功）：不算 Hub、不算残留、也不结束它，只记一行日志。
+      # 跑安装目录里脚本的（Hub 自己的后台子进程）不是窗口，算残留，没有别的 Hub 开着时照旧结束。
       $list = @(([wmisearcher]'SELECT ProcessId, ExecutablePath, CommandLine FROM Win32_Process').Get() | ForEach-Object { $path = [string]$_.ExecutablePath
-        if ($_.ProcessId -ne $PID -and $path -and $path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase)) { [pscustomobject]@{ Id = [int]$_.ProcessId; Path = $path; Main = ([string]$_.CommandLine -notmatch '\s--type=') } } })
+        if ($_.ProcessId -ne $PID -and $path -and $path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase)) {
+          $cmd = [string]$_.CommandLine; $js = Script-Arg $cmd; $id = [int]$_.ProcessId
+          if ($js -and -not $js.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase)) {
+            if (-not $script:extSeen.ContainsKey($id)) { $script:extSeen[$id] = $true; Log ('不算 Hub：借本程序运行的外部脚本 ' + (Split-Path $js -Leaf) + '（进程 ' + $id + '），不结束它') }
+          } else { [pscustomobject]@{ Id = $id; Path = $path; Main = (-not $js -and $cmd -notmatch '\s--type=') } }
+        } })
       $script:snapWmi = $true
     } catch {
       $script:snapWmi = $false
@@ -329,9 +351,46 @@ while ($true) {
   $o = @(Others-Now); if ($o.Count) { Close-Others $o }
   Stop-Orphans $true
 }
-if ($r -and $r.ok) { Set-Progress 4 '打开新版本' '通常 3–10 秒' @{} 'done' }
+if ($r -and $r.ok) { Set-Progress 4 '打开新版本' '通常 3–10 秒' }
 else { Set-Progress 4 '打开原来的版本' '' @{ reason = $(if ($r) { [string]$r.reason } else { '' }) } 'gave-up' }
 Relaunch
+# 新版窗口兜底（R48，2026-11-26）：以前写完「升级完成」小窗 6 秒后自己关，新版真没起来时屏幕上什么都没有。
+# 现在等新版窗口出现再报完成；launchWaitSeconds（默认 15 秒）内没出现，小窗里说明并给「手动启动」，期间窗口一出现就自动报完成。
+# 只在有进度小窗、要重开、换成功时等；静默替换、测试（不开小窗）照旧。
+function Window-Up { try { return [bool]@(Get-Process -ErrorAction SilentlyContinue | Where-Object { try { $_.MainWindowHandle -ne [IntPtr]::Zero -and [string]$_.Path -ieq [string]$p.exe } catch { $false } }).Count } catch { return $false } }
+if ($r -and $r.ok) {
+  # assumeLaunchUi 只给测试用：没有真小窗也走这段等待（测试里由它代替用户写 decision.json）。
+  $realUi = [bool]$p.assumeLaunchUi; try { if ($script:ui -and -not $script:ui.HasExited) { $realUi = $true } } catch {}
+  if (-not $p.relaunch -or -not $p.exe -or -not $realUi) { Set-Progress 4 '打开新版本' '' @{} 'done'; exit 0 }
+  $wait = 15; if ($null -ne $p.launchWaitSeconds) { $wait = [int]$p.launchWaitSeconds }
+  if ($wait -le 0) { Set-Progress 4 '打开新版本' '' @{} 'done'; exit 0 }
+  $limit = (Get-Date).AddMinutes(10); $end = (Get-Date).AddSeconds($wait); $asked = $false
+  # 不管怎么离开这段（窗口出来、小窗被关、用户点了关闭、10 分钟到点），文件都已换好：进度一律收尾成「完成」，
+  # 不留一个「failed / 要手动启动」的残留状态（R48 审查 P1-2）。
+  while ((Get-Date) -lt $limit) {
+    if (Window-Up) { Log '新版窗口已出现'; Set-Progress 4 '打开新版本' '' @{} 'done'; exit 0 }
+    if (-not (Ui-Alive)) { Set-Progress 4 '打开新版本' '' @{} 'done'; exit 0 }
+    if (-not $asked -and (Get-Date) -gt $end) {
+      $asked = $true
+      Set-Progress 4 '新版本还没打开' '' @{ need = 'launch'; reason = ('新版本已经换好，但 ' + $wait + ' 秒内还没看到窗口（电脑忙或安全软件在扫描时会慢一些）。可以再等一会儿，或点「手动启动」') } 'failed'
+    }
+    if ($asked -and $p.decisionFile -and (Test-Path -LiteralPath $p.decisionFile)) {
+      $d = ''; try { $d = [string](Get-Content -LiteralPath $p.decisionFile -Raw -Encoding UTF8 | ConvertFrom-Json).action } catch {}
+      Remove-Item -LiteralPath $p.decisionFile -Force -ErrorAction SilentlyContinue
+      if ($d -eq 'launch') {
+        # Hub 不是单实例：上一次拉起的新版还在启动（进程在、窗口没出来）就不再拉第二个，免得多开（R48 审查 P2-3）。
+        Fresh
+        if ((Others-Now).Count) { Log '用户点了手动启动：新版进程还在启动，不重复拉起'; Set-Progress 4 '新版本正在启动' '通常 3–15 秒' }
+        else { Log '用户点了手动启动'; Set-Progress 4 '正在打开新版本' '通常 3–15 秒'; Relaunch }
+        $asked = $false; $end = (Get-Date).AddSeconds($wait)
+      }
+      elseif ($d) { Set-Progress 4 '打开新版本' '' @{} 'done'; exit 0 }
+    }
+    Beat
+    Start-Sleep -Milliseconds 500
+  }
+  Set-Progress 4 '打开新版本' '' @{} 'done'
+}
 `;
 
 function stagingPaths(dataDir) {
@@ -352,14 +411,14 @@ function canWriteDir(dir) {
 
 // elevateMode 只给测试用：'plain' 不弹授权框、按普通权限跑管理员那一份；'cancel' 模拟用户在授权框点了「否」。
 function stageIncremental({ dataDir, payloadFile, resourcesDir, version, from, exe, args = [], pid = process.pid, simulateFailure = null, relaunch = true,
-  elevateMode = null, leftoverWaitSeconds = 10, expectedAsar = null, progressUi = false, productName = 'AI Hub' }) {
+  elevateMode = null, leftoverWaitSeconds = 10, expectedAsar = null, progressUi = false, productName = 'AI Hub', launchWaitSeconds = 15 }) {
   const p = stagingPaths(dataDir);
   fs.rmSync(p.newDir, { recursive: true, force: true });
   fs.mkdirSync(p.newDir, { recursive: true });
   // app.asar 放最后换：中途断掉时版本号还是旧的，下次检查发现文件对不上，会改下完整更新包补齐；反过来就再也不会更新了。
   const unpacked = unpackPayload(payloadFile, p.newDir, { resourcesDir, from, expectedAsar });
   const files = [...unpacked.filter(f => f.path !== 'app.asar'), ...unpacked.filter(f => f.path === 'app.asar')];
-  const plan = { version, from, pid, exe, args, relaunch, waitSeconds: 90, resourcesDir, appDir: path.dirname(path.resolve(resourcesDir)), leftoverWaitSeconds,
+  const plan = { version, from, pid, exe, args, relaunch, waitSeconds: 90, resourcesDir, appDir: path.dirname(path.resolve(resourcesDir)), leftoverWaitSeconds, launchWaitSeconds,
     newDir: p.newDir, stagingDir: p.root, resultFile: p.result, startedFile: p.started, cancelFile: p.cancel, progressFile: p.progress, decisionFile: p.decision, progressUi: !!progressUi, progressUiScript: p.progressUi, productName, files, ...(simulateFailure ? { simulateFailure } : {}), ...(elevateMode ? { elevateMode } : {}) };
   try { for (const x of [p.started, p.cancel, p.progress, p.decision, p.focus]) fs.rmSync(x, { force: true }); } catch (_) {}
   fs.writeFileSync(p.plan, JSON.stringify(plan, null, 2), 'utf8');

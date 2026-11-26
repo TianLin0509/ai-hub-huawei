@@ -75,12 +75,15 @@ function Render($s) {
     $title.Text = '这次没换成，已恢复原来的版本'; $title.ForeColor = $bad
     $note.Text = [string]$s.reason + $(if (@($s.leftovers).Count) { '。还在运行：' + (@($s.leftovers) -join '、') } else { '' })
     Buttons '结束占用的程序并重试' 'retry' '先用原来的版本' 'give-up'
+  } elseif ($s.state -eq 'failed' -and $s.need -eq 'launch') {
+    $title.Text = '新版本已换好，窗口还没出来'; $bar.Value = 1000; $note.Text = [string]$s.reason; $note.ForeColor = $brand
+    Buttons '手动启动' 'launch' '关闭' 'close'
   } elseif ($s.state -eq 'failed') {
     $title.Text = $(if ($s.restoreFailed) { '升级出错，没能恢复原来的版本' } else { '这次没有升级' }); $title.ForeColor = $bad; $note.Text = [string]$s.reason; $bar.Value = 0
     Buttons '' $null '知道了' 'close'
   } elseif ($s.state -eq 'done') {
     $title.Text = '升级完成，正在打开 v' + $s.version; $title.ForeColor = $ok; $bar.Value = 1000
-    $note.Text = '新版窗口马上出现，这个小窗会自动关闭。'
+    $note.Text = '新版窗口已经打开，这个小窗马上自动关闭。'
     Buttons '' $null '' $null
   } elseif ($s.state -eq 'gave-up') {
     $title.Text = '正在打开原来的版本'; $bar.Value = 0; $note.Text = [string]$s.reason; Buttons '' $null '' $null
@@ -118,7 +121,7 @@ $timer.Add_Tick({
     } } } catch {}
   Render $s
   if (-not $s) { return }
-  if ($s.state -in @('done', 'gave-up', 'cancelled')) { if (-not $script:doneAt) { $script:doneAt = Get-Date }; if (((Get-Date) - $script:doneAt).TotalSeconds -gt $(if ($s.state -eq 'done') { 6 } else { 2 })) { $form.Close() } }
+  if ($s.state -in @('done', 'gave-up', 'cancelled')) { if (-not $script:doneAt) { $script:doneAt = Get-Date }; if (((Get-Date) - $script:doneAt).TotalSeconds -gt $(if ($s.state -eq 'done') { 3 } else { 2 })) { $form.Close() } }
   # 替换脚本没了（被结束、或已经结束）又没有要用户看的结果：不留一个永远转圈的小窗。
   $alive = $false; try { $alive = [bool](Get-Process -Id ([int]$s.helperPid) -ErrorAction Stop) } catch {}
   if (-not $alive -and $s.state -ne 'failed') { if (-not $script:goneAt) { $script:goneAt = Get-Date }; if (((Get-Date) - $script:goneAt).TotalSeconds -gt 3) { $form.Close() } }
@@ -262,6 +265,8 @@ $xTrack.Add_SizeChanged({ $xFill.Width = $xTrack.ActualWidth * $script:pct / 100
 function Render($s) {
   if (-not $s) { return }
   $script:stateKey = [string]$s.state + '|' + [string]$s.need
+  # 离开了点按钮时的那一步就忘掉「已点过」：同一种提示第二次出现（例如再次等不到新版窗口）时按钮要能再点（R48 审查 P1-1）。
+  if ($script:decided -and $script:decided -ne $script:stateKey) { $script:decided = $null }
   $product = if ($s.product) { [string]$s.product } else { 'AI Hub' }
   $form.Title = $product + ' 升级'; $xAppName.Text = $product + ' 升级'
   $xSubT.Text = $(if ($s.from) { 'v' + $s.from + ' → v' + $s.version } else { 'v' + $s.version }) + $(if ($s.state -eq 'running') { ' · 完成后会自动打开新版，不用再点图标' } else { '' })
@@ -279,13 +284,17 @@ function Render($s) {
     $xTitleT.Text = '这次没换成，已恢复原来的版本'; $xTitleT.Foreground = $bad; Bar $prog $bad
     Note ([string]$s.reason + $(if (@($s.leftovers).Count) { '。还在运行：' + (@($s.leftovers) -join '、') } else { '' })) 'bad'
     Buttons '结束占用的程序并重试' 'retry' '先用原来的版本' 'give-up'
+  } elseif ($s.state -eq 'failed' -and $s.need -eq 'launch') {
+    $xTitleT.Text = '新版本已换好，窗口还没出来'; Bar 1000 $brand
+    Note ([string]$s.reason) 'brand'
+    Buttons '手动启动' 'launch' '关闭' 'close'
   } elseif ($s.state -eq 'failed') {
     $xTitleT.Text = $(if ($s.restoreFailed) { '升级出错，没能恢复原来的版本' } else { '这次没有升级' }); $xTitleT.Foreground = $bad; Bar 0 $bad
     Note ([string]$s.reason) 'bad'
     Buttons '' $null '知道了' 'close'
   } elseif ($s.state -eq 'done') {
     $xTitleT.Text = '升级完成，正在打开 v' + $s.version; $xTitleT.Foreground = $ok; Bar 1000 $ok
-    Note '新版窗口马上出现，这个小窗会自动关闭。' ''
+    Note '新版窗口已经打开，这个小窗马上自动关闭。' ''
     Buttons '' $null '' $null
   } elseif ($s.state -eq 'gave-up') {
     $xTitleT.Text = '正在打开原来的版本'; Bar 0 $brand; Note ([string]$s.reason) ''; Buttons '' $null '' $null
@@ -327,7 +336,7 @@ $timer.Add_Tick({
     } } } catch {}
   Render $s
   if (-not $s) { return }
-  if ($s.state -in @('done', 'gave-up', 'cancelled')) { if (-not $script:doneAt) { $script:doneAt = Get-Date }; if (((Get-Date) - $script:doneAt).TotalSeconds -gt $(if ($s.state -eq 'done') { 6 } else { 2 })) { $form.Close() } }
+  if ($s.state -in @('done', 'gave-up', 'cancelled')) { if (-not $script:doneAt) { $script:doneAt = Get-Date }; if (((Get-Date) - $script:doneAt).TotalSeconds -gt $(if ($s.state -eq 'done') { 3 } else { 2 })) { $form.Close() } }
   # 替换脚本没了（被结束、或已经结束）又没有要用户看的结果：不留一个永远转圈的小窗。
   $alive = $false; try { $alive = [bool](Get-Process -Id ([int]$s.helperPid) -ErrorAction Stop) } catch {}
   if (-not $alive -and $s.state -ne 'failed') { if (-not $script:goneAt) { $script:goneAt = Get-Date }; if (((Get-Date) - $script:goneAt).TotalSeconds -gt 3) { $form.Close() } }
