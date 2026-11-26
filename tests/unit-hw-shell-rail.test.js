@@ -123,3 +123,23 @@ test('icon rail shows a one-line 12px name under every icon without widening the
   assert.match(css, /--hw-rail-control-width:\s*min\(44px, calc\(var\(--hub-rail-slot\) - 10px\)\)/, 'default 64px slot keeps 44px buttons');
   assert.match(css, /:root\[data-hw-shell\]:not\(\[data-display-mode="phone"\]\)[^{]*\{\s*--hub-rail-slot: var\(--display-rail-width, 64px\)/, 'slot stays 64px');
 });
+
+test('narrow company rail adapts vertically at 900px and 800px viewports without touching public shell', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../renderer/styles/hw-shell.css'), 'utf8');
+  const m940 = css.match(/@media\s*\(max-height:\s*940px\)\s*\{([\s\S]*?)\n\}/);
+  const m840 = css.match(/@media\s*\(max-height:\s*840px\)\s*\{([\s\S]*?)\n\}/);
+  assert.ok(m940, '900px tier compact media block exists');
+  assert.ok(m840, '800px tier compact media block exists');
+  assert.match(m940[1], /height:\s*42px;\s*min-height:\s*42px;/, '900px tier fits all 14+3 company rail items without clipping');
+  assert.match(m840[1], /height:\s*38px;\s*min-height:\s*38px;/, '800px tier fits all 14+3 company rail items without scrolling');
+  // Every rule inside both media blocks must stay scoped to company narrow rail so public builds stay untouched.
+  for (const block of [m940[1], m840[1]]) {
+    const selectors = [...block.matchAll(/([^{}]+)\{/g)].map(m => m[1].trim());
+    assert.ok(selectors.length >= 6);
+    for (const sel of selectors) {
+      for (const part of sel.split(/,\s*\r?\n/)) {
+        assert.match(part.trim(), /^:root\[data-hw-shell\]\[data-hw-rail="narrow"\]/, 'must scope to company narrow rail: ' + part);
+      }
+    }
+  }
+});

@@ -39,23 +39,38 @@ class AuthKeeper {
     this.current.lastCheckAt = 0;
     this.current.lastOkUid = null; // 重启后不拿旧的在线记录兜底
   }
-  status() { return { ...this.current }; }
-  set(patch) { if (this.closed) return; this.current = { ...this.current, ...patch }; this.a.write('auth.json', this.current); this.a.changed(); }
-  online(login, renewed = false) {
-    this.set({ state: 'online', login, error: '', renewCause: null, lastCheckAt: this.a.now(), scanAttempts: 0, notified: false, noticeId: '', lastOkAt: this.a.now(), lastOkUid: login?.uid || this.current.lastOkUid || null,
-      ...(renewed ? { lastRenewAt: this.a.now() } : {}) });
+  sharedState() {
+    const auth = this.a.blackboard?.read().auth;
+    if (auth?.state === 'signed_out') {
+      this.controller?.abort();
+      this.current = { ...this.current, state: 'signed-out', login: { ok: false, reason: 'expired', checkedAt: auth.updatedAt }, error: '', renewCause: null, lastOkUid: null };
+    }
+    return auth;
   }
-  manualSucceeded(login) { if (!this.wrongAccount(login, this.a.now())) this.online(login); }
+  status() { this.sharedState(); return { ...this.current }; }
+  set(patch, { manual = false } = {}) {
+    if (this.closed) return;
+    if (!manual && this.sharedState()?.state === 'signed_out' && patch.state !== 'signed-out') return;
+    this.current = { ...this.current, ...patch };
+    const saved = this.a.blackboard?.setAuth(this.current, { manual });
+    if (saved === false && !manual) this.sharedState();
+    this.a.write('auth.json', this.current); this.a.changed();
+  }
+  online(login, renewed = false, manual = false) {
+    this.set({ state: 'online', login, error: '', renewCause: null, lastCheckAt: this.a.now(), scanAttempts: 0, notified: false, noticeId: '', lastOkAt: this.a.now(), lastOkUid: login?.uid || this.current.lastOkUid || null,
+      ...(renewed ? { lastRenewAt: this.a.now() } : {}) }, { manual });
+  }
+  manualSucceeded(login) { if (!this.wrongAccount(login, this.a.now(), { manual: true })) this.online(login, false, true); }
   // 换过工号（R32）：令牌有效但和 WeLink 桌面端当前账号不是同一个人，查询会被网关拒成「proxy failed」。
   // 这时不续期（续的还是旧账号），停下来请本人清除旧登录后扫码；同一对账号只提醒一次。
-  wrongAccount(login, now) {
+  wrongAccount(login, now, { manual = false } = {}) {
     let wrong = null;
     try { wrong = login?.ok ? this.a.accountMismatch?.(login.uid) : null; } catch { wrong = null; }
     if (!wrong) return false;
     const cause = { id: 'account-mismatch', title: wrong.text, text: `${wrong.text}。${wrong.next}`, client: wrong.client, cli: wrong.cli };
     const same = this.current.state === 'account-mismatch' && this.current.renewCause?.client === wrong.client && this.current.renewCause?.cli === wrong.cli;
     this.set({ state: 'account-mismatch', login: { ok: false, reason: 'account-mismatch', uid: login.uid, clientAccount: wrong.client, checkedAt: now }, error: '', renewCause: cause, lastCheckAt: now, lastOkUid: null,
-      ...(same ? {} : { notified: false, noticeId: '' }) });
+      ...(same ? {} : { notified: false, noticeId: '' }) }, { manual });
     if (!this.current.notified) {
       const id = this.current.noticeId || 'welink-account-' + now;
       this.set({ noticeId: id });
@@ -76,6 +91,7 @@ class AuthKeeper {
   }
   close() { this.closed = true; this.controller?.abort(); }
   check({ force = false, known = null, refresh = true } = {}) {
+    this.sharedState();
     if (this.closed || this.a.loginFlow?.state === 'waiting') return Promise.resolve(this.status());
     if (this.pending) return this.pending;
     if (!force && this.current.lastCheckAt && this.a.now() - this.current.lastCheckAt < CHECK_MS) return Promise.resolve(this.status());
@@ -87,6 +103,7 @@ class AuthKeeper {
     let login;
     try {
       let result = known || await this.a.rawWelink(['auth', 'status']);
+      if (this.sharedState()?.state === 'signed_out') return this.status();
       if (this.closed) return this.status();
       let text = result.stdout + '\n' + result.stderr;
       login = { ...W.loginState(text), checkedAt: now, exitCode: result.code };
@@ -94,6 +111,7 @@ class AuthKeeper {
         await new Promise(r => setTimeout(r, this.a.unknownRetryMs ?? UNKNOWN_RETRY_MS));
         if (this.closed) return this.status();
         result = await this.a.rawWelink(['auth', 'status']);
+        if (this.sharedState()?.state === 'signed_out') return this.status();
         text = result.stdout + '\n' + result.stderr;
         login = { ...W.loginState(text), checkedAt: this.a.now(), exitCode: result.code };
       }
@@ -128,13 +146,14 @@ class AuthKeeper {
       let scan = false, timedOut = false, seen = '';
       let resultLogin;
       try {
-        resultLogin = await this.a.rawWelink(['auth', 'login'], { allowSetup: true, timeoutMs: 90000, signal: this.controller.signal, onData: text => {
+        resultLogin = await this.a.rawWelink(['auth', 'login'], { authAutomatic: true, allowSetup: true, timeoutMs: 90000, signal: this.controller.signal, onData: text => {
           seen = text;
           if (needsScan(text)) { scan = true; this.controller.abort(); }
         } });
         seen = resultLogin.stdout + '\n' + resultLogin.stderr;
         scan = scan || needsScan(resultLogin.stdout + resultLogin.stderr);
       } catch (error) {
+        this.sharedState();
         if (this.closed || this.current.state === 'signed-out') return this.status();
         timedOut = !scan && error.code === 'WELINK_TIMEOUT';
         if (!scan && !timedOut) {

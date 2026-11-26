@@ -16,12 +16,20 @@ function gatewayHint(result, accounts) {
   return { ...result, stderr: err + (err && !err.endsWith('\n') ? '\n' : '') + hint + '\n' };
 }
 
-async function runReadOnly(args, { run = W.run, cli = W.resolveCli({ configured: process.env.CLAUDE_HUB_WELINK_CONFIGURED || '' }), cacheDir = process.env.CLAUDE_HUB_ASSISTANT_DIR,
-  welinkAccounts = () => /\.[cm]?js$/i.test(String(cli || '')) ? {} : require('./welink-account').read({}) } = {}) {
+async function runReadOnly(args, options = {}) {
+  const { run = W.run, cacheDir = process.env.CLAUDE_HUB_ASSISTANT_DIR } = options;
+  const blackboard = options.blackboard === undefined ? (run === W.run ? require('./welink-blackboard').sharedBlackboard() : null) : options.blackboard;
+  const cli = options.cli || blackboard?.read().cli.path || W.resolveCli({ configured: process.env.CLAUDE_HUB_WELINK_CONFIGURED || '' });
+  const welinkAccounts = options.welinkAccounts || (() => /\.[cm]?js$/i.test(String(cli || '')) ? {} : require('./welink-account').read({}));
   W.checkArgs(args);
   if (!args.includes('--help') && (args[0] === 'calendar' && args[1] === 'list' || args[0] === 'meeting' && args[1] === 'query-list'))
     throw new Error('按范围查询会议和日程请用本会话的 welink_meetings MCP；它统一处理日期边界、分页和时区。单场详情可用 meeting info 补查。');
-  const execute = (a, opts = {}) => run(a, { cli, timeoutMs: 60000, ...opts, allowSetup: false });
+  const { WelinkGate } = require('./welink-gate');
+  const gate = options.gate || (blackboard ? new WelinkGate({ blackboard, ...(options.gateOptions || {}) }) : null);
+  const execute = (a, opts = {}) => {
+    const invoke = () => run(a, { cli, timeoutMs: 60000, ...opts, allowSetup: false });
+    return gate ? gate.run(a, invoke, { ...opts, caller: 'welink-ro' }) : invoke();
+  };
   const result = gatewayHint(await execute(args), welinkAccounts);
   if (Number(result.code || 0) !== 0 || args[0] !== 'im' || args[1] !== 'query-history-message') return result;
   const raw = W.parseJsonBig(result.stdout);

@@ -49,34 +49,61 @@ function availability(dataDir, { findCommand = require('./community-setup').find
   return { available: true, reason: '' };
 }
 
-// 开箱即用：用户没选过、本机没有 CodeAgent、部门 key 已配好且能用时，助理默认走部门 key（只管助理，其余 7 项要用户显式选）。
+// 开箱即用：用户没选过、本机没有可用的 CodeAgent、部门 key 已配好且能用时，8 项会话功能都默认走部门 key
+// （11-24 先只管助理；R49-2，11-26 扩到全部 8 项，起因是只有部门 key 的同事在 PPT / 分身 / 论坛等功能里默认落到 CodeAgent 而失败）。
 // 有 CodeAgent 的用户（含所有老用户）不受影响。backends 给定时按它判断（与「功能使用的 Agent」同一份目录）。
 function autoDefault(dataDir, { backends, findCommand = require('./community-setup').findCommand, env = process.env } = {}) {
-  if (backends) {
-    const codeagent = backends.find(b => b.kind === 'codeagent');
-    const route = backends.find(b => b.kind === KIND);
-    return !!route?.available && !codeagent?.available;
-  }
+  if (backends) return !!backends.find(b => b.kind === KIND)?.available && codeagentMissing(dataDir, { backends, env });
   // 先看有没有存部门 key（读一个小文件）：没存的绝大多数用户不再去查本机命令，启动时不多花时间。
   if (!availability(dataDir, { findCommand, env }).available) return false;
+  return codeagentMissing(dataDir, { findCommand, env });
+}
+// 没有可用的 CodeAgent：没装，或装了但没有模型权限。查不清时按「有」处理，不悄悄切线路。
+// backends 给定时「装没装」按目录里的 codeagent 行（与「功能使用的 Agent」同一份）。
+function codeagentMissing(dataDir, { backends, findCommand = require('./community-setup').findCommand, env = process.env } = {}) {
+  if (backends) return !backends.find(b => b.kind === 'codeagent')?.available || noCodeagentModels(dataDir, env);
   let codeagent = '';
-  try { codeagent = findCommand('codeagent', env) || ''; } catch { codeagent = 'unknown'; } // 查不清时按「有」处理，不悄悄切线路
-  return !codeagent;
+  try { codeagent = findCommand('codeagent', env) || ''; } catch { return false; }
+  return !codeagent || noCodeagentModels(dataDir, env);
+}
+// 「没有模型权限」只认确凿的，号池里登记了别的号时一律不算（可能用号池的号）：
+//   A. serve 连上了、读到的清单是空的（SERVE_EMPTY_MODELS 标记比最近一次非空清单新）；
+//   B. 个人号清单里的每个模型都有「模型配置报错」记录（codeagent-quota 的模型避让，含已过 6 小时试探期、还没被一次成功回答解除的）。
+//      这里不套 codeagent-models 的「清单里本来就有它就不置灰」豁免：那条豁免是给下拉显示用的，真实报错写入时 have 一定含这个模型。
+//   兜底：清单里能用的（含 CodeAgent 自配供应商的模型）一个都没有。
+// 清单还没读到过（新装、没登录过）按「有」处理，老用户的默认不变。
+function noCodeagentModels(dataDir, env = process.env) {
+  try {
+    if (require('./codeagent-pool').readRegistry(dataDir).accounts.length) return false;
+    const models = require('./codeagent-models');
+    const catalog = models.readModelCatalog(dataDir, { accountKey: 'personal' });
+    const configDir = require('./codeagent-config').resolveCodeAgentConfig(env).configDir;
+    // CodeAgent 的 settings.json 里自配了供应商模型：这些模型不经账号清单，serve 报空清单也照样能用，按「有」处理（窄复审 P2-2）。
+    if (models.settingsProviderModels(configDir).length) return false;
+    const empty = require('./codeagent-model-probe').readEmptyCatalog(require('./codeagent-pool').personalModelsFile(dataDir));
+    if (empty && (!catalog || !(Date.parse(catalog.at) > Date.parse(empty.at)))) return true;
+    if (!catalog) return false;
+    const usable = models.modelOptions(dataDir, { configDir, accountKey: 'personal' });
+    if (!usable.length) return true;
+    const Q = require('./codeagent-quota');
+    const avoid = Q.modelAvoidAll(dataDir).personal || {};
+    return catalog.models.length > 0 && catalog.models.every(id => !!Q.modelAvoidEntry({ personal: avoid }, 'personal', id));
+  } catch { return false; }
 }
 
-// 反代要不要常驻：8 项里任一项明确选了部门 key，或助理没选过、按上面的规则默认用它。
+// 反代要不要常驻：8 项里任一项明确选了部门 key，或有一项没选过、按上面的规则默认用它。
 // 只把论坛 / PPT 设成部门 key、助理仍是 CodeAgent 时也要常驻，否则网关上游没人提供。
 function inUse(dataDir, options = {}) {
   try {
     const routes = require('./codeagent-assistant-route');
-    let explicit = false, assistantPicked = false;
+    let explicit = false, unpicked = false;
     for (const id of FEATURE_IDS) {
       const pref = routes.featurePreference(dataDir, id);
-      if (id === 'assistant' && pref) assistantPicked = true;
+      if (!pref) unpicked = true;
       if (pref?.kind === KIND) explicit = true;
     }
     if (explicit) return availability(dataDir, options).available;
-    return !assistantPicked && autoDefault(dataDir, options);
+    return unpicked && autoDefault(dataDir, options);
   } catch { return false; }
 }
 
@@ -112,4 +139,4 @@ function gatewayFailure(text) {
   return { line: `${LABEL}：${raw ? `网关报错（${raw}）` : 'Claude Code 没能连上部门网关'}，可以重试；仍不行请到设置 →「API 网关」检查 key。`, actions: ['retry'] };
 }
 
-module.exports = { KIND, LABEL, FEATURE_PURPOSES, FEATURE_IDS, launchValues, allowedSession, isGatewayChoice, resumeFields, availability, autoDefault, inUse, failure, gatewayFailure };
+module.exports = { KIND, LABEL, FEATURE_PURPOSES, FEATURE_IDS, launchValues, allowedSession, isGatewayChoice, resumeFields, availability, autoDefault, codeagentMissing, inUse, failure, gatewayFailure };

@@ -19,7 +19,7 @@ const RR = require('./reply-review');
 const Q = require('./queries');
 const Identity = require('./identity');
 const { recordMessageRound } = require('./message-round-log');
-const { WelinkGate, sharedWelinkGate, withWelinkPriority, WELINK_RATE_LIMITED, MESSAGE_ROUND_EXPIRED } = require('./welink-gate');
+const { WelinkGate, sharedWelinkGate, withWelinkPriority, withWelinkCaller, WELINK_RATE_LIMITED, MESSAGE_ROUND_EXPIRED } = require('./welink-gate');
 const GATEWAY_REJECT = /proxy\s*failed|sign\/nonce\/timestamp/i;
 const { noticeBus } = require('./notice-bus');
 const { PhoneChannel, DEFAULT_PHONE, PHONE_NOTE, validateExtraIds } = require('./phone');
@@ -163,7 +163,8 @@ class CompanyAssistant {
   constructor(deps) {
     this.deps = deps;
     this.now = deps.now || (() => Date.now());
-    const gateOptions = { now: this.now, sleep: deps.sleep, onMinute: counts => {
+    this.blackboard = deps.blackboard === undefined ? new (require('./welink-blackboard').WelinkBlackboard)({ dataDir: deps.dataDir, now: this.now, sleep: deps.sleep }) : deps.blackboard;
+    const gateOptions = { blackboard: deps.welinkRun && deps.blackboard === undefined ? null : this.blackboard, now: this.now, sleep: deps.sleep, onMinute: counts => {
       try {
         const logs = path.join(deps.dataDir, 'logs');
         fs.mkdirSync(logs, { recursive: true });
@@ -194,7 +195,7 @@ class CompanyAssistant {
     this.ppt = new PptLibrary(this, deps);
     this.rooms = new RoomBooking(this, deps);
     this.auth = new AuthKeeper(this);
-    this.cliInstaller = require('./welink-install').createWelinkInstaller({ dir: path.join(this.dir, 'tools', 'welink-cli'), configure: exe => this.useCliPath(exe), onState: () => this.changed(), ...(deps.welinkInstall || {}) });
+    this.cliInstaller = require('./welink-install').createWelinkInstaller({ dir: path.join(this.dir, 'tools', 'welink-cli'), blackboard: this.blackboard, configure: exe => this.useCliPath(exe, { manual: false }), onState: () => this.changed(), ...(deps.welinkInstall || {}) });
     this.memory = new AssistantMemory(this);
     this.query = new AssistantQuery(this);
     this.meetings = new (require('./meeting').MeetingCompanion)(this, deps);
@@ -327,15 +328,18 @@ class CompanyAssistant {
   saveChat(list) { this.write('chat.json', list.slice(-200)); }
   snapshot(day = D.dayKey(this.now())) { return this.read(`raw-${day}.json`, null); }
   brief(day = D.dayKey(this.now())) { return this.read(`brief-${day}.json`, null); }
-  changed() { try { this.deps.onChanged?.(); } catch { /* 界面没开 */ } }
+  changed() { this.blackboard?.notify(); try { this.deps.onChanged?.(); } catch { /* 界面没开 */ } }
   // 用户指定的路径还在就用它；不在了（被卸载 / 移动）或没指定，用自动发现选中的那份（多个版本时默认最新）；再不行走原来的快速查找。
   cli() {
     const s = this.settings(), configured = s.cliPath;
     // 自动记下的路径可能是别的软件自带的旧版（2026-11-12 同事：一直用 UniAssistant 里的 1.0.16，npm 升到 1.0.20 后 Hub 仍扫码失败）；
     // 不是用户亲手选的，就以自动发现按版本选出的那份为准。
     const discovered = !s.cliPathManual ? this.deps.toolDiscovery?.pick?.('welink') : '';
-    const usable = discovered || (configured && fs.existsSync(configured) ? configured : this.deps.toolDiscovery?.pick?.('welink') || configured);
-    return (this.deps.resolveCli || welink.resolveCli)({ configured: usable });
+    const announced = this.blackboard?.read().cli.path;
+    const usable = discovered || (configured && fs.existsSync(configured) ? configured : this.deps.toolDiscovery?.pick?.('welink') || configured || (announced && fs.existsSync(announced) ? announced : ''));
+    const cli = (this.deps.resolveCli || welink.resolveCli)({ configured: usable });
+    if (this.blackboard && this.blackboard.read().cli.path !== (cli || '')) this.blackboard.announceCli({ path: cli || '', source: this.cliSourceFor(cli) });
+    return cli;
   }
   // welink-cli 版本（2026-11-06）：按「路径 + 文件修改时间」记一次，原地 npm 升级后不用重启 Hub 也会重读；只在设置页显示和写诊断。
   cliVersion() {
@@ -348,7 +352,7 @@ class CompanyAssistant {
     this.cliVersionCache = { key, value: cached?.value ?? null };
     void this.rawWelink(['--version'], { timeoutMs: 8000 }).then(r => {
       const m = r.code === 0 && String(r.stdout || '').match(/(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/);
-      if (this.cliVersionCache?.key === key) { this.cliVersionCache.value = m ? m[1] : null; this.changed(); }
+      if (this.cliVersionCache?.key === key) { this.cliVersionCache.value = m ? m[1] : null; this.blackboard?.announceCli({ path: cli, version: m ? m[1] : '', source: this.cliSourceFor(cli) }); this.changed(); }
     }).catch(() => {});
     return this.cliVersionCache.value;
   }
@@ -367,12 +371,13 @@ class CompanyAssistant {
       try { const s = await discovery.list('welink', { force: true, deep: true }); return s.current ? { path: s.current.path, via: s.current.via, viaDiscovery: true } : { path: null, via: null }; }
       finally { this.onCliStage = null; }
     } : this.deps.findCliDeep || welink.findCliDeep;
-    this.cliSearching = Promise.resolve().then(() => find({ onStage: stage => { this.cliSearch = { ...this.cliSearch, stage }; this.changed(); } }))
+    this.cliSearching = Promise.resolve().then(() => find({ readVersion: async cli => { const r = await this.rawWelink(['--version'], { cli, timeoutMs: 8000 }); return r.code === 0 ? String(r.stdout || '').match(/\d+\.\d+\.\d+(?:[-+][\w.-]+)?/)?.[0] || '' : ''; }, onStage: stage => { this.cliSearch = { ...this.cliSearch, stage }; this.changed(); } }))
       .then(found => {
         if (found && found.path) {
           if (!found.viaDiscovery) this.setSettings({ cliPath: found.path });
           this.prepareWorkspace();
           this.cliSearch = { state: 'found', at: this.now(), path: found.path, via: found.via };
+          this.blackboard?.announceCli({ path: found.path, source: found.via, version: found.version });
           // 找到了：马上取数；今天的简报还是「没找到 welink-cli」的空简报就重新生成。
           void this.refresh({ force: true }).then(() => { const b = this.brief(); if (!b || b.by === 'none') return this.generateBrief(); }).catch(() => {});
         } else this.cliSearch = { state: 'notfound', at: this.now() };
@@ -388,23 +393,86 @@ class CompanyAssistant {
     return this.cliSearching;
   }
   // 一键安装（2026-11-08）：先确认全盘确实没有，再从内部软件源取程序，不让用户重复装。
-  async installCli() {
+  async installCli({ upgrade = false } = {}) {
     const already = () => { const cli = this.cli(); return cli ? { ok: true, already: true, path: cli } : null; };
-    if (already()) return already();
+    if (!upgrade && already()) return already();
     const s = this.cliSearch;
-    if (!(s?.state === 'notfound' && this.now() - s.at < 10 * 60000)) { await this.findCli({ force: true }); if (already()) return already(); }
+    if (!upgrade && !(s?.state === 'notfound' && this.now() - s.at < 10 * 60000)) { await this.findCli({ force: true }); if (already()) return already(); }
     const state = await this.cliInstaller.install();
     return { ok: state.phase === 'done', state, path: state.path, error: state.error };
   }
+  cliSourceFor(cli) {
+    if (!cli) return 'missing';
+    const managedRoot = path.resolve(this.dir, 'tools', 'welink-cli').toLowerCase();
+    const resolved = path.resolve(cli).toLowerCase();
+    if (resolved === managedRoot || resolved.startsWith(managedRoot + path.sep)) return 'managed';
+    if (this.settings().cliPathManual) return 'manual';
+    const cur = this.blackboard?.read()?.cli;
+    if (cur?.path === cli && ['managed', 'npm'].includes(cur.source)) return cur.source;
+    if (/[\\/]npm[\\/]/i.test(cli)) return 'npm';
+    return 'path';
+  }
+  async refreshWelinkBlackboard() {
+    const cli = this.cli();
+    if (!cli) { this.blackboard?.setAuth({ state: 'cli_missing' }); return; }
+    const deadline = this.now() + 15000;
+    // 扫码等待期间 auth login 持有黑板锁最长 5 分钟：先短等 loginDone 最多 2.5 秒；
+    // 仍处于等待状态时不抢锁，单独探测一次 auth status，已登录即结束登录流程并标记 manualSucceeded。
+    if (this.loginFlow?.state === 'waiting') {
+      if (this.loginDone) {
+        let t;
+        await Promise.race([this.loginDone.catch(() => {}), new Promise(r => { t = setTimeout(r, this.deps.loginRefreshWaitMs ?? 2500); })]);
+        clearTimeout(t);
+      }
+      if (this.loginFlow?.state === 'ok') return;
+      if (this.loginFlow?.state === 'waiting') {
+        const exec = this.deps.welinkRun || ((a, o) => welink.run(a, { cli, ...o }));
+        let probe;
+        try { probe = await exec(['auth', 'status'], { cli, timeoutMs: 8000 }); }
+        catch { return; }
+        const login = { ...welink.loginState(String(probe?.stdout || '') + '\n' + String(probe?.stderr || '')), checkedAt: this.now(), exitCode: probe?.code };
+        if (login.ok) {
+          if (this.loginStop) { this.loginStop._verifiedOnline = true; this.loginStop.abort(); }
+          if (this.loginDone) {
+            let t2;
+            await Promise.race([this.loginDone.catch(() => {}), new Promise(r => { t2 = setTimeout(r, 1000); })]);
+            clearTimeout(t2);
+          }
+          const accounts = this.welinkAccounts(login.uid);
+          if (accounts?.mismatch) this.auth.wrongAccount(login, this.now(), { manual: true });
+          else this.auth.manualSucceeded(login);
+          this.loginFlow = { ...this.loginFlow, state: 'ok', error: '' };
+          this.changed();
+        }
+        return;
+      }
+    }
+    const version = await this.rawWelink(['--version'], { timeoutMs: 8000, deadline });
+    this.blackboard?.announceCli({ path: cli, source: this.cliSourceFor(cli), version: version.code === 0 ? String(version.stdout || '').match(/\d+\.\d+\.\d+(?:[-+][\w.-]+)?/)?.[0] || '' : '' });
+    const result = await this.rawWelink(['auth', 'status'], { timeoutMs: 15000, deadline });
+    const login = { ...welink.loginState(String(result.stdout || '') + '\n' + String(result.stderr || '')), checkedAt: this.now(), exitCode: result.code };
+    const accounts = this.welinkAccounts(login.uid);
+    if (login.ok) {
+      if (accounts?.mismatch) { this.auth.wrongAccount(login, this.now(), { manual: true }); return; }
+      this.auth.manualSucceeded(login);
+      return;
+    }
+    const state = this.auth.status().state === 'signed-out' ? 'signed_out'
+      : login.reason === 'expired' ? 'needs_scan'
+      : result.code !== 0 ? 'network_error'
+      : 'unknown';
+    this.blackboard?.setAuth({ state });
+  }
   // 「手动选择…」：用户选的是 welink-cli.cmd 时换成旁边 node_modules 里的真 exe（不经 shell 调用）。
-  useCliPath(file) {
+  useCliPath(file, { manual = true } = {}) {
     const f = String(file || '').trim();
     if (!f || !fs.existsSync(f)) throw new Error('这个文件不存在');
     const exe = /\.exe$/i.test(f) ? (welink.isCliFile(f) ? f : null) : welink.cliUnder(path.dirname(f));
     if (!exe) throw new Error('请选 welink-cli.exe（或 npm 全局目录里的 welink-cli.cmd）');
-    this.setSettings({ cliPath: exe, cliPathManual: true });
+    this.setSettings({ cliPath: exe, cliPathManual: !!manual });
     this.prepareWorkspace();
-    this.cliSearch = { state: 'found', at: this.now(), path: exe, via: 'manual' };
+    this.cliSearch = { state: 'found', at: this.now(), path: exe, via: manual ? 'manual' : 'managed' };
+    this.blackboard?.announceCli({ path: exe, source: manual ? 'manual' : this.cliSourceFor(exe) });
     if (this.deps.toolDiscovery?.has?.('welink')) void this.deps.toolDiscovery.list('welink', { force: true }).catch(() => {});
     void this.refresh({ force: true }).then(() => { const b = this.brief(); if (!b || b.by === 'none') return this.generateBrief(); }).catch(() => {});
     return { ok: true, path: exe };
@@ -439,7 +507,8 @@ class CompanyAssistant {
   }
   accountMismatch(cliUid = '') { try { return this.welinkAccounts(cliUid).mismatch; } catch { return null; } }
   welink(args, opts = {}) {
-    return opts.priority ? withWelinkPriority(opts.priority, () => this.welinkUnlocked(args, opts)) : this.welinkUnlocked(args, opts);
+    const run = () => opts.priority ? withWelinkPriority(opts.priority, () => this.welinkUnlocked(args, opts)) : this.welinkUnlocked(args, opts);
+    return opts.caller || opts.priority === 'phone' ? withWelinkCaller(opts.caller || 'phone', run) : run();
   }
   async welinkUnlocked(args, opts) {
     if (args[0] !== 'auth' && this.auth.pending) await this.auth.pending;
@@ -2223,10 +2292,11 @@ class CompanyAssistant {
       this.changed();
     } }).then(r => {
       this.loginFlow = this.loginFlowFrom(r.stdout + r.stderr, { state: 'finished', code: r.code });
-    }).catch(error => { this.loginFlow = { ...this.loginFlow, state: 'failed', error: error.message }; })
+    }).catch(error => { if (!stop._verifiedOnline) this.loginFlow = { ...this.loginFlow, state: 'failed', error: error.message }; })
       .finally(() => { if (this.loginStop === stop) this.loginStop = null; })
       // 登录命令一退出就单查一次登录状态，成功马上显示，取数放后台（2026-11-06）；以前要等整轮刷新跑完（一两分钟）才显示成功。
       .then(async () => {
+        if (stop._verifiedOnline) return null;
         if (this.loginFlow?.state !== 'finished') return this.refresh({ force: true }).catch(() => {});
         try {
           const st = await this.rawWelink(['auth', 'status'], { timeoutMs: 15000 });

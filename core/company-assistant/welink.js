@@ -134,7 +134,7 @@ function resolveCli({ env = process.env, configured = '', fsModule = fs, now = D
 //   3) 前两步都没找到时，在用户目录、各个硬盘里按文件名找 welink-cli.exe（限制深度，跳过 Windows 系统目录）。
 // 2026-11-07：装了多份时要全部交给版本选择（core/tool-discovery），所以每一步都收集全部结果放进 paths；
 // path / via 仍是第一个结果，老调用方不变。
-async function findCliDeep({ env = process.env, fsModule = fs, execFileImpl, timeoutMs = 120000, onStage = () => {}, roots: rootsOverride = null } = {}) {
+async function findCliDeep({ env = process.env, fsModule = fs, execFileImpl, timeoutMs = 120000, onStage = () => {}, roots: rootsOverride = null, readVersion = null } = {}) {
   const started = Date.now(), left = () => Math.max(5000, timeoutMs - (Date.now() - started));
   const found = [];
   const add = (p, via) => { if (p && !found.some(f => f.path.toLowerCase() === p.toLowerCase())) found.push({ path: p, via }); };
@@ -155,7 +155,12 @@ async function findCliDeep({ env = process.env, fsModule = fs, execFileImpl, tim
       for (const file of out) { try { if (fsModule.existsSync(file)) add(file, 'disk'); } catch { /* 跳过 */ } }
     }
   }
-  return found.length ? { path: found[0].path, via: found[0].via, paths: found } : { path: null, via: null, paths: [] };
+  if (readVersion) {
+    for (const candidate of found) { try { candidate.version = await readVersion(candidate.path); } catch { candidate.version = ''; } }
+    const { compareVersions } = require('./welink-blackboard');
+    found.sort((a, b) => compareVersions(b.version, a.version) || (b.version ? 1 : 0) - (a.version ? 1 : 0));
+  }
+  return found.length ? { path: found[0].path, via: found[0].via, version: found[0].version, paths: found } : { path: null, via: null, paths: [] };
 }
 
 // welink-cli 自己上报使用统计（Telemetry）失败时打的告警行（2026-11-21，群里多人原文）：

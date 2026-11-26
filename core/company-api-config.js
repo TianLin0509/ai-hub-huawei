@@ -252,4 +252,4 @@ function assertLaunchConfigured(kind, config, opts = {}) {
   if (kind === 'codex') wireApi(config.codexApiWireApi || 'responses');
 }
 
-module.exports = { KINDS, LABELS, baseKind, isCompany, wireApi, baseUrl, optionalText, modelList, settings, withSettings, applyCompanyConfig, assertLaunchConfigured, anyProxy, anyGateway, connection, gatewayView };
+module.exports = { KINDS, LABELS, baseKind, isCompany, wireApi, baseUrl, optionalText, modelList, settings, withSettings, applyCompanyConfig, assertLaunchConfigured, anyProxy, anyGateway, connection, ownSource, gatewayView };

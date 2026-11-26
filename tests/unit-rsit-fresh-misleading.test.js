@@ -23,7 +23,8 @@ test('#6 没有 CodeAgent 时启动中心不默认选公司模型，也不因此
   assert.equal(cards.defaultPick('claude', { ...fresh, backend: 'proxy', companyDefault: false, model: 'GLM-5.2-WX' }, { codeagentInstalled: false }).source, 'company');
   // 启动中心真把检测结果传进来
   const wc = read('renderer/workspace-controller.js');
-  assert.match(wc, /modelCards\.defaultPick\(kind, provider, \{ codeagentInstalled \}\)/);
+  assert.match(wc, /modelCards\.defaultPick\(kind, companyProvider\[kind\], \{ codeagentInstalled,/);
+  assert.match(wc, /companyPick\[kind\] = companyDefaultPick\(kind, codeagentInstalled\)/);
 });
 
 test('#7 报错、说明书、生成模板和英文词典里的按钮名与界面一致', () => {

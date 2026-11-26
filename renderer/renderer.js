@@ -1517,7 +1517,7 @@ async function selectMeeting(meetingId, opts = {}) {
   if (terminalPanelEl) terminalPanelEl.classList.remove('home-active');
   if (window.__xresearchHide) window.__xresearchHide(); // 2026-07-23 投研面板互斥
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
@@ -2158,7 +2158,7 @@ const APP_TOOLBAR_VIEWS = [
 function getReadingSurface() {
   // Detached full-page tabs are above the session stage. Keep their mounted
   // controls and content instead of copying them into a fullscreen shell.
-  for (const id of ['team-page', 'avatar-page', 'weclaw-page', 'cloud-page', 'assistant-page', 'wireless-page', 'account-page', 'hub-workspace', 'memo-panel', ...APP_TOOLBAR_VIEWS.map(v => v.id)]) {
+  for (const id of ['team-page', 'avatar-page', 'weclaw-page', 'welink-blackboard-page', 'cloud-page', 'assistant-page', 'wireless-page', 'account-page', 'hub-workspace', 'memo-panel', ...APP_TOOLBAR_VIEWS.map(v => v.id)]) {
     const panel = document.getElementById(id);
     if (panelIsVisible(panel)) return panel;
   }
@@ -2187,6 +2187,7 @@ function paintAppToolbarForView(label) {
   if (label !== '团队') window.__teamHide?.();
   if (label !== '分身') window.__avatarHide?.();
   if (label !== '员工助手') window.__weclawHide?.();
+  if (label !== 'WeLink') window.__welinkBlackboardHide?.();
   if (label !== 'AI 网页') window.__webSessionHide?.();
   if (label !== '网页圆桌') window.__webRoundtableHide?.();
   if (!toolbarCrumbEl || !toolbarActionsEl) return;
@@ -2379,7 +2380,7 @@ document.addEventListener('bridge-threads-updated', () => {
 });
 
 function currentAppToolbarView() {
-  for (const [id, label] of [['web-session-panel', 'AI 网页'], ['web-roundtable-panel', '网页圆桌'], ['team-page', '团队'], ['avatar-page', '分身'], ['weclaw-page', '员工助手'], ['cloud-page', '云端'], ['assistant-page', '助理'], ['wireless-page', '无线'], ['account-page', '账号'], ['hub-workspace', '资源与回顾'], ['memo-panel', '速记']]) {
+  for (const [id, label] of [['web-session-panel', 'AI 网页'], ['web-roundtable-panel', '网页圆桌'], ['team-page', '团队'], ['avatar-page', '分身'], ['weclaw-page', '员工助手'], ['welink-blackboard-page', 'WeLink'], ['cloud-page', '云端'], ['assistant-page', '助理'], ['wireless-page', '无线'], ['account-page', '账号'], ['hub-workspace', '资源与回顾'], ['memo-panel', '速记']]) {
     if (panelIsVisible(document.getElementById(id))) return label;
   }
   for (const view of APP_TOOLBAR_VIEWS) {
@@ -2425,7 +2426,7 @@ if (typeof MutationObserver === 'function') {
   // These tabs mount outside app-body. Watch only their own visibility, never
   // streamed text or every descendant mutation.
   const watchReadingTabs = () => {
-    for (const id of ['team-page', 'avatar-page', 'weclaw-page', 'cloud-page', 'assistant-page', 'wireless-page', 'account-page', 'hub-workspace', 'memo-panel']) {
+    for (const id of ['team-page', 'avatar-page', 'weclaw-page', 'welink-blackboard-page', 'cloud-page', 'assistant-page', 'wireless-page', 'account-page', 'hub-workspace', 'memo-panel']) {
       const el = document.getElementById(id);
       if (el) _appToolbarObserver.observe(el, { attributes: true, attributeFilter: ['style', 'class', 'hidden'] });
     }
@@ -6677,7 +6678,7 @@ async function selectSession(id, opts = {}) {
   }
   if (window.__xresearchHide) window.__xresearchHide(); // 2026-07-23 投研面板互斥
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
@@ -9791,7 +9792,7 @@ function escapeToHome() {
   window.hubWorkspaces?.close();
   if (window.__xresearchHide) window.__xresearchHide();
   if (window.__studyHide) window.__studyHide();
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
@@ -10012,6 +10013,18 @@ if (require('../core/distribution').target === 'company') {
     window.__communityOpen = () => communityPage.open();
   } catch (error) { console.warn('[community] 社区页未启动：', error.message); }
 }
+// 「WeLink (Beta)」公共黑板（2026-11-26）：左栏「社区」分组里的入口，看本机各功能共用的 WeLink 登录、限流与调用情况；只在公司版启用。
+if (require('../core/distribution').target === 'company') {
+  try {
+    const welinkBlackboardPage = require('./welink-blackboard-page').createWelinkBlackboardPage({
+      document, window, ipcRenderer,
+      closeOtherPanels: () => { window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close(); },
+      showMessage: message => showToast(message),
+    });
+    window.__welinkBlackboardHide = () => welinkBlackboardPage.close();
+    window.__welinkBlackboardOpen = () => welinkBlackboardPage.open();
+  } catch (error) { console.warn('[welink-blackboard] 公共黑板页未启动：', error.message); }
+}
 // AI 网页会话（2026-10-25）：启动中心「AI 网页」、侧栏「网页」分组、主区内嵌官网。打开前先回到主页收起其他视图。
 try {
   // 网页圆桌（2026-10-28）：用已登录的 AI 网页同题提问、互评、队长汇总；从侧栏「网页」分组或网页顶栏的圆桌按钮进入。
@@ -10050,7 +10063,7 @@ document.getElementById('btn-team')?.remove();
     document, window, ipcRenderer, selectSession: id => selectSession(id, { forceScrollBottom: true }),
     closeOtherPanels: () => {
       window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close();
-      for (const key of ['__teamHide', '__weclawHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide']) window[key]?.();
+      for (const key of ['__teamHide', '__weclawHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide', '__welinkBlackboardHide']) window[key]?.();
     },
     showMessage: message => showToast(message),
   });
@@ -10068,7 +10081,7 @@ document.getElementById('btn-team')?.remove();
     document, window, ipcRenderer,
     closeOtherPanels: () => {
       window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close();
-      for (const key of ['__teamHide', '__avatarHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide']) window[key]?.();
+      for (const key of ['__teamHide', '__avatarHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide', '__welinkBlackboardHide']) window[key]?.();
     },
     showMessage: message => showToast(message),
   });
@@ -10366,7 +10379,7 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
   // 2026-09-02：session-created 会直接亮出终端面板，但此前只隐藏了群聊面板。
   // 主区是 flex 容器，学习面板若还开着就会和终端并排各占一半。
   if (window.__studyHide) window.__studyHide();
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
@@ -11902,7 +11915,7 @@ if (process && process.env && process.env.CLAUDE_HUB_E2E === '1') {
           currentView = 'card';
           _cardHistoryHydratedSid = sessionId;
           if (window.__studyHide) window.__studyHide();   // 同上：别和学习面板并排
-          if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+          if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
           if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
           window.__companyRoomsHide?.();
           window.__rulesHide?.(); // 独立页面互斥

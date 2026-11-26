@@ -329,8 +329,9 @@ function createModelUiController({
     const kind = session && session.kind ? session.kind : '';
     // CodeAgent：用打开菜单时取回的这个会话所在号的清单（showModelPicker → codeagent:session-models），取不到才用共用列表。
     const ownList = session && Array.isArray(session._codeagentModelOptions) ? session._codeagentModelOptions : null;
+    // 公司版自有 API 的清单每项带 route（R49）：会话只能在它实际走的线路里换模型，网关会话只列网关模型，自有接口会话只列它的模型。
     const options = (session?.companyRoute === 'local' || session?.cliApiProfileId) && Array.isArray(session._localCliModelOptions) ? session._localCliModelOptions
-      : ownList || getModelOptions(require('../core/chatgpt-web-models').isChatgptWebModel(session?.currentModel?.id) ? 'chatgpt' : kind);
+      : ownList || require('./launch-model-cards').optionsForSession(getModelOptions(require('../core/chatgpt-web-models').isChatgptWebModel(session?.currentModel?.id) ? 'chatgpt' : kind), session);
     const automaticCodeAgent = !!(session && session._codeagentAutomatic && !session.modelConfirmationRequired && !session._codeagentModelRecovery);
     const strategy = automaticCodeAgent ? null : modelSwitchStrategy(kind);
     const currentId = session && session.currentModel ? (session.currentModel.id || '') : '';
@@ -359,8 +360,27 @@ function createModelUiController({
     if (options.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'model-picker-empty';
-      empty.textContent = /^codeagent(?:-resume)?$/.test(kind) ? '沿用 CLI 当前模型' : '该会话类型没有可用模型目录';
+      const route = require('./launch-model-cards').sessionLine(session);
+      empty.textContent = /^codeagent(?:-resume)?$/.test(kind) ? '沿用 CLI 当前模型'
+        : route ? (route === 'gateway' ? '部门 API key 这边还没有可选的模型。' : route === 'company' ? '公司模型这边还没有可选的模型。'
+          : route === 'api' ? '这个 API 账号还没有可选的模型。' : route === 'local' ? '本机 CLI 配置里还没有可选的模型。' : '这个接口还没有可选的模型。')
+          : '该会话类型没有可用模型目录';
       menu.appendChild(empty);
+      // 拿不到模型时就地给去处（开箱即用）：一键打开「设置 → 自有 API」这个工具的页面。
+      if (route && typeof document.defaultView?.__companyApiOpen === 'function') {
+        const go = document.createElement('button');
+        go.type = 'button';
+        go.className = 'model-picker-item model-picker-settings';
+        go.dataset.r49Settings = '1';
+        go.textContent = '去 设置 → 自有 API 添加模型';
+        const base = String(kind).replace(/-resume$/, '');
+        go.addEventListener('click', event => {
+          event.stopPropagation();
+          closeModelPicker();
+          void document.defaultView.__companyApiOpen(base, undefined, route === 'gateway' ? { mode: 'gateway' } : {});
+        });
+        menu.appendChild(go);
+      }
       appendBackstageModelHint(menu, session);
       return;
     }
@@ -400,7 +420,14 @@ function createModelUiController({
       const accountCache = options.some(option => option.source === 'claude-cli-cache');
       const sourceName = official ? '官方模型目录'
         : (accountCache ? '当前账号模型缓存' : 'Claude CLI 兼容目录');
-      menuNote(menu, `${sourceName} · `
+      // 公司版自有 API 会话（R49）：清单来自部门 key 网关 / 公司模型 / 自有接口，不说「官方目录、按账号解析」。
+      const route = require('./launch-model-cards').sessionLine(session);
+      if (route && (route === 'api' || route === 'local' || options.some(option => option.route))) {
+        menuNote(menu, route === 'gateway' ? 'API 网关（部门 key）的模型 · 支持会话内切换；换线路请新建会话。'
+          : route === 'company' ? '公司模型 · 支持会话内切换；换线路请新建会话。'
+            : route === 'api' ? '自有 API 账号的模型 · 支持会话内切换；换线路请新建会话。'
+              : route === 'local' ? '本机 CLI 配置里的模型 · 支持会话内切换；换线路请新建会话。' : '自有接口的模型 · 支持会话内切换；换线路请新建会话。');
+      } else menuNote(menu, `${sourceName} · `
         + '支持会话内切换；“最新可用版本”由 CLI 按当前账号解析。');
       // 这条提醒正是 Opus 5.5 那次缺失的东西：既说清有什么新模型，也说清怎么办。
       const blocked = options.filter(option => option.disabled && option.upgradeTo);

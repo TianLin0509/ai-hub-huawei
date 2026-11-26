@@ -561,13 +561,34 @@ function registerSessionIpc(ipcMain, deps) {
     ? require('../../core/company-model-proxy').gatewayModelIds(require('../../core/data-dir').getHubDataDir())
     : require('../../core/company-model-proxy').MODEL_IDS;
 
+  // 自有接口（公司版 providers.<kind>.backend = api）的模型表：默认模型 + 可选模型（R45 起一个接口可配多个）。
+  // 全局线路此刻切到了公司模型 / 网关时，自有接口留在 own_api 里，ownSource 两种情况都读得到（R49 审查 P1-1）。
+  const ownApiModelIds = (kind = 'claude') => {
+    try {
+      const o = require('../../core/company-api-config').ownSource(require('../../core/hub-config').readConfigJsonForUpdate(), kind);
+      return [...new Set([o.model, ...(o.models || [])].filter(Boolean))];
+    } catch { return []; }
+  };
+  // 公司版会话在会话内能切到的模型（prepare 与 confirm 共用一个口径，R49 审查 P1-1）：
+  // 公司模型 / 网关 → 反代模型表；沿用本机 CLI 配置或命名 API 账号 → 本机目录 / 账号模型表；自有接口 → 它的模型表。
+  // 返回 null 表示不是公司版线路，按 CLI 官方模型名校验。
+  function companySwitchModels(session, kind) {
+    if (!session || !['codex', 'claude'].includes(kind)) return null;
+    if (session.companyRoute === 'proxy') return proxyModelIds(session);
+    if (session.companyRoute === 'local' || session.cliApiProfileId) return localCliModels(session).models.map(model => model.id);
+    if (session.companyRoute === 'api') return ownApiModelIds(kind);
+    return null;
+  }
+
   ipcMain.handle('prepare-session-model-switch', async (_event, payload = {}) => {
     const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : '';
     const targetModel = typeof payload.modelId === 'string' ? payload.modelId.trim() : '';
     const session = sessionId ? sessionManager.getSession(sessionId) : null;
     const kind = String(session && session.kind || '').replace(/-resume$/, '').toLowerCase();
-    const companyProxy = session?.companyRoute === 'proxy';
-    const validModel = companyProxy ? proxyModelIds(session).includes(targetModel) : isClaudeModelSelection(targetModel);
+    // 公司版各线路（R49）：能切到的是这条线路的模型表，不是 Claude 官方模型名。
+    let routeModels = null;
+    try { routeModels = companySwitchModels(session, kind); } catch { routeModels = []; }
+    const validModel = routeModels ? routeModels.includes(targetModel) : isClaudeModelSelection(targetModel);
     if (!session || kind !== 'claude' || !validModel) {
       return { ok: false, error: 'invalid-claude-switch', message: '无法为当前会话准备 Claude 模型切换' };
     }
@@ -575,7 +596,7 @@ function registerSessionIpc(ipcMain, deps) {
       if (claudeModelPreferenceGuards.has(sessionId)) {
         await restoreClaudePreferenceGuard(sessionId, { waitForWrite: false });
       }
-      const snapshot = captureClaudeModelPreference(targetModel, companyProxy
+      const snapshot = captureClaudeModelPreference(targetModel, session.companyRoute === 'proxy' || (routeModels && (session.claudeConfigDir || session.claudeRuntimeHome))
         ? { configDir: session.claudeConfigDir || session.claudeRuntimeHome } : undefined);
       const timer = setTimeout(() => {
         void restoreClaudePreferenceGuard(sessionId).then(restored => {
@@ -667,15 +688,10 @@ function registerSessionIpc(ipcMain, deps) {
       return {ok:true,model:current,effort:session.effort};
     }
     const kind = String(session.kind || '').replace(/-resume$/, '').toLowerCase();
-    const local = (session.companyRoute === 'local' || session.cliApiProfileId) && ['codex', 'claude'].includes(kind);
-    const companyProxy = session.companyRoute === 'proxy' && ['codex', 'claude'].includes(kind);
-    let localOptions;
-    if (local) {
-      try { localOptions = localCliModels(session).models; }
-      catch (error) { return { ok: false, message: error.message }; }
-    }
-    const valid = companyProxy ? proxyModelIds(session).includes(modelId)
-      : local ? localOptions.some(model => model.id === modelId) : kind === 'codex'
+    let routeModels;
+    try { routeModels = companySwitchModels(session, kind); }
+    catch (error) { return { ok: false, message: error.message }; }
+    const valid = routeModels ? routeModels.includes(modelId) : kind === 'codex'
       ? isCodexConversationModelId(modelId)
       : kind === 'claude'
         ? isClaudeModelSelection(modelId)
@@ -688,7 +704,7 @@ function registerSessionIpc(ipcMain, deps) {
           ? /^(?:gemini|claude|gpt-oss)[\w.-]+$/.test(modelId)
         : false;
     if (!valid) return { ok: false, error: 'invalid-model', message: '该模型不属于当前 CLI 的会话模型目录' };
-    if (kind === 'codex' && !local && !companyProxy) modelId = require('../../core/model-options').normalizeCodexSessionModel(modelId);
+    if (kind === 'codex' && !routeModels) modelId = require('../../core/model-options').normalizeCodexSessionModel(modelId);
     // DeepSeek on Claude Code：终端里切的是接入方式对应的真实模型名，Hub 记显示用的 id。
     if (kind === 'deepseek-claude') {
       const profile = require('../../core/deepseek-claude-profile');
@@ -1049,6 +1065,10 @@ function registerSessionIpc(ipcMain, deps) {
         }
         const entry = menu.recordUsage(options.dataDir, key, serve.toUsageSnapshot(served), { label, source: 'serve', cleanVersion });
         if (entry) sendToRenderer('codeagent-usage-changed', { key });
+      } else if (served?.error === serve.SERVE_EMPTY_MODELS) {
+        // serve 连上了、清单是空的：记一笔，「没有可用 CodeAgent」的判断要认出这种号（R49-2 审查 P1-1）。
+        const pool = require('../../core/codeagent-pool'), probe = require('../../core/codeagent-model-probe');
+        probe.writeEmptyCatalog(key === 'personal' ? pool.personalModelsFile(options.dataDir) : require('path').join(options.configDir, probe.MODELS_FILE));
       }
       return served;
     }).finally(() => { codeagentServePending.delete(key); });

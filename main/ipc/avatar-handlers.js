@@ -39,9 +39,12 @@ function gatewayRow(dataDir, deps = {}) {
     // configured：存了「分身用部门 key」；selected：它此刻真的生效（key 能用、所选模型还在表里）。
     // 和会话实际走的线路同一口径（core/feature-agent-choice.js resolve）：失效时页面亮实际生效的 CodeAgent 账号，残留由点回 CodeAgent 时一并清掉（审查 P1）。
     const configured = pref?.kind === route.KIND;
-    const selected = configured && a.available && (!pref.model || models.includes(pref.model));
+    // 没选过、走自动默认（没有可用 CodeAgent + 部门 key 可用，R49-2）也算选中：自检、试答、后台会话三处同一口径（审查 P1-2）。
+    let auto = false;
+    if (!pref && a.available) { try { auto = deps.autoDefault ? !!deps.autoDefault() : typeof route.autoDefault === 'function' && route.autoDefault(dataDir, deps.availability || {}); } catch { auto = false; } }
+    const selected = (configured && a.available && (!pref.model || models.includes(pref.model))) || !!auto;
     return { id: route.KIND, label: route.LABEL, usable: a.available, reason: a.available ? '' : `${a.reason}（设置 → 自有 API → API 网关）`,
-      models, defaultModel: view.model || '', pool: false, gateway: true, configured, selected, model: selected ? pref.model || '' : '' };
+      models, defaultModel: view.model || '', pool: false, gateway: true, configured, selected, ...(auto ? { auto: true } : {}), model: selected && pref ? pref.model || '' : '' };
   } catch { return null; }
 }
 

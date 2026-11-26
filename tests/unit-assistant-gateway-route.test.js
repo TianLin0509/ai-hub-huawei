@@ -66,12 +66,12 @@ test('开箱即用：没 CodeAgent、存过部门 key、有 Claude Code 时默�
   assert.equal(r.opts.model, 'deepseek-v4.1-flash');
   assert.ok(!Object.keys(r.opts).some(k => /^codeagent/i.test(k)));
   assert.doesNotThrow(() => choice.assertSessionKind(r.kind, r.opts));
-  // 其余 7 项不自动改走网关：没选过就保持原默认（CodeAgent），opts 原样。
+  // R49-2（11-26）：其余 7 项没选过时同样默认走部门 key（以前只有助理，其余默认落到用不了的 CodeAgent）。
   for (const id of ['ppt', 'pptMake', 'pptImgtext', 'avatar', 'forum', 'meeting', 'text']) {
-    assert.equal(choice.resolve(dir, id, { backends }).selected, null, id);
-    const opts = { purpose: route.FEATURE_PURPOSES[id] };
-    const other = choice.session(dir, id, 'codeagent', opts, { backends });
-    assert.equal(other.kind, 'codeagent', id); assert.equal(other.opts, opts, id);
+    assert.deepEqual(choice.resolve(dir, id, { backends }).selected, { kind: 'api-gateway', model: '' }, id);
+    const other = choice.session(dir, id, 'codeagent', { purpose: route.FEATURE_PURPOSES[id] }, { backends });
+    assert.equal(other.kind, 'claude', id); assert.equal(other.opts.apiGatewayRoute, true, id);
+    assert.doesNotThrow(() => choice.assertSessionKind(other.kind, other.opts), id);
   }
   // 状态页写清默认是部门 key。
   const st = choice.state(dir, { backends });
@@ -265,8 +265,11 @@ test('本机反代常驻：只把论坛 / PPT / 分身 / 会议 / 文字之一�
   routes.setFeaturePreference(dir, 'forum', { kind: 'api-gateway', model: '' });
   assert.equal(route.inUse(dir, { findCommand: () => null }), false, '本机没有 Claude Code：会话起不来，不常驻');
   routes.setFeaturePreference(dir, 'forum', null);
-  assert.equal(route.inUse(dir, claudeOnly), false, '助理显式选了 CodeAgent：没装 CodeAgent 也不走自动默认');
-  routes.setFeaturePreference(dir, 'assistant', null);
+  // R49-2：助理显式选了 CodeAgent，其余 7 项没选过、没装 CodeAgent → 它们自动走部门 key，反代要常驻。
+  assert.equal(route.inUse(dir, claudeOnly), true, '其余功能没选过 + 没 CodeAgent：自动默认，常驻');
+  for (const id of SESSION_FEATURES) routes.setFeaturePreference(dir, id, { kind: 'codeagent', model: '' });
+  assert.equal(route.inUse(dir, claudeOnly), false, '8 项都显式选了 CodeAgent：没装 CodeAgent 也不走自动默认');
+  for (const id of SESSION_FEATURES) routes.setFeaturePreference(dir, id, null);
   assert.equal(route.inUse(dir, claudeOnly), true, '助理没选过 + 没 CodeAgent：自动默认，常驻');
 });
 

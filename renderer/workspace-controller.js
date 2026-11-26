@@ -13,8 +13,8 @@
   const companyProvider = Object.create(null);
   const companyPick = Object.create(null);
   let companyProxyStatus = null;
-  const companyPickModel = kind => {
-    const pick = companyPick[kind];
+  const companyPickModel = kind => pickModelOf(kind, companyPick[kind]);
+  const pickModelOf = (kind, pick) => {
     if (!pick) return '';
     if (pick.source === 'company') return pick.model;
     if (pick.source === 'api') return pick.model;
@@ -26,6 +26,9 @@
     return own && own.backend === 'api' ? own.model || '' : '';
   };
   const launchModelOptions = kind => companyApiKind(kind) ? (companyApiModels[kind] || []) : modelOptionsFor(kind);
+  // 打开启动中心时默认选的卡（R49 审查 P1-2）：「设为默认」存下的模型在当前卡里就选它，否则用保存的来源和模型（上次选的）。
+  const companyDefaultPick = (kind, codeagentInstalled = require('./codeagent-preference').detectedInstalled()) =>
+    modelCards.defaultPick(kind, companyProvider[kind], { codeagentInstalled, preferred: hubDefaultModels[kind] || '', status: companyProxyStatus });
   const accountRisk = require('./account-risk-state');
   // 字段说明：纯说明进标签旁的 ⓘ 悬停卡，要处理的提示才留在原位（renderer/launch-field-hint.js，2026-11-22）。
   const fieldHint = require('./launch-field-hint');
@@ -378,7 +381,7 @@
     // 群聊成员走的也是这里，所以「设为默认」对群聊同样生效。
     // 公司版 Claude Code / Codex / DSH 没指定模型时（群聊成员刚换成这个工具）：用启动中心保存的来源和模型，也就是上次选的。
     const savedCompanyModel = () => {
-      const id = modelCards.defaultPick(kind, companyProvider[kind], { codeagentInstalled: require('./codeagent-preference').detectedInstalled() })?.model;
+      const id = pickModelOf(kind, companyDefaultPick(kind));
       return modelOptions.some(option => option.id === id) ? id : modelOptions[0]?.id || '';
     };
     const model = companyApiKind(kind) ? (modelOptions.some(option => option.id === modelId) ? modelId : savedCompanyModel()) : modelOptions.some(option => option.id === modelId)
@@ -1169,7 +1172,8 @@
     const supported = !!selectedModel;
     button.hidden = !supported;
     if (!supported) return;
-    const defaults = launchSelection(selectedKind, resolveSessionTuning(selectedKind, ''));
+    // 公司版的「默认」是下次打开默认选中的那张卡（R49 审查 P1-2）：空 id 是「沿用本机 CLI 配置」卡，不能当成「没指定」。
+    const defaults = launchSelection(selectedKind, resolveSessionTuning(selectedKind, companyApiKind(selectedKind) ? pickModelOf(selectedKind, companyDefaultPick(selectedKind)) : ''));
     const already = JSON.stringify(currentLaunchSelection()) === JSON.stringify(defaults);
     button.disabled = already || defaultsSaving || accountSaving || submitting || (selectedKind === 'codex' && !!accountReadError);
     button.textContent = defaultsSaving ? '正在保存…' : already ? (EFFORT_PICKER ? '整组默认 ✓' : '默认 ✓') : (EFFORT_PICKER ? '将整组设为默认' : '设为默认');
@@ -2185,23 +2189,15 @@
     companyApiBackend[kind] = provider.backend || 'local';
     companyProvider[kind] = provider;
     if (result.proxy !== undefined) companyProxyStatus = result.proxy;
-    // 模型卡：两个公司模型（经本机反代）+ 这个工具自己的来源（自有接口的模型，或沿用本机 CLI 配置）。
-    // 隐藏的模型下拉跟着卡片走（其余代码和测试仍读它）。
-    const own = kind === 'deepseek-acp' ? null : provider.apiProfiles?.length ? { backend: 'local' }
-      : (provider.own || { backend: provider.backend === 'api' ? 'api' : 'local', model: provider.model || '' });
-    const models = [...modelCards.companyModels(provider),
-      ...modelCards.gatewayModels(provider).map(m => ({ id: m.id, label: m.id + '（API 网关）' })),
-      ...(provider.apiProfiles || []).flatMap(profile => modelCards.profileModels(profile).map(model => ({ id: model, label: profile.label + ' · ' + model }))),
-      ...(own ? (own.backend === 'api' ? modelCards.ownModelList({ ...provider, own }).map(model => ({ id: model || '', label: model ? model + '（自有接口）' : '自有接口默认模型' })) : [{ id: '', label: '沿用本机 CLI 配置' }]) : []),
-      ...(kind === 'deepseek-acp' && provider.own?.backend === 'api' ? modelCards.ownModelList(provider).map(model => ({ id: model, label: model + '（自有接口）' })) : [])];
+    // 默认卡、模型清单都要看本机有没有 CodeAgent（没有就不默认公司模型），先等这次检测出结果（已测过时立即返回）。
+    const codeagentInstalled = await require('./codeagent-preference').refresh(ipcRenderer).catch(() => null);
+    // 模型清单与模型卡同源（R49）：公司模型 / API 网关 / 自有接口 / 沿用本机 CLI 配置，卡上不显示的这里也不列；每项带 route。
+    // 隐藏的模型下拉、会话内切换和群聊成员都读它。一个也没有时存空表，不回落到官方模型清单。
+    const models = modelCards.modelOptions(kind, provider, companyProxyStatus, { codeagentInstalled });
     companyApiModels[kind] = models;
-    setRuntimeModelOptions(kind, models);
+    setRuntimeModelOptions(kind, models, { keepEmpty: true });
     // 本次打开里没点过卡：默认选保存的来源和模型（也就是上次选的）。点过就保留点选，不被重新读配置冲掉。
-    // 默认卡要看本机有没有 CodeAgent（没有就不默认公司模型），先等这次检测出结果（已测过时立即返回）。
-    if (!companyPick[kind]) {
-      const codeagentInstalled = await require('./codeagent-preference').refresh(ipcRenderer).catch(() => null);
-      if (!companyPick[kind]) companyPick[kind] = modelCards.defaultPick(kind, provider, { codeagentInstalled });
-    }
+    if (!companyPick[kind]) companyPick[kind] = companyDefaultPick(kind, codeagentInstalled);
     if (selectedKind === kind) selectedModel = companyPickModel(kind);
     // 账号下拉（公司模型）：和 CodeAgent 同一份号池状态。读不到不挡建会话，自动挑号照常可用。
     await ipcRenderer.invoke('codeagent-pool:list').then(status => {

@@ -465,7 +465,6 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   // 部门 API key（网关）行选中时（所有分身共用，R45）：账号卡亮它，模型卡列网关模型。
   const gatewayOn = () => data?.backends?.rows?.find(r => r.gateway && r.selected) || null;
   // 存过「分身用部门 key」（不管此刻是否生效）：点回 CodeAgent 账号时连失效的残留一起清掉。
-  const gatewayStored = () => !!data?.backends?.rows?.some(r => r.gateway && (r.selected || r.configured));
   function backend(a) {
     const rows = data.backends.rows, gw = gatewayOn(), chosen = gw || rows.find(r => r.id === a.backend.account && !r.gateway) || rows[0], models = chosen?.models || [];
     const model = gw ? gw.model : a.backend.model;
@@ -852,7 +851,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (op === 'source-del') { await save({ sources: av.sources.filter((_, n) => n !== Number(b.dataset.i)) }); return; }
     // 部门 API key（网关）：写「功能使用的 Agent → 分身」那一项（所有分身共用）；点回 CodeAgent 账号时撤掉它。
     if (op === 'account' && b.dataset.id === 'api-gateway') { await setGateway({ kind: 'api-gateway', model: '' }, '已改用部门 API key，下一条消息起生效'); return; }
-    if (op === 'account') { if (gatewayStored() && !(await setGateway(null))) return; await save({ backend: { ...av.backend, account: b.dataset.id, model: '' } }); return; }
+    if (op === 'account') { const back = accountSwitchChoice(data?.backends?.rows); if (back && !(await setGateway(back))) return; await save({ backend: { ...av.backend, account: b.dataset.id, model: '' } }); return; }
     if (op === 'model' && gatewayOn()) { await setGateway({ kind: 'api-gateway', model: b.dataset.id }, '已换模型，下一条消息起生效'); return; }
     if (op === 'model') { await save({ backend: { ...av.backend, model: b.dataset.id } }); return; }
     if (op === 'effort') { await save({ backend: { ...av.backend, effort: b.dataset.k } }); }
@@ -974,4 +973,11 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   return { open, close, isOpen, destroy() { close(); window.removeEventListener('resize', place); ipcRenderer.removeListener?.('avatar:changed', onChanged); ipcRenderer.removeListener?.('company-assistant:changed', onAssistantChanged); ipcRenderer.removeListener?.('feature-agents:changed', onChanged); page?.remove(); page = null; } };
 }
 
-module.exports = { createAvatarPage, paginate, waited, scopeText, modeText, scopeSummary, humanScanError, tryoutLow, externalRows, markCards, cardNo };
+// 点回 CodeAgent 账号卡时「功能使用的 Agent → 分身」要存成什么（R49-2 窄复审 P2-1）：网关行此刻选中（手动选的或自动默认）
+// 或存着部门 key 选择时，存明确的 CodeAgent；只撤掉选择（null）的话，没有可用 CodeAgent 时自动默认会马上把部门 key 盖回来。
+// 返回 null 表示不用改。
+function accountSwitchChoice(rows) {
+  return (Array.isArray(rows) ? rows : []).some(r => r && r.gateway && (r.selected || r.configured)) ? { kind: 'codeagent', model: '' } : null;
+}
+
+module.exports = { accountSwitchChoice, createAvatarPage, paginate, waited, scopeText, modeText, scopeSummary, humanScanError, tryoutLow, externalRows, markCards, cardNo };

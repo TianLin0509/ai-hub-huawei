@@ -140,7 +140,8 @@ test('分身页交互：选部门 key 行 → 换网关模型 → 点回 CodeAge
   await h.click({ av: 'account', id: 'personal' });
   const names = h.calls.slice(before).map(c => c[0]);
   assert.ok(names.includes('feature-agents:set') && names.indexOf('feature-agents:set') < names.indexOf('avatar:update'), '先撤销部门 key，再保存 CodeAgent 账号');
-  assert.equal(lastSet(h).choice, null);
+  // R49-2 窄复审 P2-1：存明确的 CodeAgent（只撤掉的话，没有可用 CodeAgent 时自动默认会把部门 key 盖回来）。
+  assert.deepEqual(lastSet(h).choice, { kind: 'codeagent', model: '' });
   assert.equal(h.calls.filter(c => c[0] === 'avatar:update').at(-1)[1].patch.backend.account, 'personal');
   // 向导高级设置的账号下拉：不列网关行
   await h.click({ av: 'new' });
@@ -162,7 +163,7 @@ test('分身页交互：key 失效时网关行不亮、模型卡是 CodeAgent �
   assert.doesNotMatch(html, /class="avx-ac on" data-av="account" data-id="api-gateway"/);
   assert.match(html, /账号默认模型/);
   await h.click({ av: 'account', id: 'personal' });
-  assert.equal(lastSet(h)?.choice, null, '失效残留也清掉');
+  assert.deepEqual(lastSet(h)?.choice, { kind: 'codeagent', model: '' }, '失效残留也改掉（存成明确的 CodeAgent）');
   h.page.destroy();
 });
 

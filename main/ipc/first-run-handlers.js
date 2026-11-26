@@ -46,7 +46,7 @@ function registerFirstRunIpc(ipcMain, { dataDir, isCompany, send, envCheck, tool
         const current = pool.readSettingsModel(config.configDir);
         probe.writeProbed(pool.personalModelsFile(dataDir()), { ...served, source: 'serve',
           defaultModel: served.models.find(model => model.toLowerCase() === String(current || '').toLowerCase()) || '' });
-      }
+      } else if (served?.error === serve.SERVE_EMPTY_MODELS) probe.writeEmptyCatalog(pool.personalModelsFile(dataDir())); // R49-2 审查 P1-1
       return served?.ok ? served : { ok: false, error: served?.error || '未知原因' };
     },
     proxyEnabled: usesOwnProxy,

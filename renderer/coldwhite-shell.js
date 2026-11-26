@@ -22,11 +22,11 @@ function installColdwhiteShell(doc = globalThis.document) {
   app.append(footer);
   require('./status-footer-layout').installStatusFooterLayout(doc);
   installHwShell(doc);
-  const panelIds = ['team-page', 'avatar-page', 'weclaw-page', 'cloud-page', 'hub-workspace', 'rules-panel', 'writing-panel', 'account-page', 'codeagent-accounts-page', 'xresearch-panel', 'study-panel', 'progress-panel'];
+  const panelIds = ['team-page', 'avatar-page', 'weclaw-page', 'cloud-page', 'hub-workspace', 'rules-panel', 'writing-panel', 'account-page', 'codeagent-accounts-page', 'xresearch-panel', 'study-panel', 'progress-panel', 'welink-blackboard-page'];
   const watched = new Set();
   const navigation = ['btn-home','btn-rules','btn-assistant','btn-company-assistant','btn-company-meeting','btn-company-ppt',
     'btn-company-rooms',
-    'btn-company-forum','btn-company-attendance','btn-company-w3','btn-profile','btn-community','btn-research','btn-study','btn-progress','btn-wireless','btn-rail-memo','btn-rail-capabilities','btn-cloud','btn-team','btn-avatar','btn-weclaw','btn-rail-accounts','btn-writing'];
+    'btn-company-forum','btn-company-attendance','btn-company-w3','btn-profile','btn-community','btn-welink-blackboard','btn-research','btn-study','btn-progress','btn-wireless','btn-rail-memo','btn-rail-capabilities','btn-cloud','btn-team','btn-avatar','btn-weclaw','btn-rail-accounts','btn-writing'];
   let scheduled = false;
   const sync = () => {
     scheduled = false;
@@ -69,6 +69,8 @@ function installColdwhiteShell(doc = globalThis.document) {
       if (current === 'btn-home' && doc.body.classList.contains('profile-page-open')) current = 'btn-profile';
       // 「社区」页（renderer/community-page.js）
       if (current === 'btn-home' && doc.body.classList.contains('community-page-open')) current = 'btn-community';
+      // 「WeLink (Beta)」公共黑板页（renderer/welink-blackboard-page.js）
+      if (current === 'btn-home' && doc.body.classList.contains('welink-blackboard-page-open')) current = 'btn-welink-blackboard';
       if (current === 'btn-home' && (doc.body.classList.contains('assistant-session-active') || doc.body.classList.contains('assistant-page-open'))) current = 'btn-assistant';
     }
     for (const id of navigation) {

@@ -93,7 +93,8 @@ function normalizeRuntimeModelOption(option) {
   };
 }
 
-function setRuntimeModelOptions(kind, options) {
+// keepEmpty：调用方的清单就是权威结果（公司版自有 API 的模型清单，R49），空了也存空表，不回落到内置的官方模型清单。
+function setRuntimeModelOptions(kind, options, { keepEmpty = false } = {}) {
   const base = String(kind || '').replace(/-resume$/, '');
   if (!base) return [];
   const normalized = [];
@@ -104,7 +105,7 @@ function setRuntimeModelOptions(kind, options) {
     seen.add(option.id.toLowerCase());
     normalized.push(option);
   }
-  if (normalized.length) RUNTIME_MODEL_OPTIONS_BY_KIND.set(base, normalized);
+  if (normalized.length || keepEmpty) RUNTIME_MODEL_OPTIONS_BY_KIND.set(base, normalized);
   else RUNTIME_MODEL_OPTIONS_BY_KIND.delete(base);
   return normalized.map(option => ({ ...option }));
 }

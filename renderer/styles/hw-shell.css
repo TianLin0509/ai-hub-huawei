@@ -170,10 +170,10 @@
   background: var(--hw-surface) !important; border-radius: var(--hw-r-lg); box-shadow: var(--hw-e1) !important;
   padding: 6px 0 8px; display: flex; flex-direction: column; align-items: stretch;
 }
-:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-drawer-head { height: 32px; padding: 0; justify-content: center; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-drawer-head { height: 24px; padding: 0; justify-content: center; }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-drawer-head strong { display: none; }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-navigation { padding: 0 4px; gap: 4px; align-items: center; }
-:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .hw-nav-cap { display: block; width: 20px; height: 1px; margin: 6px auto; padding: 0; overflow: hidden; font-size: 0; background: var(--hw-line); }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .hw-nav-cap { display: block; width: 20px; height: 1px; margin: 2px auto; padding: 0; overflow: hidden; font-size: 0; background: var(--hw-line); }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .hw-nav-cap[data-cap="work"] { display: none; }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav, .rail-group-trigger) { position: relative; width: 38px; height: 38px; min-height: 38px; margin: 0 auto; }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-group { display: flex; justify-content: center; }
@@ -194,8 +194,8 @@
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::after { left: 50%; top: 50%; margin: -10px 0 0 -10px; width: 20px; height: 20px; }
 
 /* 图标栏配字（5.5.8）：栏宽仍 64px；图标在上、12px 名称在下，单行，过长省略；当前页名称随图标变蓝 */
-:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-navigation { padding: 0 1px; gap: 2px; }
-:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities { margin: 0 1px; gap: 2px; border-top: 0; background: linear-gradient(var(--hw-line), var(--hw-line)) center top / 20px 1px no-repeat; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-navigation { padding: 0 1px; gap: 0; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities { margin: 0 1px; padding: 2px 0 0; gap: 0; border-top: 0; background: linear-gradient(var(--hw-line), var(--hw-line)) center top / 20px 1px no-repeat; }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav, .rail-group-trigger, .rail-utilities #btn-theme, .rail-utilities #btn-options) {
   flex-direction: column; justify-content: flex-start; width: var(--hw-rail-control-width); height: 46px; min-height: 46px; padding: 3px 0 0; gap: 1px;
 }
@@ -210,6 +210,45 @@
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav.cw-current, .rail-group-trigger.rail-group-current)::before { left: -1px; top: 13px; }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::after { top: 5px; margin: 0 0 0 -10px; }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options) { justify-content: flex-end; padding: 0 0 3px; }
+
+/* 窄栏按视口高度自适应（2026-11-26）：公司版左侧栏同时显示员工助手 Beta、WeLink Beta 与分身 Beta 共 14+3 个入口时，
+   在 900px 与 800px 常见窗高下保持所有图标与单行文字完整、无纵向滚动；>940px 保持 46px 原尺寸，公开版无 data-hw-shell 不受影响。 */
+@media (max-height: 940px) {
+  :root[data-hw-shell][data-hw-rail="narrow"]:not([data-display-mode="phone"]) body #app-body #scene-rail,
+  :root[data-hw-shell][data-hw-rail="narrow"]:not([data-display-mode="phone"]) body .app-container.rail-pinned #app-body #scene-rail,
+  :root[data-hw-shell][data-hw-rail="narrow"]:not([data-display-mode="phone"]) body #app-body #scene-rail:is(:hover,:has(:focus-visible)) { top: 2px; bottom: 4px; padding: 4px 0 4px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-drawer-head { height: 20px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .hw-nav-cap { margin: 1px auto; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav, .rail-group-trigger, .rail-utilities #btn-theme, .rail-utilities #btn-options) { height: 42px; min-height: 42px; padding: 2px 0 0; gap: 0; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .btn-shell-nav .btn-icon { width: 22px; height: 22px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .btn-shell-nav .btn-icon::before { width: 19px; height: 19px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav, .rail-group-trigger) > .btn-label,
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options) > .rail-utility-label { line-height: 15px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav.cw-current, .rail-group-trigger.rail-group-current)::before { top: 11px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options) { padding: 0 0 2px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::after { top: 3px; width: 19px; height: 19px; margin: 0 0 0 -9.5px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .btn-profile-entry { height: 43px; padding: 2px 0 0; gap: 1px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.pf-entry-avatar, .pf-entry-avatar .pf-avatar) { width: 24px; height: 24px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .pf-entry-name { line-height: 15px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .pf-entry-lv { top: 16px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-beta { top: 0; right: 1px; font-size: 8.5px; line-height: 12px; }
+}
+@media (max-height: 840px) {
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-drawer-head { height: 18px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-pin { width: 20px; height: 18px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav, .rail-group-trigger, .rail-utilities #btn-theme, .rail-utilities #btn-options) { height: 38px; min-height: 38px; padding: 2px 0 0; gap: 0; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .btn-shell-nav .btn-icon { width: 19px; height: 19px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .btn-shell-nav .btn-icon::before { width: 17px; height: 17px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav, .rail-group-trigger) > .btn-label,
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options) > .rail-utility-label { font-size: 11px; line-height: 14px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav.cw-current, .rail-group-trigger.rail-group-current)::before { top: 9px; height: 18px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::after { top: 3px; width: 17px; height: 17px; margin: 0 0 0 -8.5px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .btn-profile-entry { height: 41px; padding: 2px 0 0; gap: 2px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.pf-entry-avatar, .pf-entry-avatar .pf-avatar) { width: 21px; height: 21px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .pf-entry-name { font-size: 11px; line-height: 14px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .pf-entry-lv { top: 13px; height: 11px; line-height: 11px; font-size: 8px; }
+  :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-beta { top: 0; right: 0; padding: 0 2px; font-size: 8px; line-height: 11px; }
+}
 
 /* ---------- 顶栏（窗口标题栏）：与底色同层，无分隔线 ---------- */
 :root[data-hw-shell] body #app-toolbar { background: var(--hw-bg) !important; border-bottom: 0 !important; box-shadow: none !important; color: var(--hw-text-1); }

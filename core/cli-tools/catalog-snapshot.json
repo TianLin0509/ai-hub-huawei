@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "publishedAt": "2026-11-17T20:07:25.181Z",
+  "publishedAt": "2026-11-26T17:38:38.743Z",
   "components": [
     {
       "id": "claude",
@@ -175,7 +175,34 @@
           "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
         ]
       }
+    },
+    {
+      "id": "opencode",
+      "name": "opencode 终端 Agent",
+      "version": "1.19.6",
+      "kind": "tgz",
+      "license": "MIT",
+      "preferOfficial": false,
+      "files": [
+        {
+          "name": "opencode-windows-x64-baseline-1.19.6.tgz",
+          "bytes": 79835464,
+          "sha256": "5ad1c6a984fc63cc9062c0250d089da86f32539d54f2fc87caf1d4ddfde463ac",
+          "url": "opencode/1.19.6/opencode-windows-x64-baseline-1.19.6.tgz",
+          "official": [
+            "https://registry.npmmirror.com/opencode-windows-x64-baseline/-/opencode-windows-x64-baseline-1.19.6.tgz",
+            "https://registry.npmjs.org/opencode-windows-x64-baseline/-/opencode-windows-x64-baseline-1.19.6.tgz"
+          ]
+        }
+      ],
+      "install": {
+        "strip": "package",
+        "bin": "bin/opencode.exe",
+        "versionArgs": [
+          "--version"
+        ]
+      }
     }
   ],
-  "signature": "7420c13dc1dfa789054a79c430c9fbfa7a931f829ee26200b88052a870df80bc3e626667127e13b00de2a5887126e1003f23240c4a1966b3f48e0a8864bfb20a"
+  "signature": "2dd41204ab5788dce73b1ab03be08d503b3fbdd9b3d061b7ee4e75e5ad920a7717616f1dc9361d6aecf334028b21436ce7c0453db014419dd6cb8f7a465b060f"
 }

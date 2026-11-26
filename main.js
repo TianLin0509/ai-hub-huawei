@@ -3416,6 +3416,12 @@ try {
     require('./main/ipc/company-assistant-handlers').registerCompanyAssistantIpc(ipcMain, companyAssistantService);
   }
 } catch (error) { console.error('[company-assistant] 公司助理未启动：', error.message); }
+try {
+  const enabled = require('./core/distribution').target === 'company' || !!companyAssistantService;
+  const blackboard = enabled ? (companyAssistantService?.blackboard || require('./core/company-assistant/welink-blackboard').sharedBlackboard()) : null;
+  const registration = require('./main/ipc/welink-blackboard-handlers').registerWelinkBlackboardIpc(ipcMain, { getService: () => companyAssistantService, blackboard, enabled, sendToRenderer });
+  app.on('will-quit', () => registration.dispose());
+} catch (error) { console.error('[welink-blackboard] 工作台未启动：', error.message); }
 if (require('./core/company-ai-policy').companyOnly()) {
   const live = new (require('./core/hub-assistant/live-history').LiveHistory)();
   companyAiTasks = new (require('./core/company-ai-tasks').CompanyAiTasks)({
@@ -3464,7 +3470,7 @@ try {
     const avatarIpc = require('./main/ipc/avatar-handlers');
     const avatarHistory = new (require('./core/hub-assistant/live-history').LiveHistory)();
     avatarService = new (require('./core/avatar/fleet').FleetService)({
-      dataDir: getHubDataDir(), getAssistant: () => companyAssistantService, runAi: runCompanyAi,
+      dataDir: getHubDataDir(), getAssistant: () => new Proxy(companyAssistantService, { get(target, key) { const value = target[key]; return key === 'welink' ? (args, opts = {}) => target.welink(args, { ...opts, caller: 'avatar' }) : typeof value === 'function' ? value.bind(target) : value; } }), runAi: runCompanyAi,
       createSession: (kind, opts) => sessionOperations.createSession({ kind, opts }),
       sendPrompt: (sessionId, text, clientSubmissionId) => promptOperations.submitPrompt(null, { sessionId, text, clientSubmissionId, waitForCliReady: true }),
       lastFinal: id => { const meta = sessionManager.getSession(id); return meta ? require('./core/feature-agent-finals').read({ ...meta, id }, sessionManager, avatarHistory).at(-1) || null : null; },
@@ -5245,7 +5251,7 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
             return { to: FW.MAINTAINER_WELINK, hasCli: () => !!findCli(), parseJson: W.parseJson, writeClipboard,
               // R32：WeLink 桌面端当前账号 vs welink-cli 的账号（只读本机两个小文件），对不上就不白发。
               accounts: () => (companyAssistantService?.welinkAccounts ? companyAssistantService.welinkAccounts() : require('./core/company-assistant/welink-account').read({})),
-              run: (args, opts) => companyAssistantService?.welink ? companyAssistantService.welink(args, opts) : W.run(args, { ...opts, cli: findCli() }),
+              run: (args, opts) => require('./core/company-assistant/welink-gate').withWelinkCaller('feedback', () => companyAssistantService?.welink ? companyAssistantService.welink(args, { ...opts, caller: 'feedback' }) : require('./core/company-assistant/welink-gate').sharedWelinkGate().run(args, () => W.run(args, { ...opts, cli: findCli() }), { ...opts, caller: 'feedback' })),
               openDesktop: async () => {
                 const hit = await FW.findWelinkDesktop();
                 if (!hit.path) return { ok: false, reason: '没找到 WeLink 桌面客户端' };

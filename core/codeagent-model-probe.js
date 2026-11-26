@@ -54,8 +54,23 @@ function unavailableFromSkipped(skipped) {
   return out;
 }
 
+// serve 连上了、账号却一个模型都没有（SERVE_EMPTY_MODELS，多半是没开通内置模型权限）：清单文件不写空表（readProbed 只认非空），
+// 另记一个「读到过空清单」的标记，供「没有可用 CodeAgent」的判断认出这种号（R49-2 审查 P1-1 情形 A）。读到非空清单时清掉。
+const emptyMarkFile = file => `${file}.empty`;
+function writeEmptyCatalog(file, { source = 'serve', now = Date.now() } = {}) {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(emptyMarkFile(file), JSON.stringify({ schema: 1, at: new Date(now).toISOString(), source }), 'utf8');
+    return true;
+  } catch { return false; }
+}
+function readEmptyCatalog(file) {
+  try { const raw = JSON.parse(fs.readFileSync(emptyMarkFile(file), 'utf8')); return raw && raw.at ? { at: raw.at, source: raw.source || 'serve' } : null; }
+  catch { return null; }
+}
 function writeProbed(file, result) {
   if (!Array.isArray(result.models) || !result.models.length) return;
+  try { fs.rmSync(emptyMarkFile(file), { force: true }); } catch { /* 标记删不掉时，按时间先后判断（noCodeagentModels） */ }
   const unavailable = unavailableFromSkipped(result.skipped);
   const details = Array.isArray(result.details) ? result.details : [];
   // Same model in different groups can have different limits. The model-only
@@ -266,4 +281,4 @@ async function probeModels({ command, configDirEnv, configDir, cwd, dataDir, env
   }
 }
 
-module.exports = { describeModelReadFailure, EMPTY_MODELS_HINT, NEEDS_LOGIN, MODELS_FILE, COMMANDS_ONLY_TIMEOUT_MS, MODEL_PROBE_TIMEOUT_MS, probeModels, readProbed, writeProbed, unavailableFromSkipped, modelsFromPicker, cleanModelId };
+module.exports = { describeModelReadFailure, EMPTY_MODELS_HINT, NEEDS_LOGIN, MODELS_FILE, COMMANDS_ONLY_TIMEOUT_MS, MODEL_PROBE_TIMEOUT_MS, probeModels, readProbed, writeProbed, writeEmptyCatalog, readEmptyCatalog, unavailableFromSkipped, modelsFromPicker, cleanModelId };

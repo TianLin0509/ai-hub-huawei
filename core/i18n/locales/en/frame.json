@@ -779,5 +779,16 @@
   "本轮执行失败（没有拿到具体原因）": "Turn failed (no specific reason was reported)",
   "正在切换到终端方式…": "Switching to terminal mode…",
   "CodeAgent 轻享服务暂不可用，正在改用终端方式继续": "CodeAgent Lite is unavailable; switching to terminal mode",
-  "员工助手": "Employee Assistant"
+  "员工助手": "Employee Assistant",
+  "部门 API key 这边还没有可选的模型。": "No models are available on the department API key yet.",
+  "公司模型这边还没有可选的模型。": "No company models are available yet.",
+  "这个接口还没有可选的模型。": "This endpoint has no models to choose from yet.",
+  "去 设置 → 自有 API 添加模型": "Go to Settings → Own API to add models",
+  "API 网关（部门 key）的模型 · 支持会话内切换；换线路请新建会话。": "API gateway (department key) models · switchable in this session; start a new session to change route.",
+  "公司模型 · 支持会话内切换；换线路请新建会话。": "Company models · switchable in this session; start a new session to change route.",
+  "自有接口的模型 · 支持会话内切换；换线路请新建会话。": "Own endpoint models · switchable in this session; start a new session to change route.",
+  "这个 API 账号还没有可选的模型。": "This API account has no models to choose from yet.",
+  "本机 CLI 配置里还没有可选的模型。": "The local CLI configuration has no models to choose from yet.",
+  "自有 API 账号的模型 · 支持会话内切换；换线路请新建会话。": "Own API account models · switchable in this session; start a new session to change route.",
+  "本机 CLI 配置里的模型 · 支持会话内切换；换线路请新建会话。": "Local CLI configuration models · switchable in this session; start a new session to change route."
 }

@@ -7,7 +7,7 @@ const ONESHOT = ['codeagent', 'claude', 'codex'];
 const SESSION = ['codeagent', 'codeagent-lite'];
 const LITE = 'codeagent-lite';
 // 部门 API key（网关）：8 项会话功能都可显式选（2026-11-24）；会话由 Claude Code 经本机反代的网关上游作答（core/assistant-gateway-route.js）。
-// 没选过时自动改走网关只对助理生效，其余 7 项默认仍是 CodeAgent。
+// 没选过时：没有可用 CodeAgent 且部门 key 可用就自动走网关（11-24 只管助理；R49-2 起 8 项会话功能 + PPT 库地图），否则默认 CodeAgent。
 const gatewayRoute = () => require('./assistant-gateway-route');
 const GATEWAY = 'api-gateway';
 const SESSION_GW = [...SESSION, GATEWAY];
@@ -64,9 +64,12 @@ function harnessDefault(dataDir, kind, options = {}) {
   return row?.available && hit ? { kind, source, model: hit.id } : null;
 }
 // 有功能选了「外壳 + 部门 key / 公司模型」时本机反代要常驻（main.js 反代 isEnabled），免得改完配置被收掉。
+// PPT 库地图没选过、走自动默认的外壳 + 部门 key 时也算（R49-2 审查 P2-1：只装了 Codex、会话功能用不了网关时，反代不能被收掉）。
 function harnessInUse(dataDir) {
-  try { return FEATURES.some(f => { const p = routes.featurePreference(dataDir, f.id); return HARNESS.includes(p?.kind) && HARNESS_SOURCES.includes(p?.source); }); }
-  catch { return false; }
+  try {
+    if (FEATURES.some(f => { const p = routes.featurePreference(dataDir, f.id); return HARNESS.includes(p?.kind) && HARNESS_SOURCES.includes(p?.source); })) return true;
+    return !routes.featurePreference(dataDir, 'pptMap') && !!autoHarness(dataDir);
+  } catch { return false; }
 }
 // 单次任务用外壳前拉起本机反代（部门 key 只要反代在跑；公司模型还要上游就绪）。没注入时不拦，由反代地址缺失时报人话。
 async function ensureProxy(source) {
@@ -140,9 +143,12 @@ function catalog(dataDir, { env = process.env, findCommand = require('./communit
 function resolve(dataDir, id, options = {}) {
   const f = feature(id), choice = routes.featurePreference(dataDir, id);
   if (!choice) {
-    // 开箱即用：助理没选过、本机没有 CodeAgent、部门 key 已配好时默认走部门 key；有 CodeAgent 的保持原默认。
-    if (id === 'assistant' && gatewayRoute().autoDefault(dataDir, { backends: options.backends }))
+    // 开箱即用（R49-2，11-26 从助理扩到全部）：没选过、本机没有可用的 CodeAgent（没装或没有模型权限）、部门 key 已配好时，
+    // 8 项会话功能默认走部门 key，PPT 库地图默认用 Claude Code / Codex 外壳经部门 key；有 CodeAgent 的保持原默认。
+    if (f.kinds.includes(GATEWAY) && gatewayRoute().autoDefault(dataDir, { backends: options.backends }))
       return { choice: null, selected: { kind: GATEWAY, model: '' }, warning: '', auto: true };
+    const harness = id === 'pptMap' ? autoHarness(dataDir, options) : null;
+    if (harness) return { choice: null, selected: harness, warning: '', auto: true };
     return { choice: null, selected: null, warning: '' };
   }
   // 旧版存下的外壳选择（没有模型来源，模型是 claude-opus / gpt 这类公司里用不了的）：不再照跑，提示重选，本次沿用默认。
@@ -153,6 +159,22 @@ function resolve(dataDir, id, options = {}) {
   const hit = backend?.models.find(m => !m.unavailable && m.id === choice.model && (!choice.source || m.source === choice.source) && (!choice.codeagentModelProvider || (m.provider || m.codeagentModelProvider) === choice.codeagentModelProvider));
   if (!backend || (choice.model && !hit)) return { choice, selected: null, warning: '所选后端或模型当前不可用，本次沿用默认。' };
   return { choice, selected: choice, warning: '' };
+}
+// 单次功能（PPT 库地图）的自动默认：公司版、部门 key 已存、没有可用的 CodeAgent 时，用本机能用的外壳（Claude Code 优先，其次 Codex）
+// 经本机反代走部门 key，模型取网关默认模型。先做两步便宜的判断（读 key 文件、查 codeagent 命令），过了才读完整目录。
+function autoHarness(dataDir, options = {}) {
+  if (!companyEdition()) return null;
+  try { if (!require('./api-gateway').read(dataDir).keySet) return null; } catch { return null; }
+  const backends = options.backends;
+  if (!gatewayRoute().codeagentMissing(dataDir, { ...options, backends })) return null;
+  const rows = backends || catalog(dataDir, options);
+  for (const kind of ['claude', 'codex']) {
+    const row = rows.find(b => b.kind === kind && b.harness && b.available);
+    const models = (row?.models || []).filter(m => m.source === 'gateway' && !m.unavailable);
+    const hit = models.find(m => m.id === row?.defaultModel) || models[0];
+    if (hit) return { kind, model: hit.id, source: 'gateway' };
+  }
+  return null;
 }
 function legacyWarning(choice) {
   const what = `${HARNESS_LABELS[choice.kind] || choice.kind}${choice.model ? ' · ' + choice.model : ' · 本机默认模型'}`;
@@ -298,9 +320,10 @@ function state(dataDir, options) {
   try { cliModel = JSON.parse(require('node:fs').readFileSync(require('node:path').join(require('./codeagent-config').resolveCodeAgentConfig().configDir, 'settings.json'), 'utf8')).model || ''; } catch { /* CLI 自选 */ }
   const assistant = routes.preference(dataDir), codeagentModel = assistant?.model || config.defaultModels?.codeagent || cliModel || 'CLI 当前模型';
   const defaultLabel = f => {
-    if (f.id === 'assistant' && resolve(dataDir, f.id, { backends }).auto) {
-      return `${LABELS[GATEWAY]} · ${backends.find(b => b.kind === GATEWAY)?.defaultModel || '网关默认模型'}`;
-    }
+    // 没有可用 CodeAgent 时的自动默认（R49-2）：会话功能写部门 key 和网关默认模型，PPT 库地图写所用外壳。
+    const auto = resolve(dataDir, f.id, { backends });
+    if (auto.auto && auto.selected?.kind === GATEWAY) return `${LABELS[GATEWAY]} · ${backends.find(b => b.kind === GATEWAY)?.defaultModel || '网关默认模型'}`;
+    if (auto.auto && auto.selected) return `${SOURCE_LABELS.gateway} · ${HARNESS_LABELS[auto.selected.kind]} · ${auto.selected.model}`;
     if (['assistant', 'ppt', 'pptMake', 'pptImgtext'].includes(f.id)) return `CodeAgent · ${codeagentModel}`;
     if (f.id === 'forum' || f.id === 'text') return `CodeAgent · ${config.defaultModels?.codeagent || cliModel || 'CLI 当前模型'}`;
     if (f.id === 'help') {

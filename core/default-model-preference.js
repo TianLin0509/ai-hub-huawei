@@ -26,6 +26,8 @@ const CONFIG_JSON_PATH = ['models', 'defaults'];
 // 命令行安全的模型 id 形状：全 Hub 共用 core/model-id.js 一处规则（2026-11-14 收拢）。
 const { isSafeModelId } = require('./model-id');
 
+const companyEdition = () => { try { return require('./distribution').target === 'company'; } catch { return false; } };
+
 // 每个 kind 自己的语义校验，防止把 Codex 的模型设成 Claude 的默认值。
 // claude / codex 用各自已有的判据（它们能认出静态清单里还没有的新模型，
 // 比如刚发布的 claude-opus-5-5）；其余 kind 回退到"必须在已知清单里"。
@@ -33,6 +35,9 @@ function isModelValidForKind(kind, modelId) {
   const base = String(kind || '').replace(/-resume$/, '');
   const value = String(modelId || '').trim();
   if (!isSafeModelId(value)) return false;
+  // 公司版 Claude Code / Codex 只是外壳（R49）：默认模型是部门 key 网关、公司模型或自有接口上的名字
+  // （qwen-aw-35b、deepseek-v4.1-flash-1017 等），不是 Claude / GPT 官方名；以前设成默认后读回来会被这里扔掉。
+  if ((base === 'claude' || base === 'codex') && companyEdition()) return true;
   if (base === 'claude') return isClaudeModelSelection(value);
   if (base === 'codex') return isCodexConversationModelId(value);
   if (base === 'chatgpt') return value.startsWith('chatgpt-web/');

@@ -18,6 +18,7 @@
     .fa-row label { font-size:13px; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .fa-row select { width:100%; min-width:0; height:32px; padding:0 7px; color:var(--text-primary,#242a33); background:var(--bg-input,#fff); border:1px solid var(--border-subtle,#dfe3ea); border-radius:6px; font:12px 'Microsoft YaHei',sans-serif; }
     .fa-reset,.fa-entry { border:0; border-radius:5px; color:var(--brand,#3478f6); background:transparent; padding:5px 6px; cursor:pointer; white-space:nowrap; font:12px 'Microsoft YaHei',sans-serif; }
+    .fa-row .fa-auto { display:block; font-size:11px; line-height:14px; color:var(--text-secondary,#5b6573); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .fa-row .fa-warning { grid-column:1/-1; color:var(--hw-amber,#966019); font-size:12px; }
     .fa-inline-warning { display:flex; align-items:center; gap:4px; margin:0 16px 6px; min-width:0; font:12px 'Microsoft YaHei',sans-serif; color:var(--hw-amber,#966019); }
     .fa-inline-warning span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -59,7 +60,7 @@
       const backendTitle = selected ? backend?.label || selected.kind : `默认（当前：${f.defaultText}）`;
       const stale = cur.model && !models.some(m => m.value === cur.model);
       const staleLabel = selected?.model ? `${selected.model}（${f.legacy ? '公司里用不了' : '不可用'}）` : '本机默认模型（公司里用不了）';
-      return `<div class="fa-row" data-fa-row="${f.id}"><label for="fa-backend-${host.id}-${f.id}">${esc(f.label)}</label>
+      return `<div class="fa-row" data-fa-row="${f.id}"><label for="fa-backend-${host.id}-${f.id}">${esc(f.label)}${!selected && f.auto ? '<span class="fa-auto" data-fa-auto>默认：部门 API key（未检测到 CodeAgent）</span>' : ''}</label>
         <select data-fa-backend id="fa-backend-${host.id}-${f.id}" aria-label="${esc(f.label)}后端" title="${esc(backendTitle)}"><option value="" title="${esc(f.defaultText)}">${esc(defaultBackend)}</option>${backendOptions.map(b => `<option value="${esc(b.value)}"${b.value === cur.backend ? ' selected' : ''}${b.available ? '' : ' disabled'} title="${esc(b.reason || b.label)}">${esc(b.label)}${b.available ? '' : `（${esc(b.reason || '不可用')}）`}</option>`).join('')}</select>
         <select data-fa-model aria-label="${esc(f.label)}模型"${selected && backend?.available ? '' : ' disabled'}><option value="">默认（当前：${esc(backend?.defaultModel || f.defaultText)}）</option>${stale || (f.legacy && !cur.model) ? `<option selected value="${esc(cur.model)}">${esc(staleLabel)}</option>` : ''}${models.map(m => `<option value="${esc(m.value)}"${m.value === cur.model ? ' selected' : ''}${m.unavailable ? ' disabled' : ''}>${esc(m.label || m.id)}</option>`).join('')}${backend?.allowCustom ? '<option value="__custom__">手填模型名…</option>' : ''}</select>
         ${selected ? '<button class="fa-reset" data-fa-reset type="button">恢复默认</button>' : ''}${f.warning ? `<span class="fa-warning" role="status">${esc(f.warning)}</span>` : ''}${gatewayExtras(f, backend, features.length)}</div>`;
@@ -112,7 +113,7 @@
   // 设置页「日常功能」不因此变长（一个 Tab 一屏）；ⓘ 在截断文字之外，永不被裁。行内只在「只有助理一项、本机又没有 CodeAgent」时
   // 提示可改用部门 key。手填模型框默认收起，下拉选「手填模型名…」才展开。
   const GATEWAY_INFO = '选「Claude Code · 部门 API key」的功能由本机 Claude Code 当外壳、经 Hub 的本机反代连部门网关作答，不经 CodeAgent；'
-    + 'key 用设置里「API 网关」已保存的那把（Windows 账户加密，不落明文），会话只挂该功能自己的工具。没装 CodeAgent、又保存过部门 key 时，助理默认就用它，其他功能要在这里选。'
+    + 'key 用设置里「API 网关」已保存的那把（Windows 账户加密，不落明文），会话只挂该功能自己的工具。没有可用的 CodeAgent（没装或没有模型权限）、又保存过部门 key 时，8 项互动功能和 PPT 库地图没选过就默认用它，选过的照旧。'
     + '模型表来自网关；表里没有但网关能用的模型可以手填，先试跑一句测通再用。报错会写清原因并给出重填 key / 换模型按钮。';
   const GATEWAY_LINE = 'Claude Code、Codex 只当外壳，模型来自你的部门 API key 或公司模型';
   // 公司版外壳没有可用模型（没存部门 key、也没有 CodeAgent 账号）：底部一行说清缺什么，旁边一键去配置（开箱即用），不每行重复。

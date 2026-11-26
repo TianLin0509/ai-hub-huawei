@@ -89,7 +89,19 @@ function companyModels(provider) {
 
 // 打开启动中心时默认选中的卡：该工具在「自有 API」里保存的来源和模型（也就是上次选的）。
 // 配过部门 API key 选 API 网关，否则选这个工具自己的来源；不默认选公司模型，免得一点创建就把设置改写成公司模型再报错（11-21 全新用户深查 #6）。
-function defaultPick(kind, provider, { codeagentInstalled = null } = {}) {
+// preferred：Hub 里「设为默认」存下的模型（R49 审查 P1-2）。它在这个工具当前的模型卡里（没有 CodeAgent 时不算用不了的公司模型）
+// 就默认选它那张卡；不在就照旧用保存的来源和模型。「设为默认」不改线路配置，线路在新建会话时按选中的卡保存。
+function defaultPick(kind, provider, { codeagentInstalled = null, preferred = '', status = null } = {}) {
+  const base = savedPick(kind, provider, { codeagentInstalled });
+  const want = String(preferred || '');
+  if (!base || !want || base.model === want) return base;
+  const card = cardsFor(kind, provider, status, null, { codeagentInstalled }).find(c => (c.source === 'company' ? c.id : c.model) === want
+    && ['gateway', 'own', 'api', 'company'].includes(c.source) && !(c.source === 'company' && codeagentInstalled === false));
+  if (!card) return base;
+  if (card.source === 'api') return { source: 'api', profileId: card.profileId, model: card.model };
+  return { source: card.source, model: want };
+}
+function savedPick(kind, provider, { codeagentInstalled = null } = {}) {
   if (!provider) return null;
   const untouched = provider.companyDefault === true && provider.backend === 'local';
   if (untouched && codeagentInstalled === false) {
@@ -223,6 +235,43 @@ function cardsFor(kind, provider, status, pick, { codeagentInstalled = null } = 
   return companyReady ? [...cards.slice(0, companyCount), setup, ...cards.slice(companyCount)] : [setup, ...cards];
 }
 
+// 模型下拉 / 会话内切换 / 群聊成员用的清单（R49，11-26 反馈「我想选其他模型，但给的选项里只能选这几个，我也没有这些模型」）：
+// 和模型卡同一份来源（cardsFor），卡上不显示的（走网关时用不了的公司模型）这里也不列。每项带 route，
+// 会话内切换按会话实际走的线路过滤（网关会话只列网关模型、自有接口会话只列自有接口的模型）。
+// 公司版 Claude Code / Codex 永远不回落到官方模型清单：一个也没有时返回空表，界面就地说明并给「去设置添加模型」。
+function modelOptions(kind, provider, status, { codeagentInstalled = null } = {}) {
+  const company = new Map(companyModels(provider).map(m => [m.id, m]));
+  const out = [];
+  for (const c of cardsFor(kind, provider, status, null, { codeagentInstalled })) {
+    // 本机没有 CodeAgent 时公司模型用不了：没就绪的不进清单（R49 审查 P1-3；卡片上仍显示并写明原因）。
+    if (c.source === 'company') { if (codeagentInstalled !== false || c.state === 'ready') out.push({ id: c.id, label: company.get(c.id)?.label || c.id, route: 'company' }); }
+    else if (c.source === 'gateway') out.push({ id: c.model, label: c.model + '（API 网关）', route: 'gateway' });
+    else if (c.source === 'api') out.push({ id: c.model, label: c.name + ' · ' + c.model, route: 'api' });
+    else if (c.source === 'own' && c.sourceText === 'CLI 默认') out.push({ id: '', label: '沿用本机 CLI 配置', route: 'local' });
+    else if (c.source === 'own') out.push({ id: c.model || '', label: c.model ? c.model + '（自有接口）' : '自有接口默认模型', route: 'own' });
+  }
+  return out;
+}
+// 会话实际走的线路 → 它能切到的模型来源（会话内切换只能在同一条线路里换模型；换线路要新建会话）。
+function sessionRoute(session) {
+  if (session?.companyRoute === 'proxy') return session.companyUpstream === 'gateway' ? 'gateway' : 'company';
+  if (session?.companyRoute === 'api' && !session.cliApiProfileId) return 'own';
+  return '';
+}
+// 菜单说明与空状态用的线路（R49 审查 P2）：在 sessionRoute 之外再认出命名 API 账号（api）和沿用本机 CLI 配置（local），
+// 这两种的模型清单由主进程按会话读（session:local-models），不带 route，不参与上面的过滤。
+function sessionLine(session) {
+  if (session?.cliApiProfileId) return 'api';
+  if (session?.companyRoute === 'local') return 'local';
+  return sessionRoute(session);
+}
+function optionsForSession(options, session) {
+  const list = Array.isArray(options) ? options : [];
+  const route = sessionRoute(session);
+  if (!route || !list.some(o => o && o.route)) return list;
+  return list.filter(o => o && o.route === route);
+}
+
 // 选了 CodeAgent、部门 key 已配好、而 CodeAgent 实时读不到任何可用模型（R45，v5.6.100「连上了对话不生效」）：
 // CodeAgent 不走部门 key（已拍板），请求只会发去 CodeAgent 自己的账号然后失败。返回要就地显示的一句话；不该提示时返回空串。
 // 模型清单还在读（loading / 还没读）时不提示，免得一闪而过。
@@ -267,4 +316,5 @@ function renderCards(cards, escapeHtml) {
     + '</button>').join('');
 }
 
-module.exports = { COMPANY_KINDS, proxyBadge, companyModels, gatewayModels, ownModelList, profileModels, parseCardId, defaultPick, saveRequest, memberSaveRequests, cardsFor, renderCards, codeagentGatewayHint, gatewayLaunchTarget, foldCards };
+module.exports = { COMPANY_KINDS, proxyBadge, companyModels, gatewayModels, ownModelList, profileModels, parseCardId, defaultPick, saveRequest, memberSaveRequests, cardsFor, renderCards, codeagentGatewayHint, gatewayLaunchTarget, foldCards,
+  modelOptions, sessionRoute, sessionLine, optionsForSession };

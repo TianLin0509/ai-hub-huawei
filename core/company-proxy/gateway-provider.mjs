@@ -28,11 +28,26 @@ const { firstTokenTimeoutMs } = hubModule('../api-gateway-healthcheck.js');
 const STRIP_FIELDS = new Set(['thinking', 'reasoning_effort']); // 公司上游专用的思考开关；网关的推理模型默认就思考
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
+// 所有 system 合并成一条放最前面（R49，11-26 反馈「网关原话：System message must be at the beginning.」）。
+// Qwen 等模型的对话模板只认开头那一条 system，第二条 system（哪怕紧挨着）就报这个 400。实测会出现多条 / 中间 system 的：
+// Claude Code 2.1.32x 把环境说明作为对话中间的一条 system 发出（system, user, system）；Codex 的 instructions 加 developer
+// 消息转成两条 system（system, system, user…）；DSH 的 developer 消息同理。合并时按原顺序用空行拼接，正文一字不丢。
+const systemText = content => (typeof content === 'string' ? content : Array.isArray(content)
+  ? content.map(part => (typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : '')).filter(Boolean).join('\n')
+  : content == null ? '' : String(content));
+export function systemFirst(messages) {
+  const system = [], rest = [];
+  for (const m of messages) (object(m) && (m.role === 'system' || m.role === 'developer') ? system : rest).push(m);
+  if (!system.length || (system.length === 1 && messages[0] === system[0] && system[0].role === 'system')) return messages;
+  const text = system.map(m => systemText(m.content)).filter(t => t.trim()).join('\n\n');
+  return text ? [{ role: 'system', content: text }, ...rest] : rest;
+}
 // noThinking：用户对这个模型关了思考，注入 chat_template_kwargs.enable_thinking=false（网关透传给 vLLM；11-20 黄区实测
 // qwen-aw-35b 关思考后首正文从 9.5 秒 / 不出正文变成 0.23 秒）。
 export function gatewayBody(body, { noThinking = false } = {}) {
   const out = {};
   for (const [key, value] of Object.entries(body)) if (!STRIP_FIELDS.has(key)) out[key] = value;
+  if (Array.isArray(out.messages)) out.messages = systemFirst(out.messages);
   out.stream = true;
   out.stream_options = { include_usage: true };
   if (noThinking) out.chat_template_kwargs = { ...(object(out.chat_template_kwargs) ? out.chat_template_kwargs : {}), enable_thinking: false };

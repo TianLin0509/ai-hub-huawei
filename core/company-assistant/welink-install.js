@@ -102,7 +102,7 @@ async function addUserPath(dir, { run = runFile, env = process.env } = {}) {
   return { added: true };
 }
 
-function createWelinkInstaller({ dir, fetchImpl, registry, readNpmrc, configure, onState = () => {}, verify, updatePath = addUserPath, now = Date.now } = {}) {
+function createWelinkInstaller({ dir, fetchImpl, registry, readNpmrc, configure, onState = () => {}, verify, updatePath = addUserPath, now = Date.now, blackboard = null } = {}) {
   let state = { phase: 'idle' }, pending = null;
   const source = () => resolveRegistry({ ...(registry === undefined ? {} : { registry }), ...(readNpmrc ? { readNpmrc } : {}) });
   const snapshot = () => ({ ...state });
@@ -111,8 +111,8 @@ function createWelinkInstaller({ dir, fetchImpl, registry, readNpmrc, configure,
   async function get(fetch, url, limit, timeoutMs) {
     let response;
     try { response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { accept: 'application/json, application/octet-stream, */*' } }); }
-    catch { throw fail('WELINK_INSTALL_NETWORK', '连不上公司内部软件源，请确认这台电脑已连接公司网络后重试'); }
-    if (!response.ok) throw fail('WELINK_INSTALL_HTTP', friendlyHttp(response.status));
+    catch (error) { const hint = require('./welink-blackboard').proxyHint(error); throw fail('WELINK_INSTALL_NETWORK', hint || '连不上公司内部软件源，请确认这台电脑已连接公司网络后重试'); }
+    if (!response.ok) throw fail('WELINK_INSTALL_HTTP', require('./welink-blackboard').proxyHint(String(response.status)) || friendlyHttp(response.status));
     if (Number(response.headers.get('content-length')) > limit) throw fail('WELINK_INSTALL_SIZE', '安装包大小超出预期，已停止安装');
     let body;
     try { body = Buffer.from(await response.arrayBuffer()); } catch { throw fail('WELINK_INSTALL_NETWORK', '下载中断了，请重试'); }
@@ -147,11 +147,12 @@ function createWelinkInstaller({ dir, fetchImpl, registry, readNpmrc, configure,
         if (!existing || existing.size !== unpacked.exe.length) throw error;
       }
       await configure(finalExe);
+      blackboard?.announceCli({ path: finalExe, source: 'managed', version: unpacked.version });
       let pathResult = { added: false, reason: 'failed' };
       try { pathResult = await updatePath(finalDir); } catch (error) { console.warn('[welink-install] 用户 PATH 未更新：', error.message); }
       set({ phase: 'done', message: `welink-cli ${unpacked.version} 已安装`, version: unpacked.version, path: finalExe, pathAdded: pathResult.added });
     } catch (error) {
-      set({ phase: 'error', error: error.message, code: error.code || 'WELINK_INSTALL_FAILED', message: '安装未完成：' + error.message });
+      set({ phase: 'error', error: error.message, code: error.code || 'WELINK_INSTALL_FAILED', message: '安装未完成：' + error.message, proxyHint: require('./welink-blackboard').proxyHint(error) });
     } finally {
       // job 是本次新建的 UUID 目录，不是用户已有的安装。
       await fs.rm(job, { recursive: true, force: true }).catch(() => {});
