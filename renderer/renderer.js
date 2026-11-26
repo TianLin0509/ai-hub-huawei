@@ -1074,6 +1074,7 @@ const sidebarFoldersController = require('./sidebar-folders').createSidebarFolde
   document, ipcRenderer, storage: localStorage, onChange: () => scheduleSessionListRender(),
 });
 void sidebarFoldersController.refresh();
+window.__hubSidebarFolders = sidebarFoldersController;   // archive view in global search groups by original folder
 window.addEventListener('focus', () => { void sidebarFoldersController.refresh(); });
 // 低开销模式（2026-11-23 P1）：状态条「省」徽章、内存面板顶部横条、设置「常用」、终端（L5）、后台刷新（L6）共用一份状态。
 const lowOverheadUi = require('./low-overhead-ui');
@@ -1085,6 +1086,7 @@ const lowOverheadTerminalTuner = lowOverheadUi.createTerminalTuner();
 window.__hubLowOverhead = lowOverheadStore;   // 启动中心（workspace-controller.js，L2）读它决定 CodeAgent 新会话默认走卡片
 const sessionListRenderer = createSessionListRenderer({
   sidebarFolders: sidebarFoldersController,
+  notifyInfo: message => showToast(message, 'info'),
   getLowOverhead: () => lowOverheadStore.get(),
   // 会话 logo 右下角的订阅账号序号：与底栏额度的 1/2 同一顺序；只有一个账号时不显示。
   subscriptionAccount: s => {

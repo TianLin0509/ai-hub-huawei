@@ -832,11 +832,44 @@ sessionListEl.addEventListener('keydown', event => {
       hubSessionId: s._isMeeting ? null : s.id, meetingId: s._isMeeting ? s.id : null,
       provider: s._isMeeting ? 'meeting' : String(s.kind || '').replace(/-resume$/, '').replace(/^deepseek.*$/, 'deepseek'),
       archived: archived.has(teamParents.get(s.id) || s.id), agentGroup: agentGroupOf(s),
+      folderKey: s._isMeeting ? 'meeting:' + s.id : 'session:' + (teamParents.get(s.id) || s.id),
       updatedAt: latestActivityTime(s),
       cwd: s._isMeeting ? s._meeting.workspace : s.cwd,
       projectLabel: s._isMeeting ? s._meeting.workspaceLabel : s.workspaceLabel,
     }));
   });
+  const folderEntityKey = item => (item._isMeeting ? 'meeting:' : 'session:') + (item.id || item.hubId);
+  // Keys of every archived parent with the archive's own rule (1 day, pinned excluded), independent of
+  // the sidebar's day range, pinned-only view and filters, so deleting a folder remembers where they came from.
+  function archivedFolderKeys() {
+    const sessionMap = getSessions(), items = collectSidebarItems(sessionMap);
+    const parts = partitionSidebarSessions(items, { now: Date.now(), sessionMap, activeSessionId: getActiveSessionId(), activeMeetingId: getActiveMeetingId() });
+    return buildSidebarView(parts, { now: Date.now(), days: 1, pinnedOnly: false, excludePinned: true, sessionMap, hasUnread: sidebarItemHasUnread }).archive.map(folderEntityKey);
+  }
+  // A remembered deleted folder is consumed when the entry is used again after the deletion (real activity,
+  // not a view change): say once that it went to unclassified. If it already has a live folder again
+  // (for example assigned by an older client), drop the record silently.
+  const forgetting = new Set();   // keys whose record is being dropped; re-renders before the save returns must not repeat the notice
+  function noticeRestoredFromDeletedFolder() {
+    const removed = sidebarFolders.getState?.().removed;
+    if (!removed || !Object.keys(removed).length) return;
+    const restored = [], silent = [];
+    for (const item of collectSidebarItems(getSessions())) {
+      const key = folderEntityKey(item), record = removed[key];
+      if (!record || forgetting.has(key)) continue;
+      if (sidebarFolders.folderOf(item)) silent.push(key);
+      else if (latestActivityTime(item) > Number(record.at || 0)) restored.push({ key, name: record.name });
+    }
+    const forget = keys => { keys.forEach(key => forgetting.add(key));
+      void Promise.resolve(sidebarFolders.forget?.(keys)).catch(() => {}).finally(() => keys.forEach(key => forgetting.delete(key))); };
+    if (silent.length) forget(silent);
+    if (!restored.length) return;
+    const message = restored.length === 1
+      ? `原目录“${restored[0].name}”已删除，已放回“未分类”`
+      : `${restored.length} 个会话原来所在的目录已删除，已放回“未分类”`;
+    if (typeof options.notifyInfo === 'function') options.notifyInfo(message);
+    forget(restored.map(item => item.key));
+  }
   function openSearch(detail) {
     if (typeof options.openSearch === 'function') return options.openSearch(detail);
     doc.dispatchEvent(new doc.defaultView.CustomEvent('sidebar:open-search', { detail }));
@@ -1288,6 +1321,7 @@ sessionListEl.addEventListener('keydown', event => {
   }
   if (!sidebarFolders) appendSections(sections);
   else {
+    noticeRestoredFromDeletedFolder();
     const controls = doc.createElement('div'); controls.className = 'sidebar-folder-tools'; controls.dataset.sidebarRenderKey = 'folder-tools';
     controls.innerHTML = '<span>目录</span><button type="button" data-folder-create aria-label="新建目录" title="新建目录；也可以把会话拖到这里，建好后直接放进去"' + (sidebarFolders.error() ? ' disabled' : '') + '>＋ 新建目录</button>';
     controls.addEventListener('click', event => {
@@ -1313,7 +1347,7 @@ sessionListEl.addEventListener('keydown', event => {
         if (!action) return; event.preventDefault(); event.stopPropagation();
         if (action === 'toggle') sidebarFolders.toggle(folder.id);
         else if (action === 'rename') void sidebarFolders.showRename(folder.id);
-        else if (action === 'remove') sidebarFolders.showRemove(folder.id).catch(error => {
+        else if (action === 'remove') sidebarFolders.showRemove(folder.id, archivedFolderKeys()).catch(error => {
           if (options.notify) options.notify(error.message); else require('./ui-feedback').showHubAlert(error.message, { document: doc });
         });
       });

@@ -45,8 +45,18 @@ function createSidebarFoldersController({ document, ipcRenderer, storage, onChan
     const id = state.assignments[key];
     return state.folders.some(folder => folder.id === id) ? id : null;
   }
+  // Archive grouping: a live folder, the remembered name of a deleted folder, or unclassified.
+  function originOf(key) {
+    const id = state.assignments[key], found = state.folders.find(folder => folder.id === id);
+    if (found) return { id: found.id, name: found.name, deleted: false };
+    const removed = state.removed?.[key];
+    return removed ? { id: null, name: removed.name, deleted: true } : { id: null, name: '未分类', deleted: false };
+  }
   const api = {
     refresh,
+    originOf,
+    removedOrigin: key => state.removed?.[key]?.name || null,
+    forget: keys => mutate('forget', { keys }),
     getState: () => state,
     error: () => error,
     signature: () => revision,
@@ -57,7 +67,7 @@ function createSidebarFoldersController({ document, ipcRenderer, storage, onChan
     reveal(item) { const key = idKey(folderOf(item)); if (collapsed.delete(key)) saveCollapsed(); },
     create: name => mutate('create', { name }),
     rename: (folderId, name) => mutate('rename', { folderId, name }),
-    remove: folderId => mutate('remove', { folderId }),
+    remove: (folderId, archivedKeys = []) => mutate('remove', { folderId, archivedKeys }),
     assign: (key, folderId) => mutate('assign', { key, folderId }),
     showCreate: () => openNameEditor({ document, title: '新建目录', maxLength: 40, save: name => api.create(name) }),
     showRename(folderId) {
@@ -65,12 +75,12 @@ function createSidebarFoldersController({ document, ipcRenderer, storage, onChan
       if (!folder) return;
       return openNameEditor({ document, title: '重命名目录', value: folder.name, maxLength: 40, save: name => api.rename(folderId, name) });
     },
-    async showRemove(folderId) {
+    async showRemove(folderId, archivedKeys = []) {
       const folder = state.folders.find(f => f.id === folderId);
       if (!folder) return;
       const ask = confirm || ((message, options) => require('./ui-feedback').confirmHubAction(message, { document, ...options }));
-      if (await ask(`删除目录“${folder.name}”？里面的会话、群聊和团队会回到“未分类”，内容全部保留。`, { title: '删除目录', acceptLabel: '删除目录', cancelLabel: '保留目录' })) {
-        await api.remove(folderId);
+      if (await ask(`删除目录“${folder.name}”？里面的会话、群聊和团队会回到“未分类”，内容全部保留；已归档的仍在归档里按原目录名列出。`, { title: '删除目录', acceptLabel: '删除目录', cancelLabel: '保留目录' })) {
+        await api.remove(folderId, archivedKeys);
         if (collapsed.delete('unclassified')) saveCollapsed();
       }
     },

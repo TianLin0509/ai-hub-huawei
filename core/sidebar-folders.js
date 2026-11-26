@@ -25,6 +25,11 @@ function validateState(state) {
     ids.add(folder.id); names.add(folder.name);
   }
   for (const [key, id] of Object.entries(state.assignments)) if (!ENTITY_KEY.test(key) || !ids.has(id)) throw new Error('目录数据包含无效归属；请保留原文件并检查');
+  // removed: archived entries whose folder was deleted keep the old folder name, so the archive can still group them and restore can explain where they went.
+  if (state.removed !== undefined) {
+    if (!state.removed || typeof state.removed !== 'object' || Array.isArray(state.removed)) throw new Error('目录数据包含无效的原目录记录');
+    for (const [key, item] of Object.entries(state.removed)) if (!ENTITY_KEY.test(key) || !item || typeof item.name !== 'string' || !item.name || item.name.length > 40) throw new Error('目录数据包含无效的原目录记录');
+  }
   return state;
 }
 
@@ -63,15 +68,22 @@ function createSidebarFolderStore({ dataDir = require('./data-dir').getHubDataDi
     list: async () => read(),
     create: name => mutate(state => { state.folders.push({ id: 'folder-' + randomUUID(), name: uniqueName(state, name), createdAt: Date.now() }); }),
     rename: (id, name) => mutate(state => { folder(state, id).name = uniqueName(state, name, id); }),
-    remove: id => mutate(state => {
-      folder(state, id);
+    remove: (id, archivedKeys = []) => mutate(state => {
+      const name = folder(state, id).name, archived = new Set(Array.isArray(archivedKeys) ? archivedKeys : []);
       state.folders = state.folders.filter(item => item.id !== id);
-      for (const key of Object.keys(state.assignments)) if (state.assignments[key] === id) delete state.assignments[key];
+      for (const key of Object.keys(state.assignments)) if (state.assignments[key] === id) {
+        delete state.assignments[key];
+        if (archived.has(key)) (state.removed ||= {})[key] = { name, at: Date.now() };
+      }
     }),
     assign: (key, id) => mutate(state => {
       if (typeof key !== 'string' || !ENTITY_KEY.test(key)) throw new Error('会话或群聊标识无效');
       if (id === null) delete state.assignments[key];
       else { folder(state, id); state.assignments[key] = id; }
+      if (state.removed) delete state.removed[key];
+    }),
+    forget: keys => mutate(state => {
+      for (const key of Array.isArray(keys) ? keys : []) if (state.removed) delete state.removed[key];
     }),
   };
 }

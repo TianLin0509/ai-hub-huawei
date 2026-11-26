@@ -5,7 +5,8 @@ function registerSidebarFoldersIpc(ipcMain, { store, entityExists, publish = () 
     list: () => store.list(),
     create: args => store.create(args.name),
     rename: args => store.rename(args.folderId, args.name),
-    remove: args => store.remove(args.folderId),
+    remove: args => store.remove(args.folderId, args.archivedKeys),
+    forget: args => store.forget(args.keys),
     assign: args => {
       if (!entityExists(args.key)) throw new Error('会话或群聊不存在，请刷新侧栏后重试');
       return store.assign(args.key, args.folderId);

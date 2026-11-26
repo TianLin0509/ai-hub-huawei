@@ -3874,16 +3874,23 @@ for (const m of bootMeetings) {
   meetingManager.restoreMeeting(m);
 }
 // Sidebar classification is presentation metadata, independent of cwd/runtime.
+const sidebarFolderStore = require('./core/sidebar-folders').createSidebarFolderStore({ dataDir: getHubDataDir() });
+const sidebarFolderEntityExists = key => {
+  if (typeof key !== 'string') return false;
+  const [type, id] = key.split(':');
+  if (type === 'meeting') return !!meetingManager.getMeeting(id);
+  return type === 'session' && (!!sessionManager.getSession(id) || lastPersistedSessions.some(s => (s.hubId || s.id) === id));
+};
 require('./main/ipc/sidebar-folders-handlers').registerSidebarFoldersIpc(ipcMain, {
-  store: require('./core/sidebar-folders').createSidebarFolderStore({ dataDir: getHubDataDir() }),
-  entityExists: key => {
-    if (typeof key !== 'string') return false;
-    const [type, id] = key.split(':');
-    if (type === 'meeting') return !!meetingManager.getMeeting(id);
-    return type === 'session' && (!!sessionManager.getSession(id) || lastPersistedSessions.some(s => (s.hubId || s.id) === id));
-  },
+  store: sidebarFolderStore,
+  entityExists: sidebarFolderEntityExists,
   publish: state => sendToRenderer('sidebar-folders:changed', { state }),
 });
+// Remembered deleted-folder names of sessions/meetings that were deleted since: prune once at boot.
+void sidebarFolderStore.list().then(state => {
+  const stale = Object.keys(state.removed || {}).filter(key => !sidebarFolderEntityExists(key));
+  if (stale.length) return sidebarFolderStore.forget(stale);
+}).catch(() => {});
 const { meetingMemberTitlePatch, createMeetingMemberTitleSync } = require('./core/meeting-member-titles');
 meetingMemberTitleSync = createMeetingMemberTitleSync({
   getMeeting: id => meetingManager.getMeeting(id),

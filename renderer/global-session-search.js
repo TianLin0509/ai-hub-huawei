@@ -56,6 +56,20 @@ function filterSearchHits(hits, entries) {
   return hits.filter(hit => hubIds.has(hit.hubSessionId) || meetingIds.has(hit.meetingId));
 }
 
+// 归档按原目录分组：先按侧栏目录顺序，再列「原目录已删除」的组，「未分类」放最后；没有会话的组不出现。
+function groupArchiveHits(hits, { folderKeyOf, originOf, folderOrder = [] }) {
+  const groups = new Map();
+  hits.forEach(hit => {
+    const key = folderKeyOf(hit), origin = key ? originOf(key) : { id: null, name: '未分类', deleted: false };
+    const groupKey = origin.id || (origin.deleted ? 'removed:' + origin.name : 'unclassified');
+    if (!groups.has(groupKey)) groups.set(groupKey, { key: groupKey, name: origin.name, deleted: origin.deleted, hits: [] });
+    groups.get(groupKey).hits.push(hit);
+  });
+  const rank = group => group.key === 'unclassified' ? [2, 0] : group.deleted ? [1, 0] : [0, folderOrder.indexOf(group.key)];
+  return [...groups.values()].sort((a, b) => { const ra = rank(a), rb = rank(b); return ra[0] - rb[0] || ra[1] - rb[1] || a.name.localeCompare(b.name, 'zh-CN'); });
+}
+const ARCHIVE_COLLAPSE_KEY = 'hubArchiveCollapsedFolders';
+
 function catalogueHit(entry) {
   return { ...entry, sessionKey: entry.key, titleOnly: true, matchCount: 1,
     bestMatch: { eventId: null, scope: 'title', role: 'title', timestamp: entry.updatedAt, text: entry.title } };
@@ -602,9 +616,8 @@ function createGlobalSessionSearch(options) {
     button.addEventListener('keydown', (event) => {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
-        const direction = event.key === 'ArrowDown' ? 1 : -1;
-        const next = (index + direction + results.length) % results.length;
-        void selectResult(next, { focusRow: true });
+        const next = stepVisible(index, event.key === 'ArrowDown' ? 1 : -1);
+        if (next >= 0) void selectResult(next, { focusRow: true });
       } else if (event.key === 'Enter') {
         event.preventDefault();
         if (event.ctrlKey || event.metaKey) {void selectResult(index);void openSelectedHit({ focus: true });}
@@ -638,6 +651,38 @@ function createGlobalSessionSearch(options) {
     widenButton.hidden = false;
   }
 
+  let archiveCollapsed=new Set();
+  try { const saved=JSON.parse(window.localStorage.getItem(ARCHIVE_COLLAPSE_KEY)||'[]'); if(Array.isArray(saved)) archiveCollapsed=new Set(saved.filter(k=>typeof k==='string')); } catch { /* Display preference only. */ }
+  // 只在「归档」页签、且侧栏开了目录功能时分组；其余页签保持原来的平铺排序。
+  function archiveGroups(hits) {
+    const folders=options.sidebarFolders || window.__hubSidebarFolders;
+    if(activeScope!=='dormant' || !folders?.originOf || !hits.length) return null;
+    const byHub=new Map(), byMeeting=new Map();
+    for(const entry of titleIndex) {
+      if(!entry.folderKey) continue;
+      if(entry.hubSessionId) byHub.set(entry.hubSessionId,entry.folderKey);
+      if(entry.meetingId) byMeeting.set(entry.meetingId,entry.folderKey);
+    }
+    return groupArchiveHits(hits,{
+      folderKeyOf: hit => (hit.meetingId && byMeeting.get(hit.meetingId)) || (hit.hubSessionId && byHub.get(hit.hubSessionId)) || hit.folderKey || null,
+      originOf: key => folders.originOf(key),
+      folderOrder: (folders.getState?.().folders || []).map(folder => folder.id),
+    });
+  }
+  // 归档分组折叠后，被折叠的会话仍占 results 的下标；键盘上下只在看得见的行之间走。
+  function firstVisibleIndex() {
+    const row=resultsRoot.querySelector('[data-result-index]');
+    return row?Number(row.dataset.resultIndex):-1;
+  }
+  function stepVisible(index, direction) {
+    let next=index;
+    for(let step=0;step<results.length;step++) {
+      next=(next+direction+results.length)%results.length;
+      if(resultsRoot.querySelector(`[data-result-index="${next}"]`)) return next;
+    }
+    return -1;
+  }
+
   function renderResults(response) {
     const selected=results[activeIndex], previousPreview=activePreview;
     lastResponse=response;
@@ -669,9 +714,34 @@ function createGlobalSessionSearch(options) {
       previewRoot.replaceChildren(createStaticEmpty(document,{title:'选中会话，查看相关问答',detail:'问题、答复、命中位置和产物会在这里显示。'}));
       return;
     }
+    const groups=archiveGroups(results);
+    if(groups) results=groups.flatMap(group=>group.hits);
     activeIndex=selected?results.findIndex(hit=>sameSession(hit,selected)):-1;
     const fragment=document.createDocumentFragment();
-    results.forEach((hit,index)=>fragment.append(createResultRow(hit,index)));
+    if(groups) {
+      let index=0;
+      for(const group of groups) {
+        const collapsed=archiveCollapsed.has(group.key), section=document.createElement('section');
+        section.className='session-search-archive-group';section.dataset.archiveGroup=group.key;
+        const header=document.createElement('button');header.type='button';header.className='session-search-archive-group-header';
+        header.setAttribute('aria-expanded',String(!collapsed));
+        header.title=group.deleted?`原目录“${group.name}”已删除；恢复这些会话时会放回“未分类”`:collapsed?'展开这个目录':'收起这个目录';
+        const arrow=document.createElement('span');arrow.setAttribute('aria-hidden','true');arrow.textContent=collapsed?'▸':'▾';
+        const name=document.createElement('span');name.className='session-search-archive-group-name';name.textContent=group.name;
+        const count=document.createElement('span');count.className='session-search-archive-group-count';count.textContent=String(group.hits.length);
+        header.append(arrow,name);
+        if(group.deleted) {const note=document.createElement('span');note.className='session-search-archive-group-note';note.textContent='原目录已删除';header.append(note);}
+        header.append(count);
+        header.addEventListener('click',()=>{
+          if(archiveCollapsed.has(group.key)) archiveCollapsed.delete(group.key); else archiveCollapsed.add(group.key);
+          try {window.localStorage.setItem(ARCHIVE_COLLAPSE_KEY,JSON.stringify([...archiveCollapsed]));} catch { /* Display preference only. */ }
+          renderResults(lastResponse);
+        });
+        section.append(header);
+        for(const hit of group.hits) { if(!collapsed) section.append(createResultRow(hit,index)); index++; }
+        fragment.append(section);
+      }
+    } else results.forEach((hit,index)=>fragment.append(createResultRow(hit,index)));
     if(response.nextPageCursor) {
       const more=document.createElement('button');more.type='button';more.className='session-search-load-more';more.textContent='加载更多会话';
       let restart=false;
@@ -688,12 +758,13 @@ function createGlobalSessionSearch(options) {
       fragment.append(more);
     }
     resultsRoot.replaceChildren(fragment);
+    if(groups && activeIndex>=0 && !resultsRoot.querySelector(`[data-result-index="${activeIndex}"]`)) activeIndex=-1;
     if(activeIndex>=0 && previousPreview) {
       activePreview=previousPreview;
       resultsRoot.querySelector(`[data-result-index="${activeIndex}"]`)?.classList.add('active');
       const current=results[activeIndex];
       if((!selected.indexed && current.indexed) || selected.bestMatch?.eventId!==current.bestMatch?.eventId) void loadPreview(current);
-    } else void selectResult(activeIndex<0?0:activeIndex);
+    } else void selectResult(activeIndex<0?firstVisibleIndex():activeIndex);
     announce(`${partial?'至少':''}${total} 个会话，条件已生效`);
   }
 
@@ -1004,15 +1075,14 @@ function createGlobalSessionSearch(options) {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       if (!results.length) return;
       event.preventDefault();
-      const direction = event.key === 'ArrowDown' ? 1 : -1;
-      const next = activeIndex < 0 ? 0 : (activeIndex + direction + results.length) % results.length;
-      void selectResult(next, { focusRow: false });
+      const next = activeIndex < 0 ? firstVisibleIndex() : stepVisible(activeIndex, event.key === 'ArrowDown' ? 1 : -1);
+      if (next >= 0) void selectResult(next, { focusRow: false });
       return;
     }
     if (event.key === 'Enter' && results.length) {
       event.preventDefault();
-      if (event.ctrlKey || event.metaKey) void openSelectedHit({ focus: true });
-      else void selectResult(activeIndex < 0 ? 0 : activeIndex, { read: true });
+      if (event.ctrlKey || event.metaKey) { if (activeIndex >= 0) void openSelectedHit({ focus: true }); }
+      else { const target = activeIndex < 0 ? firstVisibleIndex() : activeIndex; if (target >= 0) void selectResult(target, { read: true }); }
     }
   });
   providerRoot.addEventListener('click', (event) => {
@@ -1115,6 +1185,7 @@ function createGlobalSessionSearch(options) {
 
 module.exports = {
   filterSearchEntries,
+  groupArchiveHits,
   filterSearchHits,
   loadSearchFacets,
   FACET_STORAGE_KEY,
