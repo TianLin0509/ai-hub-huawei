@@ -41,23 +41,123 @@ function clampTo(range, x, y) {
   return { x: Math.round(Math.min(range.maxX, Math.max(range.minX, x))), y: Math.round(Math.min(range.maxY, Math.max(range.minY, y))) };
 }
 
+// ---------- 多屏：哪些边是真正的屏幕外侧边（2026-11-26） ----------
+// 多屏时，本屏某条边如果被隔壁屏贴着（两屏在这条线上有重叠的一段），这一段只是交界线，不是边缘：
+// 不在这里吸附，也不把半跨交界的身体弹回本屏。两屏不等高、不对齐时，只有没被隔壁盖住的那段才算边缘。
+// displays：screen.getAllDisplays() 的结果（各屏 bounds、workArea，DIP）；不传或只有一块屏时和以前完全一样。
+// 混合缩放下 Electron 换算出的 DIP 坐标会差一两个像素，相邻判断留 EDGE_TOL 的容差。
+const EDGE_TOL = 4;
+const sameRect = (a, b) => !!(a && b) && Math.abs(a.x - b.x) <= 1 && Math.abs(a.y - b.y) <= 1 && Math.abs(a.width - b.width) <= 1 && Math.abs(a.height - b.height) <= 1;
+function homeOf(area, displays) {
+  if (!Array.isArray(displays) || displays.length < 2) return null;
+  return displays.find(d => d && sameRect(d.workArea, area)) || null;
+}
+// 本屏 side 边上被别的屏盖住的线段（沿这条边的坐标：左右边是 y，上下边是 x）。
+// 隔壁屏朝向本屏的那一侧是任务栏的，不算盖住（交界处隔着任务栏，两边都按外侧边算，两屏判定对称）；
+// 沿边的线段按隔壁屏工作区算（隔壁的竖/横任务栏占掉的那段也不算盖住）。
+function coveredSpans(home, displays, side) {
+  const b = home.bounds, out = [];
+  for (const d of displays) {
+    if (!d || d === home || !d.bounds || sameRect(d.bounds, b)) continue;
+    const o = d.bounds, w = d.workArea || d.bounds;
+    let touch = false, lo = 0, hi = 0;
+    if (side === 'left' || side === 'right') {
+      touch = side === 'left'
+        ? Math.abs(o.x + o.width - b.x) <= EDGE_TOL && Math.abs(w.x + w.width - (o.x + o.width)) <= 1
+        : Math.abs(o.x - (b.x + b.width)) <= EDGE_TOL && Math.abs(w.x - o.x) <= 1;
+      lo = Math.max(b.y, w.y); hi = Math.min(b.y + b.height, w.y + w.height);
+    } else {
+      touch = side === 'top'
+        ? Math.abs(o.y + o.height - b.y) <= EDGE_TOL && Math.abs(w.y + w.height - (o.y + o.height)) <= 1
+        : Math.abs(o.y - (b.y + b.height)) <= EDGE_TOL && Math.abs(w.y - o.y) <= 1;
+      lo = Math.max(b.x, w.x); hi = Math.min(b.x + b.width, w.x + w.width);
+    }
+    if (touch && hi > lo) out.push([lo, hi]);
+  }
+  return out.sort((p, q) => p[0] - q[0]);
+}
+function spansCover(spans, lo, hi) {
+  let at = lo;
+  for (const [a, b] of spans) { if (a > at + 1) break; if (b > at) at = b; if (at >= hi) return true; }
+  return at >= hi;
+}
+// 身体在窗口里的位置。body：身体方块边长（控制器传 geom().body）；不传按可见宽度估。
+// 中心和控制器「按身体中心认屏」用同一个点：横向取窗口正中，纵向取身体方块正中。
+function bodyFrame(size, inset, body) {
+  const B = Math.max(1, Number(body) > 0 ? Number(body) : size.width - inset.left - inset.right);
+  return { B, cxOff: size.width / 2, cyOff: size.height - inset.bottom - B / 2 };
+}
+// 窗口停在 position 时，本屏四条边各是什么：open＝真正的外侧边（可吸附）；passable＝隔壁屏盖住了身体整段，身体可以伸过去。
+// 工作区边不等于屏幕边的那一侧是任务栏，照旧算外侧边。
+function edgeInfo({ position, area, size, inset, displays, body }) {
+  const all = { left: { open: true, passable: false }, right: { open: true, passable: false }, top: { open: true, passable: false }, bottom: { open: true, passable: false } };
+  const home = homeOf(area, displays);
+  if (!home || !home.bounds || !position) return all;
+  const b = home.bounds;
+  const f = bodyFrame(size, inset, body);
+  const x1 = position.x + inset.left, x2 = position.x + size.width - inset.right;
+  const y2 = position.y + size.height - inset.bottom, y1 = y2 - f.B;
+  const cx = position.x + f.cxOff, cy = position.y + f.cyOff;
+  const flush = { left: Math.abs(area.x - b.x) <= 1, right: Math.abs(area.x + area.width - (b.x + b.width)) <= 1, top: Math.abs(area.y - b.y) <= 1, bottom: Math.abs(area.y + area.height - (b.y + b.height)) <= 1 };
+  for (const side of ['left', 'right', 'top', 'bottom']) {
+    if (!flush[side]) continue;
+    const spans = coveredSpans(home, displays, side);
+    if (!spans.length) continue;
+    const vertical = side === 'left' || side === 'right';
+    const c = vertical ? cy : cx;
+    const inner = spans.some(([lo, hi]) => c >= lo && c <= hi);
+    all[side] = { open: !inner, passable: inner && (vertical ? spansCover(spans, y1, y2) : spansCover(spans, x1, x2)) };
+  }
+  return all;
+}
+// 限位：隔壁屏盖住身体整段的那一边，身体可以伸过交界线，直到身体中心到交界线为止（中心仍在本屏，
+// 和控制器「按身体中心认屏」一致；上下方向按身体中心算，不按窗口顶，窗口上方大片留白不影响）。取整数，取整后中心也不越界。
+function relaxedRange(range, edges, { area, size, inset, body }) {
+  const f = bodyFrame(size, inset, body);
+  return {
+    minX: edges.left.passable ? Math.min(range.minX, Math.ceil(area.x - f.cxOff)) : range.minX,
+    maxX: edges.right.passable ? Math.max(range.maxX, Math.floor(area.x + area.width - 1 - f.cxOff)) : range.maxX,
+    minY: edges.top.passable ? Math.min(range.minY, Math.ceil(area.y - f.cyOff)) : range.minY,
+    maxY: edges.bottom.passable ? Math.max(range.maxY, Math.floor(area.y + area.height - 1 - f.cyOff)) : range.maxY,
+  };
+}
+// 把位置收进「可以停的地方」：单屏就是本屏工作区限位（和以前一样）；多屏时按停下那一刻的覆盖情况放宽。
+// 收一次后覆盖情况可能变（比如顺着交界线挪了），再按新位置收一次。启动恢复、调大小、松手、甩出去都用它。
+function restRange(position, ctx) {
+  return relaxedRange(allowedRange(ctx.area, ctx.size, ctx.inset), edgeInfo({ ...ctx, position }), ctx);
+}
+function clampRest(position, ctx) {
+  const base = allowedRange(ctx.area, ctx.size, ctx.inset);
+  let at = clampTo(relaxedRange(base, edgeInfo({ ...ctx, position }), ctx), position.x, position.y);
+  at = clampTo(relaxedRange(base, edgeInfo({ ...ctx, position: at }), ctx), at.x, at.y);
+  return at;
+}
+// 停在 at 时往哪条边吸（releasePlan、flingPlan 共用）：只吸真正的外侧边；伸过交界线的不吸。
+function snapAt(at, base, ctx, { bottom = true } = {}) {
+  const e = edgeInfo({ ...ctx, position: at });
+  let dock = null;
+  const snap = { x: at.x, y: at.y };
+  if (e.left.open && at.x - base.minX <= SNAP_DISTANCE) { snap.x = base.minX; dock = 'left'; }
+  else if (e.right.open && base.maxX - at.x <= SNAP_DISTANCE) { snap.x = base.maxX; dock = 'right'; }
+  if (bottom && e.bottom.open && base.maxY - at.y <= SNAP_DISTANCE) snap.y = base.maxY;
+  return { snap, dock };
+}
+
 // 松手后的完整计划：先惯性滑行（可能为空），再贴边（可能为空）。
-function releasePlan({ samples, position, area, size, inset }) {
-  const range = allowedRange(area, size, inset);
+function releasePlan({ samples, position, area, size, inset, displays, body }) {
+  const base = allowedRange(area, size, inset);
+  const ctx = { area, size, inset, displays, body };
   const { vx, vy, speed } = releaseVelocity(samples);
   const steps = [];
-  let at = clampTo(range, position.x, position.y);
+  let at = clampRest(position, ctx);
   if (speed >= MIN_SPEED) {
     const dist = Math.min(MAX_SLIDE, 12 + (speed - MIN_SPEED) * 0.035);
-    const to = clampTo(range, at.x + (vx / speed) * dist, at.y + (vy / speed) * dist);
+    // 滑到的地方按那里的覆盖情况再收一次（滑出隔壁屏覆盖的那段就不能再伸过去）。
+    const to = clampRest({ x: at.x + (vx / speed) * dist, y: at.y + (vy / speed) * dist }, ctx);
     const durationMs = Math.round(Math.min(210, Math.max(120, 120 + (speed - MIN_SPEED) * 0.05)));
     if (to.x !== at.x || to.y !== at.y) { steps.push({ kind: 'slide', from: at, to, durationMs }); at = to; }
   }
-  let dock = null;
-  const snap = { x: at.x, y: at.y };
-  if (at.x - range.minX <= SNAP_DISTANCE) { snap.x = range.minX; dock = 'left'; }
-  else if (range.maxX - at.x <= SNAP_DISTANCE) { snap.x = range.maxX; dock = 'right'; }
-  if (range.maxY - at.y <= SNAP_DISTANCE) snap.y = range.maxY;
+  const { snap, dock } = snapAt(at, base, ctx);
   if (snap.x !== at.x || snap.y !== at.y) { steps.push({ kind: 'snap', from: at, to: snap, durationMs: SNAP_MS }); at = snap; }
   return { steps, final: at, dock, speed, vx, vy };
 }
@@ -75,21 +175,38 @@ const FLY_MAX_MS = 1400;
 // 飞行中 tMs 时刻窗口左上角的位置。
 function flyAt(step, tMs) {
   const t = Math.min(step.durationMs, Math.max(0, tMs)) / 1000;
-  const r = step.range;
+  let r = step.range;
+  // 多屏：飞到隔壁屏盖不住身体的地方之前，把伸过交界线的那部分在 tBlend 内匀速收回本屏（不在半空突然横跳，也不伸进没有屏幕的地方）。
+  if (step.range2) {
+    const k = Math.min(1, (t * 1000) / step.tBlend), mix = (a, b) => a + (b - a) * k;
+    r = { minX: mix(step.range.minX, step.range2.minX), maxX: mix(step.range.maxX, step.range2.maxX), minY: mix(step.range.minY, step.range2.minY), maxY: mix(step.range.maxY, step.range2.maxY) };
+  }
   const x = step.from.x + step.vx * (1 - Math.exp(-AIR_DRAG * t)) / AIR_DRAG;
   const y = step.from.y + step.vy * t + 0.5 * (step.gravity || GRAVITY) * t * t;
   return { x: Math.round(Math.min(r.maxX, Math.max(r.minX, x))), y: Math.round(Math.min(r.maxY, Math.max(r.minY, y))) };
 }
 
 // 甩出去的完整计划；速度不够返回 null（交给 releasePlan）。
-function flingPlan({ samples, position, area, size, inset }) {
+function flingPlan({ samples, position, area, size, inset, displays, body }) {
   const { vx: rawVx, vy: rawVy, speed: rawSpeed } = releaseVelocity(samples);
   if (rawSpeed < FLING_SPEED) return null;
-  const range = allowedRange(area, size, inset);
+  const base = allowedRange(area, size, inset);
+  const ctx = { area, size, inset, displays, body };
+  // 甩出去只放宽左右（交界线不当墙），落地仍落在本屏任务栏上沿。
+  // 多屏：从松手的真实位置起飞（半跨上下交界的也不先挪回本屏范围）；途中飞出隔壁屏的覆盖段时匀速收回本屏（range2/tBlend）。
+  const multi = !!homeOf(area, displays);
+  let range, from;
+  if (!multi) {
+    range = base;
+    from = clampTo(range, position.x, position.y);
+  } else {
+    from = clampRest(position, ctx);
+    const re = restRange(from, ctx);
+    range = { minX: Math.min(re.minX, from.x), maxX: Math.max(re.maxX, from.x), minY: Math.min(base.minY, from.y), maxY: Math.max(base.maxY, from.y) };
+  }
   const k = Math.min(1, FLING_VMAX / rawSpeed);
   const vx = rawVx * k;
   const vy = Math.max(-FLING_UP_MAX, rawVy * k);
-  const from = clampTo(range, position.x, position.y);
   const drop = Math.max(0, range.maxY - from.y);
   // ½g·t² + vy·t − drop = 0 的正根：落到底边的时刻
   const tLand = (-vy + Math.sqrt(vy * vy + 2 * GRAVITY * drop)) / GRAVITY;
@@ -100,13 +217,26 @@ function flingPlan({ samples, position, area, size, inset }) {
   // 没封顶时也按取整后的时长微调一点（差不到 1%），免得最后一帧差 1px。落差极小（不到 160ms 就落地）的照旧，靠范围截住。
   const gravity = tLand * 1000 >= 160 ? 2 * (drop - vy * T) / (T * T) : GRAVITY;
   const step = { kind: 'fly', from, vx, vy, gravity, range, durationMs };
+  if (multi) {
+    // 逐毫秒找第一帧落到「不能停」的地方：从起飞到它前一刻，把范围（左右、上下）匀速收成本屏工作区范围。
+    for (let tMs = 1; tMs <= durationMs; tMs++) {
+      const p = flyAt(step, tMs);
+      const ok = clampRest(p, ctx);
+      if (ok.x !== p.x || ok.y !== p.y) {
+        step.range2 = { ...base };
+        step.tBlend = Math.max(1, tMs - 1);
+        break;
+      }
+    }
+  }
   let at = flyAt(step, durationMs);
-  at = { x: at.x, y: range.maxY };
+  at = { x: at.x, y: (step.range2 || range).maxY };
   const steps = [step];
-  let dock = null;
-  const snap = { x: at.x, y: at.y };
-  if (at.x - range.minX <= SNAP_DISTANCE) { snap.x = range.minX; dock = 'left'; }
-  else if (range.maxX - at.x <= SNAP_DISTANCE) { snap.x = range.maxX; dock = 'right'; }
+  if (homeOf(area, displays)) {
+    const ok = clampRest(at, ctx);
+    if (ok.x !== at.x || ok.y !== at.y) { steps.push({ kind: 'snap', from: at, to: ok, durationMs: SNAP_MS }); at = ok; }
+  }
+  const { snap, dock } = snapAt(at, base, ctx, { bottom: false });
   if (snap.x !== at.x) { steps.push({ kind: 'snap', from: at, to: snap, durationMs: SNAP_MS }); at = snap; }
   return { steps, final: at, dock, speed: rawSpeed, vx, vy, fling: true, impact: Math.min(1, 0.45 + Math.hypot(vx, vy + gravity * T) / 3200) };
 }
@@ -183,11 +313,13 @@ function makeWalk(position, toX, sit, rnd) {
 }
 
 // 判断某个位置贴在哪条边（启动恢复位置、躲边后回来时用）。
-function dockOf({ position, area, size, inset }) {
+// 多屏时交界线不算边：传了 displays、那条边在身体这一段被隔壁屏盖住，就不算贴边。
+function dockOf({ position, area, size, inset, displays, body }) {
   const range = allowedRange(area, size, inset);
-  if (position.x - range.minX <= 2) return 'left';
-  if (range.maxX - position.x <= 2) return 'right';
+  const e = edgeInfo({ position, area, size, inset, displays, body });
+  if (e.left.open && position.x - range.minX <= 2) return 'left';
+  if (e.right.open && range.maxX - position.x <= 2) return 'right';
   return null;
 }
 
-module.exports = { FLING_SPEED, GRAVITY, MIN_SPEED, MAX_SLIDE, SNAP_DISTANCE, SNAP_MS, WALK_MAX, WALK_MIN, WALK_SPEED, allowedRange, clampTo, cubicOut, dockOf, flingPlan, flyAt, releasePlan, releaseVelocity, walkIntervals, walkPlan };
+module.exports = { EDGE_TOL, edgeInfo, relaxedRange, restRange, clampRest, FLING_SPEED, GRAVITY, MIN_SPEED, MAX_SLIDE, SNAP_DISTANCE, SNAP_MS, WALK_MAX, WALK_MIN, WALK_SPEED, allowedRange, clampTo, cubicOut, dockOf, flingPlan, flyAt, releasePlan, releaseVelocity, walkIntervals, walkPlan };

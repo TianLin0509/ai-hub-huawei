@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { ASSISTANT_ACTIONS, MODES, ROLES, SpeechQueue, chatterFor, decidePose, localDateKey, speakGate, weeklyNudge } = require('../core/hub-pet/state');
 const { applyReply, cleanName, noteSpoken, normalizePrefs, pickLine } = require('../core/hub-pet/talk');
-const { allowedRange, clampTo, cubicOut, dockOf, flingPlan, flyAt, releasePlan, walkIntervals, walkPlan } = require('../core/hub-pet/motion');
+const { allowedRange, clampRest, clampTo, restRange, cubicOut, dockOf, flingPlan, flyAt, releasePlan, walkIntervals, walkPlan } = require('../core/hub-pet/motion');
 const { CLICK_MODES, DBL_MODES, NOTIFY_MODES, SCALE_MAX, SCALE_MIN, createSettingsStore, isUrgentNotice, parseBox, parseScale } = require('../core/hub-pet/settings');
 const { DEFAULT_ROLE, createRolePackStore } = require('../core/hub-pet/role-packs');
 const { createFullscreenWatch } = require('../core/hub-pet/fullscreen-watch');
@@ -141,6 +141,10 @@ function createHubPetController({
   const winH = () => geom().h;
   const winSize = () => geom().size;
   const inset = () => geom().inset;
+  // 全部屏幕（每次现取：热插拔、改缩放后自然是新的）。取不到按单屏算，吸边规则和以前一样。
+  function allDisplays() {
+    try { const list = screen.getAllDisplays(); return Array.isArray(list) ? list : []; } catch (_) { return []; }
+  }
   function displayFor(point) {
     try { return screen.getDisplayNearestPoint(point); } catch (_) { return screen.getPrimaryDisplay(); }
   }
@@ -151,6 +155,10 @@ function createHubPetController({
   const areaAt = pos => areaFor(pos);
   function rangeFor(pos, g = geom()) { return allowedRange(areaFor(pos, g), g.size, g.inset); }
   const rangeAt = pos => rangeFor(pos);
+  // 「可以停的地方」：单屏就是 rangeFor；多屏时身体可以伸过被隔壁屏盖住的交界线（core/hub-pet/motion.js 的 clampRest）。
+  // 松手、启动恢复、调大小都用它，免得松手允许的位置下次打开又被拉回。
+  function restCtx(pos, g = geom()) { return { area: areaFor(pos, g), size: g.size, inset: g.inset, body: g.body, displays: allDisplays() }; }
+  const clampHome = (pos, g = geom()) => clampRest(pos, restCtx(pos, g));
   // 隔离测试（调试入口 override virtual）：测试窗口被压在屏幕外、挪不动，这时以「自己放的位置」当窗口位置，走动、甩出去的规划照真实屏幕算。
   function winBounds() { const b = win.getBounds(); return overrides.virtual && placed ? { ...b, x: placed.x, y: placed.y } : b; }
   function currentPos() { const b = winBounds(); return { x: b.x, y: b.y }; }
@@ -179,7 +187,7 @@ function createHubPetController({
     const saved = settings.get().position;
     if (saved) {
       // 存的位置所在的屏幕已经拔掉时，clamp 会把它拉回最近的屏幕。
-      const pos = clampTo(rangeAt(saved), saved.x, saved.y);
+      const pos = clampHome(saved);
       savedDetached = pos.x !== saved.x || pos.y !== saved.y;
       return pos;
     }
@@ -190,12 +198,11 @@ function createHubPetController({
   // 窗口开没开都按这个算（桌宠关着时改大小，下次打开不会悬在半空）。存的位置不在现有屏幕上时只按脚换算，不往现有屏幕上拉。
   function convertSaved(saved, g0, g1) {
     const feetShift = { x: saved.x, y: saved.y + g0.h - g1.h };
-    const r0 = rangeFor(saved, g0);
-    const c = clampTo(r0, saved.x, saved.y);
+    const c = clampHome(saved, g0);
     if (c.x !== saved.x || c.y !== saved.y) return feetShift;
-    const d = dockOf({ position: saved, area: areaFor(saved, g0), size: g0.size, inset: g0.inset });
+    const d = dockOf({ position: saved, ...restCtx(saved, g0) });
     const r1 = rangeFor(feetShift, g1);
-    return clampTo(r1, d === 'left' ? r1.minX : d === 'right' ? r1.maxX : feetShift.x, feetShift.y);
+    return clampHome({ x: d === 'left' ? r1.minX : d === 'right' ? r1.maxX : feetShift.x, y: feetShift.y }, g1);
   }
   // 窗口伸出所在屏幕工作区的宽度（左、右）。告诉渲染端，气泡、提醒面板、小圆点都只放在看得见的那一段里（2026-10-18 审核：
   // 原来写死 65px，小猫 100% 贴右边时会被裁约 30px，60% 时约 48px）。
@@ -246,7 +253,7 @@ function createHubPetController({
     ignoring = null; setIgnore(true);
     const pos = initialPosition();
     place(pos);
-    dock = dockOf({ position: pos, area: areaAt(pos), size: winSize(), inset: inset() });
+    dock = dockOf({ position: pos, ...restCtx(pos) });
     win.on('closed', () => { win = null; lastSent = ''; stopMove(); drag = null; });
     win.webContents.once('did-finish-load', () => {
       if (!alive()) return;
@@ -681,12 +688,20 @@ function createHubPetController({
     const want = { x: c.x - drag.offset.x, y: c.y - drag.offset.y };
     const g = geom();
     const a = allowedRange(displayFor({ x: Math.round(c.x), y: Math.round(c.y) }).workArea, g.size, g.inset);
-    const b = rangeFor(drag.last, g);
+    // 宠物现在所在屏按「可以停的地方」算（多屏时可伸过交界线），免得停在半跨交界处的桌宠一拖就被弹回本屏范围。
+    const b = restRange(drag.last, restCtx(drag.last, g));
     const range = { minX: Math.min(a.minX, b.minX), maxX: Math.max(a.maxX, b.maxX), minY: Math.min(a.minY, b.minY), maxY: Math.max(a.maxY, b.maxY) };
-    const pos = clampTo({ ...range, minY: range.minY - 40 }, want.x, want.y);
+    let pos = clampTo({ ...range, minY: range.minY - 40 }, want.x, want.y);
+    // 再按这一帧自己的位置收进「可以停的地方」（多屏：伸过交界线只在隔壁屏盖得住身体时允许）；单屏和上面结果相同。
+    for (let i = 0; i < 2; i++) { const rc = restCtx(pos, g), rr = restRange(pos, rc), top = rc.area.y; pos = clampTo({ ...rr, minY: rr.minY < top ? rr.minY : rr.minY - 40 }, pos.x, pos.y); }
     const t = Date.now();
     const prev = drag.samples[drag.samples.length - 1];
+    const lastWant = drag.lastWant || prev;
+    drag.lastWant = want;
     if (pos.x === prev.x && pos.y === prev.y && t - prev.t < 100) return;
+    // 多屏限位范围变了（比如拖过不等高屏的拐角）时窗口会被收一下，这一下比鼠标走得远，不能算成甩的速度：从这一帧重新计速。
+    // 单屏限位范围固定，窗口位移不会超过鼠标位移，不受影响。
+    if (Math.abs(pos.x - prev.x) > Math.abs(want.x - lastWant.x) + 1 || Math.abs(pos.y - prev.y) > Math.abs(want.y - lastWant.y) + 1) drag.samples = [];
     drag.samples.push({ t, x: pos.x, y: pos.y });
     if (drag.samples.length > 30) drag.samples.shift();
     const dt = Math.max(1, t - prev.t) / 1000;
@@ -711,12 +726,13 @@ function createHubPetController({
     pettedAt = clock();
     const position = currentPos();
     // 甩出去（够快）：沿抛物线落到任务栏上；慢慢放下：照旧原地停住（只滑一小段、离边近就贴边）。
-    const args = { samples: d.samples, position, area: areaAt(position), size: winSize(), inset: inset() };
+    const args = { samples: d.samples, position, ...restCtx(position) };
     const plan = flingPlan(args) || releasePlan(args);
     send('hub-pet:motion', { phase: 'release', speed: plan.speed, vx: plan.vx, vy: plan.vy });
     if (plan.fling) send('hub-pet:motion', { phase: 'fly', durationMs: plan.steps[0].durationMs, vx: plan.vx });
     lastRelease = { speed: Math.round(plan.speed), samples: d.samples.length, steps: plan.steps.map(st => st.kind), dock: plan.dock, fling: !!plan.fling, final: plan.final };
     animateTo(plan.steps, () => {
+      place(plan.final); // 没有动画步骤但限位改了位置时，窗口也要落到保存的那个位置
       dock = plan.dock;
       settings.update({ position: plan.final });
       savedDetached = false;
@@ -1306,7 +1322,7 @@ function createHubPetController({
       // 「回到右下角」：滑回默认位置。
       const to = initialPosition();
       animateTo([{ from: currentPos(), to, durationMs: 420 }], () => {
-        dock = dockOf({ position: to, area: areaAt(to), size: winSize(), inset: inset() });
+        dock = dockOf({ position: to, ...restCtx(to) });
         send('hub-pet:motion', { phase: 'land', impact: 0.3 }); lastSent = ''; evaluate();
       });
     }
@@ -1329,13 +1345,13 @@ function createHubPetController({
     } else if (!settings.get().position) {
       const pos = defaultPosition(g1);
       place(pos);
-      dock = dockOf({ position: pos, area: areaFor(pos, g1), size: g1.size, inset: g1.inset });
+      dock = dockOf({ position: pos, ...restCtx(pos, g1) });
     } else {
       const want = { x: base.x, y: base.y + base.height - g1.h };
       const range = rangeFor(want, g1);
-      const pos = clampTo(range, dock === 'left' ? range.minX : dock === 'right' ? range.maxX : want.x, want.y);
+      const pos = clampHome({ x: dock === 'left' ? range.minX : dock === 'right' ? range.maxX : want.x, y: want.y }, g1);
       place(pos);
-      dock = dockOf({ position: pos, area: areaFor(pos, g1), size: g1.size, inset: g1.inset });
+      dock = dockOf({ position: pos, ...restCtx(pos, g1) });
     }
     lastSent = '';
     evaluate();
