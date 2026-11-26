@@ -52,6 +52,24 @@ function createMeetingLayout({ document, window, ipcRenderer, closeOtherPanels, 
     window.removeEventListener('resize', place);
   }
   nav.addEventListener('click', () => { void open().catch(e => showMessage(e.message)); });
+  // 跳转后台（renderer/backstage-jump.js）：从会议页跳去看会议理解会话；返回时重开会议页（先拉一次全量再走增量，采集一直在后台继续）。
+  require('./backstage-jump').registerBackstageSource('meeting', {
+    label: '会议',
+    // 自检用：会议 AI（理解会话）的启动报错；只读页面已合并的状态，不发 IPC。
+    // 按会议负责人口径：报错用 laneAlert（已按优先级合并引擎异常、理解会话异常、问答线异常）；「需先配置」认 engines 为空；
+    // 会议会话有自己的恢复与换引擎，不给通用的「重启后台会话」；在录时不给会重启 Hub 的修复；不带任何会议内容。
+    diagnose: () => {
+      const st = meeting.currentState?.(), m = st?.meeting || null;
+      const alert = m ? require('./company-meeting-chat').laneAlert(st, m) : null;
+      const noEngine = Array.isArray(st?.engines) && st.engines.length === 0;
+      return { error: alert?.text || '', area: 'codeagent', capability: noEngine ? { codeagent: false, api: false } : {},
+        codeagentOnly: true, noSessionRestart: true, recording: ['recording', 'paused'].includes(m?.state),
+        hint: '会议自己的修复在会议页：「更多」里换引擎，或「会议理解」页签点「更新」重新理解；单题点题目卡上的「重试」或「用 X 重答」。' };
+    },
+    emptyText: '这场会议还没有理解会话：会议 AI 起来后才有后台可看。',
+    closedText: '理解会话已休眠或已关闭，后台打不开。点「会议理解」页签的「更新」或等下一轮自动理解，会重新建会话；也可在「更多 › 打开理解会话」重开。',
+    reopen: () => open(),
+  });
   document.addEventListener('click', e => {
     if (!e.target.closest('#btn-company-meeting') && e.target.closest('#scene-rail button')) close();
   });

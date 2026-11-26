@@ -5,12 +5,15 @@ const LAST_KIND_KEY = 'hub:lastSessionKind';
 let installed = null;
 let pending = null;
 
-function refresh(ipcRenderer) {
+// force：装完 CodeAgent 或用户点自检时重测一次（不然首次的「没装」会一直留着）。
+// 检测本身出错记为「不知道」（null），不当成「没装」——否则会把装了的人引去重装（2026-11-26 跳转后台复审）。
+function refresh(ipcRenderer, { force = false } = {}) {
+  if (force) pending = null;
   if (!pending) {
     pending = Promise.resolve()
       .then(() => ipcRenderer.invoke('codeagent:available'))
       .then(result => { installed = !!(result && result.installed); return installed; })
-      .catch(() => { installed = false; return false; });
+      .catch(() => { installed = null; pending = null; return null; });
   }
   return pending;
 }

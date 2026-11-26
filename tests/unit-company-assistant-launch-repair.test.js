@@ -166,8 +166,8 @@ test('旧 Doctor 在页头提示版本与升级，详细说明收起；升级后
   assert.deepEqual(calls, ['map-show']);
 });
 
-function chatContext(row) {
-  const context = { data: { chat: [row] }, visibleChat: list => list, labelFor: () => () => '', dayOf: () => '', when: () => '', esc, body: esc, tagSources: text => text,
+function chatContext(row, { noEngine = false } = {}) {
+  const context = { data: { chat: [row] }, noEngine: () => noEngine, NEEDS_SETUP_HTML: '<b data-needs-setup>需要先配置</b>', backstage: require('../renderer/backstage-jump'), visibleChat: list => list, labelFor: () => () => '', dayOf: () => '', when: () => '', esc, body: esc, tagSources: text => text,
     USER_AVATAR_SRC: '', ASSISTANT_AVATAR_SRC: '', secondsText: () => '', waitPhase: assistantChatPhase, window: { HubErrorCard: { knownHtml: args => `<aside>${esc(args.area)}:${esc(args.details)}</aside>` } } };
   vm.createContext(context); vm.runInContext(section(assistant, '  function chatList() {', '  // 进行中的已用秒数'), context);
   return context;
@@ -178,6 +178,10 @@ test('2、6 等待可打开会话，失败显示 CodeAgent 修复卡，错误文
   context.data.chat[0] = { state: 'error', error: '<img onerror=x>', id: 'q' };
   const html = context.chatList(); assert.match(html, /<aside>codeagent:/); assert.ok(!html.includes('<img onerror'));
   context.data.chat[0].stopped = true; assert.ok(!context.chatList().includes('<aside>'));
+});
+test('2b 没有回答通道（没装 CodeAgent 也没接 API）时，等待中的问题直接写「需要先配置」而不是一直转圈', () => {
+  const html = chatContext({ state: 'running', id: 'q', q: '问题', notReadySince: 1000 }, { noEngine: true }).chatList();
+  assert.match(html, /data-needs-setup/); assert.doesNotMatch(html, /打开助理会话/);
 });
 test('7 连接尚未确认时保留扫码按钮', () => {
   const context = { data: { cliFound: true, auth: { state: 'unknown' } }, connectionState, onboardingShown: () => true, esc, window: {}, codeagentPref: { detectedInstalled: () => null } };

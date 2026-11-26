@@ -11,16 +11,45 @@ const { cleanNick } = require('../core/community/schema');
 
 const HOST_SUMMARY_GAP_MS = 60 * 1000;
 
+// 「后台」自检的失败原因计数（renderer/backstage-jump.js 每做一次自检报一次）：只记当天「入口:原因 → 次数」，
+// 存在 community/diag-counts.json，跨天清零；随下一次心跳带上（关了社区就不发）。
+function createDiagCounter(file, now) {
+  const fs = require('node:fs');
+  const { cleanDiag } = require('../core/community/schema');
+  const pad = n => String(n).padStart(2, '0');
+  const today = () => { const d = new Date(now()); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+  let data = null;
+  const load = () => {
+    if (data) return data;
+    try { data = cleanDiag(JSON.parse(fs.readFileSync(file, 'utf8'))) || null; } catch { data = null; }
+    return data;
+  };
+  return {
+    record(from, cause) {
+      const key = `${String(from || '')}:${String(cause || '')}`;
+      if (!/^[a-z][a-z-]{0,15}:[a-z][a-z-]{0,19}$/.test(key)) return false;
+      const d = today(), cur = load();
+      data = cur && cur.d === d ? cur : { d, c: {} };
+      if (!(key in data.c) && Object.keys(data.c).length >= 24) return false;
+      data.c[key] = Math.min(1000, (data.c[key] || 0) + 1);
+      try { fs.mkdirSync(require('node:path').dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(data)); } catch { /* 记不下只影响统计 */ }
+      return true;
+    },
+    current() { const cur = load(); return cur && cur.d === today() ? cur : null; },
+  };
+}
+
 function createCommunityService({ dataDir, edition, version, profileController, receiverAddress, isEnabled, setEnabledFlag, getHost = () => null,
   fetchImpl, logger = console, now = Date.now, sendToRenderer = () => {}, timers = { setTimeout, clearTimeout }, clientOptions = {} } = {}) {
   let iid = '';
+  const diag = createDiagCounter(path.join(dataDir, 'community', 'diag-counts.json'), now);
   const installId = () => iid || (iid = ensureInstallId(dataDir));
   const pc = () => (typeof profileController === 'function' ? profileController() : profileController);
   const payload = () => {
     const c = pc();
     if (!c) return null;
     return buildPayload({ iid: installId(), edition, version, state: c.profile.state, petRole: c.petRole(), dayTokens: c.dayTokens(),
-      lastActiveAt: c.lastUsedAt(), now: new Date(now()) });
+      lastActiveAt: c.lastUsedAt(), now: new Date(now()), diag: diag.current() });
   };
   // 收件机本机：暂停收集时自己的心跳也不记，但不把自己刹住（本机照样能看榜）。
   const host = {
@@ -75,6 +104,8 @@ function createCommunityService({ dataDir, edition, version, profileController, 
       const c = pc(); if (!c) return { ok: false, error: '个人页数据还没准备好' };
       c.profile.setNickname(cleanNick(req.name)); return settings();
     },
+    // 「后台」自检报一次原因（只记本机当天计数，不立刻发；随下一次心跳带上）。
+    'diag-record': (req = {}) => ({ ok: diag.record(req.from, req.cause) }),
     'set-host-paused': (req = {}) => {
       const h = getHost(); if (!h || !h.isHost()) return { ok: false, error: '本机不是收件机' };
       const s = h.store.setPaused(req.paused === true);

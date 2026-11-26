@@ -53,7 +53,8 @@ function nickOf(state, iid, petName) {
 }
 
 // state：Profile.state；dayTokens：{ 'YYYY-MM-DD': 当天 Token 合计 }；lastActiveAt：最近一次亲自发消息或开会话的时间戳。
-function buildPayload({ iid, edition, version, state, petRole, dayTokens, lastActiveAt = 0, now = new Date() }) {
+// diag：「后台」自检的当天失败原因计数 { d, c }（main/community-service.js 记），没有就不带。
+function buildPayload({ iid, edition, version, state, petRole, dayTokens, lastActiveAt = 0, now = new Date(), diag = null }) {
   const s = state || {}, days = s.days || {}, pet = petOf(petRole);
   const raw = {
     v: 1, iid, ed: edition === 'public' ? 'public' : 'member', ver: String(version || ''),
@@ -62,6 +63,7 @@ function buildPayload({ iid, edition, version, state, petRole, dayTokens, lastAc
     wxp: weekXp(days, now), wtok: weekTokens(dayTokens, now),
     streak: workdayStreak(days, now), act: now.getTime() - (Number(lastActiveAt) || 0) <= ACTIVE_WINDOW_MS ? 1 : 0,
     days7: activeDays7(days, now),
+    ...(diag && diag.d === dayKey(now) ? { dg: diag } : {}),
   };
   // 发出去之前也过一遍白名单与钳制：发送端和接收端看到的是同一份。
   return sanitizePulse(raw);

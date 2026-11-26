@@ -86,6 +86,7 @@ function externalRows(list, avatars) {
 }
 const extTag = r => (r.kind === 'promise' ? '承诺待回收' : `群分身低把握 · 把握 ${r.confidence || 0}`);
 
+const backstage = require('./backstage-jump');
 function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage = () => {}, selectSession = () => {} }) {
   let page, root, data = null, targets = null, sel = 'all', tab = 'inbox', error = '', busy = '', wiz = null, confirmBox = null, notice = null, logFilter = 'all', logPage = 0, logPick = -1, noticeTimer = null;
   const itemSel = {}, edits = {}, ack = {}, ackNote = {}, rawOpen = {};
@@ -268,13 +269,13 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   }
   // 结构化报错：一句人话 + 紧挨着的修复按钮 + 折叠的原始报错。整页（activeFailure）和单条事项（item.failure）共用。
   const FIX_LABEL = { provider_repair: '改用手动会话在用的供应商', open_account_card: '去账号卡换', open_model_settings: '选择模型与供应商', welink_login: '就地扫码登录', retry_tick: '重试巡检', open_account_page: '去账号页登录' };
-  function failureBox(f, key, slim = false) {
+  function failureBox(f, key, slim = false, sessionId = '') {
     if (!f) return '';
     const sev = f.severity === 'warn' ? 'w' : 'r';
     const auto = f.retryable && f.retryAfterMs ? `${Math.max(1, Math.round(f.retryAfterMs / 1000))} 秒后自动重试${f.retryMax ? `（第 ${f.retryAttempt || 1} 次，最多 ${f.retryMax} 次）` : ''}，不用你做什么。` : '';
     const acts = (f.actions || []).map((x, i) => `<button class="avx-btn s ${i ? '' : sev === 'r' ? 'p' : ''}" data-av="fix" data-kind="${esc(x.kind)}" data-hl="${esc(x.highlight || '')}" data-account="${esc(x.payload?.account || '')}" data-payload="${esc(JSON.stringify(x.payload || {}))}">${esc(x.label || FIX_LABEL[x.kind] || '去处理')}</button>`).join('');
     const raw = f.raw ? `<details class="avx-raw" data-raw="${esc(key)}"${rawOpen[key] ? ' open' : ''}><summary>原始报错</summary><pre>${esc(f.raw)}</pre></details>` : '';
-    return `<div class="avx-fx ${sev}${slim ? ' slim' : ''}"><div class="avx-line"><span class="avx-fx-t">${esc(f.headline || '遇到问题')}${auto ? ` <small>${esc(auto)}</small>` : ''}</span><span class="avx-fx-a">${acts}</span></div>${raw}</div>`;
+    return `<div class="avx-fx ${sev}${slim ? ' slim' : ''}"><div class="avx-line"><span class="avx-fx-t">${esc(f.headline || '遇到问题')}${auto ? ` <small>${esc(auto)}</small>` : ''}</span><span class="avx-fx-a">${acts}${backstage.backstageLinkHtml({ sessionId, from: 'avatar' })}</span></div>${raw}</div>`;
   }
   function banners() {
     const out = [];
@@ -353,8 +354,8 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     const a = cur(), tabs = [['inbox', '待确认'], ['try', '试答'], ['learn', '它学到的'], ['log', '运行记录'], ['scope', '生效范围'], ['ctx', '上下文'], ['back', '后端与前缀']];
     const body = { inbox: () => inbox(a), try: () => tryTab(a), learn: () => learnTab(a), log: () => logs(a), scope: () => scope(a), ctx: () => context(a), back: () => backend(a) }[tab]();
     return `<section class="avx-detail"><div class="avx-dh"><h2>${esc(a.name)}</h2><span class="avx-ch ${{ on: 'g', error: 'r', paused: 'r', waiting: 'w' }[a.state.code] || ''}">${esc(a.state.text)}</span><span class="avx-ch b">${esc(modeText(a))}</span>
-      <div class="avx-right"><button class="avx-btn s" data-av="open-session">打开会话</button><button class="avx-btn s" data-av="toggle">${a.enabled ? '暂停这个分身' : '恢复'}</button><button class="avx-btn s d" data-av="remove">删除</button></div></div>
-      ${a.state.failure ? failureBox(a.state.failure, 'av:' + a.id, true) : a.state.error && !data.activeFailure ? `<div class="avx-bn r slim">${esc(a.state.error)}${a.state.providerRepair ? a.state.providerRepair.canUseManual ? `<button class="avx-btn s" data-av="repair-provider" data-account="${esc(a.state.providerRepair.account)}">改用手动会话在用的供应商</button>` : '<button class="avx-btn s" data-av="provider-settings">选择模型与供应商</button>' : ''}</div>` : ''}
+      <div class="avx-right">${backstage.backstageButtonHtml({ sessionId: a.session?.id || '', from: 'avatar' })}<button class="avx-btn s" data-av="toggle">${a.enabled ? '暂停这个分身' : '恢复'}</button><button class="avx-btn s d" data-av="remove">删除</button></div></div>
+      ${a.state.failure ? failureBox(a.state.failure, 'av:' + a.id, true, a.session?.id || '') : a.state.error && !data.activeFailure ? `<div class="avx-bn r slim">${esc(a.state.error)}${backstage.backstageLinkHtml({ sessionId: a.session?.id || '', from: 'avatar' })}${a.state.providerRepair ? a.state.providerRepair.canUseManual ? `<button class="avx-btn s" data-av="repair-provider" data-account="${esc(a.state.providerRepair.account)}">改用手动会话在用的供应商</button>` : '<button class="avx-btn s" data-av="provider-settings">选择模型与供应商</button>' : ''}</div>` : ''}
       <nav class="avx-tabs">${tabs.map(([k, n]) => `<button class="${tab === k ? 'on' : ''}" data-av="tab" data-k="${k}">${n}${k === 'inbox' && a.pending ? `<em>${a.pending}</em>` : ''}</button>`).join('')}</nav><div class="avx-body ${tab === 'log' ? 'col' : ''}">${body}</div></section>`;
   }
   // 正在排队 / 生成 / 重写的事项：点了「让分身重写」以后这里一直有进度，不再闪一句话就没影。
@@ -953,6 +954,19 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (scan) { void refreshScan(); return; }
     if (!busy && data && !data.missing && (!data.available || welinkNeedsLogin())) void runAny('', RECHECK).catch(() => {});
   };
+  // 跳转后台（renderer/backstage-jump.js）：右上角「后台」看这个分身的答题会话；返回时回到分身页，原来选中的分身和页签不变。
+  backstage.registerBackstageSource('avatar', {
+    label: '分身',
+    // 自检用：当前选中分身的报错（第 1 批的失败归类 failure 优先，其次 state.error）。
+    // 优先用第 1 批已归类好的 failure（全局 activeFailure 或这个分身的）；没有才把 state.error 交给通用分类。
+    diagnose: () => {
+      const a = sel !== 'all' ? cur() : null, f = a?.state?.failure || data?.activeFailure || null, agent = data?.preflight?.agent;
+      const none = agent && agent.ok === false && agent.source === 'none';
+      return { failure: f, error: f ? (f.raw || f.headline || '') : (a?.state?.error || ''), area: 'codeagent', capability: none ? { codeagent: false, api: false } : {} };
+    },
+    emptyText: '这个分身还没有后台会话：有新消息要它处理时会自动起会话，到时就能跳过去看。',
+    reopen: () => open(),
+  });
   ipcRenderer.on?.('avatar:changed', onChanged);
   ipcRenderer.on?.('company-assistant:changed', onAssistantChanged);
   // 同页「⚙ Agent」或设置里改了功能 Agent（含分身用部门 key、手填模型）：后端卡跟着刷新（审查 P2）。

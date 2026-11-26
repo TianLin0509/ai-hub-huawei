@@ -1,5 +1,6 @@
 'use strict';
 // Functional skeleton. Final visual refinements follow the approved m5 layout.
+const backstage = require('./backstage-jump');
 function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasSession = () => true, closeOtherPanels = () => {}, showMessage }) {
   const { pathToFileURL } = require('node:url');
   let page, status, timer, conversionId, chatId, md, searching = false, converting = false, candidates = [], selectedId = '', searched = false;
@@ -246,12 +247,12 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     const head = running
       ? `<header class="pptw-ai-head">${mark}<div><h3>AI 正在帮你找<span class="pptw-dots" aria-hidden="true"><i></i><i></i><i></i></span></h3><small>「${esc(ai.query)}」 · 已用 <b data-ppt-elapsed>${elapsed}</b>，整体通常 1–3 分钟；下面的关键词命中可以先看</small></div></header>`
       : ai.state === 'error'
-        ? `<header class="pptw-ai-head">${mark}<div><h3>AI 这次没找完</h3><small>${esc(ai.error || '助理检索未完成')}</small></div><button type="button" class="pptw-btn sec sm" data-ppt="ai-retry">再让 AI 找一次</button></header>`
+        ? `<header class="pptw-ai-head">${mark}<div><h3>AI 这次没找完</h3><small>${esc(ai.error || '助理检索未完成')}${backstage.backstageLinkHtml({ sessionId: ai.chat?.sessionId || '', from: 'ppt' })}</small></div><button type="button" class="pptw-btn sec sm" data-ppt="ai-retry">再让 AI 找一次</button></header>`
         : `<header class="pptw-ai-head">${mark}<div><h3>AI 推荐 ${picks.length} 页<span class="pptw-ai-ok">已逐页读原文核对</span></h3><small>「${esc(ai.query)}」 · 用时 ${elapsed}${queries.length ? ` · 试了 ${queries.length} 种说法、读了 ${readPages.length} 页` : ''}</small></div>${ai.report ? '<button type="button" class="pptw-btn ghost sm" data-ppt="open-report">核验报告与原文引用</button>' : ''}</header>`;
     const flow = `<ol class="pptw-ai-steps">${steps.map(([t, d], k) => `<li class="${k < stage || ai.state === 'done' ? 'done' : k === stage && running ? 'now' : ''}"><b>${t}</b><small>${esc(d)}</small></li>`).join('')}</ol>`;
     const chips = queries.length ? `<div class="pptw-ai-queries" aria-label="AI 用过的检索说法"><small>AI 换的说法</small>${queries.slice(0, 12).map(q => `<span>${esc(q)}</span>`).join('')}</div>` : '';
     const peek = running && readPages.length ? `<div class="pptw-ai-peek"><small>AI 刚读过的页</small><div>${readPages.slice(-6).map(p => `<span class="pptw-preview" data-ppt-thumb="${esc(p.id)}" title="${esc(p.name)} · 第 ${esc(p.page)} 页">${previewHtml(p, '')}</span>`).join('')}</div></div>` : '';
-    const sessionLink = ai.chat?.sessionId ? '<div class="pptw-ai-session"><button type="button" class="pptw-btn sec sm" data-ppt="ai-session">查看会话</button></div>' : '';
+    const sessionLink = ai.chat?.sessionId ? `<div class="pptw-ai-session">${backstage.backstageButtonHtml({ sessionId: ai.chat.sessionId, from: 'ppt' })}<button type="button" class="pptw-btn sec sm" data-ppt="ai-session">查看会话</button></div>` : '';
     if (ai.state === 'done') {
       const grid = picks.length ? `<div class="pptw-grid">${picks.map(c => card(c, true)).join('')}</div>` : '<p class="pptw-empty">读过的页里没有原文对得上的，原因见核验报告；可以换个说法再找，或先看下面的关键词命中。</p>';
       return head + sessionLink + grid + `<details class="pptw-ai-how"><summary>AI 是怎么找的</summary>${flow}${chips}</details>`;
@@ -433,6 +434,22 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     const channels = { folders: 'ppt-pick-folders', index: 'ppt-index', doctor: 'ppt-pick-doctor', 'pick-index': 'ppt-pick-index' };
     if (channels[name]) { const r = await call(channels[name]); if (r?.ppt) renderStatus(r.ppt); poll(); }
   }
+  // 跳转后台（renderer/backstage-jump.js）：AI 找页、做页用的助理会话；返回时回到 PPT 页，停在原来的页签。
+  backstage.registerBackstageSource('ppt', {
+    label: 'PPT',
+    // 只认这次点的会话就是找页会话时的报错（做页另有来源 ppt-make），免得拿上一轮找页的错误去诊断当前做页。
+    diagnose: sessionId => ({ error: ai?.state === 'error' && ai.chat?.sessionId === sessionId ? (ai.error || '助理检索未完成') : '', area: 'codeagent' }),
+    emptyText: '这次还没有后台会话：让 AI 找页或做页时才会起会话。',
+    closedText: '这次的会话已经关闭，没有可看的后台；再找一次会开新的会话。',
+    reopen: () => open(),
+  });
+  backstage.registerBackstageSource('ppt-make', {
+    label: 'PPT 做页',
+    emptyText: '这次做页还没有后台会话：开始生成时才会起会话。',
+    closedText: '这次做页的会话已经关闭；重新生成会开新的会话。',
+    reopen: async () => { await open(); tab('make'); },
+    diagnose: sessionId => make?.diagnose?.(sessionId) || {},
+  });
   function lastConversionId() { return page.querySelector('[data-ppt-conversion]').dataset.jobId; }
   async function open() {
     build(); closeOtherPanels();

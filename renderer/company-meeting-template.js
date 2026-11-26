@@ -90,6 +90,6 @@ function meetingTemplate() {
       <div class="meeting-backstage" data-m="backstage" role="dialog" aria-label="这题的后台记录" hidden></div>
     </aside>
   </div>
-  <footer class="meeting-footer"><span class="meeting-footer-state"><i data-m="footer-dot"></i><span data-m="progress">尚未开始采集</span></span><span class="meeting-agent-state" data-m="agent-state"><i></i><span>CodeAgent 未启动</span></span><span data-m="recording-status">材料仅保存到本机</span></footer>`;
+  <footer class="meeting-footer"><span class="meeting-footer-state"><i data-m="footer-dot"></i><span data-m="progress">尚未开始采集</span></span><span class="meeting-agent-state" data-m="agent-state"><i></i><span>CodeAgent 未启动</span></span><span class="hub-bs-slot meeting-bs-slot" data-m="bs-slot"></span><span data-m="recording-status">材料仅保存到本机</span></footer>`;
 }
 module.exports = { meetingTemplate };

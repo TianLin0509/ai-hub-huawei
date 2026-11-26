@@ -237,7 +237,7 @@ function createMemoryPanel({
       attention: "需要在会话中处理",
       failed: "未完成",
     };
-    return `<section class="mp-card mp-job"><h3>${esc(j.orphaned ? "任务中断，需核对" : labels[j.status] || j.status)}</h3><p>${esc(j.kind)} / ${esc(j.model)} / ${esc(j.effort || "默认配置")}</p><p>${j.sources.length} 个素材 session · ${esc(fmt(j.createdAt))}</p>${j.error ? `<div class="mp-error">${esc(j.error)}</div>` : ""}${j.summary ? `<p>${esc(j.summary)}</p>` : ""}<div class="mp-actions">${j.sessionId ? `<button class="mp-btn" data-job-session="${esc(j.sessionId)}">打开造梦 session ↗</button>` : ""}${j.status === "done" ? button("查看生成文件", "library") : j.sessionId ? `<button class="mp-btn" data-finalize="${j.id}">核对并保存结果</button><button class="mp-btn" data-abandon="${j.id}">结束本次</button>` : ""}</div><details><summary>输入文件与实际 prompt</summary><div class="mp-path">${esc(j.dir)}\input\manifest.json</div><pre>${esc(j.prompt || "素材准备中")}</pre></details></section>`;
+    return `<section class="mp-card mp-job"><h3>${esc(j.orphaned ? "任务中断，需核对" : labels[j.status] || j.status)}</h3><p>${esc(j.kind)} / ${esc(j.model)} / ${esc(j.effort || "默认配置")}</p><p>${j.sources.length} 个素材 session · ${esc(fmt(j.createdAt))}</p>${j.error ? `<div class="mp-error">${esc(j.error)}</div>` : ""}${j.summary ? `<p>${esc(j.summary)}</p>` : ""}<div class="mp-actions">${j.sessionId ? `${require('./backstage-jump').backstageButtonHtml({ sessionId: j.sessionId, from: 'dream' })}<button class="mp-btn" data-job-session="${esc(j.sessionId)}">打开造梦 session ↗</button>` : ""}${j.status === "done" ? button("查看生成文件", "library") : j.sessionId ? `<button class="mp-btn" data-finalize="${j.id}">核对并保存结果</button><button class="mp-btn" data-abandon="${j.id}">结束本次</button>` : ""}</div><details><summary>输入文件与实际 prompt</summary><div class="mp-path">${esc(j.dir)}\input\manifest.json</div><pre>${esc(j.prompt || "素材准备中")}</pre></details></section>`;
   }
   function render() {
     if (!page || page.hidden) return;
@@ -468,6 +468,12 @@ function createMemoryPanel({
     );
     if (job && job.runtimeState !== (session.nativeRuntime?.state || null))
       scheduleRefresh();
+  });
+  // 跳转后台（renderer/backstage-jump.js）：造梦任务的会话；跳过去时收起记忆面板，返回时回到造梦页签。
+  require('./backstage-jump').registerBackstageSource('dream', {
+    label: '造梦',
+    reopen: () => open({ tab: 'dream' }),
+    leave: () => close(),
   });
   return { open, close };
 }

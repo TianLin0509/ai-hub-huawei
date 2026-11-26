@@ -5049,10 +5049,18 @@ window.__hubFeedbackContext = () => {
   return require('../core/hub-feedback').feedbackContext({ view, kind: sessions.get(getFocusedSessionId())?.kind });
 };
 // 报错旁的「去后台」（renderer/hub-error-card.js known:open-backstage）：切到这个会话并打开后台终端，和点顶栏「后台」同一条路。
+// 2026-11-26 跳转后台（renderer/backstage-jump.js）也走这里：会话表里暂时没有（后台会话没进侧栏）时先向主进程要一次；
+// 分屏接管选中时也直接切到主区，不然从功能页跳过来会被分屏吞掉、停在原页面。
+async function ensureSessionKnown(sessionId) {
+  if (sessions.has(sessionId)) return true;
+  try { const found = (await ipcRenderer.invoke('get-sessions')).find(item => item.id === sessionId); if (found) { sessions.set(sessionId, found); renderSessionList(); } } catch { /* 拿不到就按已关闭处理 */ }
+  return sessions.has(sessionId);
+}
 window.__hubOpenBackstage = async sessionId => {
-  if (!sessionId || !sessions.has(sessionId)) return { ok: false };
+  if (!sessionId || !(await ensureSessionKnown(sessionId))) return { ok: false };
   for (const key of Object.keys(window)) { if (/^__\w+Hide$/.test(key) && typeof window[key] === 'function') { try { window[key](); } catch { /* 页面已关 */ } } }
-  if (activeSessionId !== sessionId) await selectSession(sessionId);
+  // 目标就是当前主区会话也照样走一遍选中：休眠的要唤醒，分屏时焦点要回到主区（只比编号会跳过这两步）。
+  await selectSession(sessionId, { splitBypass: true });
   if (activeSessionId !== sessionId) return { ok: false };
   if (currentView !== 'pty') applyViewMode('pty');
   noteBackstageOpen(sessionId);
@@ -5060,6 +5068,20 @@ window.__hubOpenBackstage = async sessionId => {
   syncBackstageButton();
   return { ok: currentView === 'pty' };
 };
+// 跳转后台的状态点（renderer/backstage-jump.js）：只读会话表里已有的状态，不发 IPC；会话不在表里返回 null（已关闭）。
+window.__hubSessionRuntime = sessionId => {
+  const s = sessions.get(sessionId);
+  if (!s) return null;
+  const rt = deriveSessionRuntimeStatus(s, { isRunning: isSessionCardWorking(s) });
+  // 只给状态和计时，不给报错原文、等待说明（可能带路径、业务文字）；原文仍在报错区和终端里。
+  // 最近一次「有进展」：终端输出、原生结构化内容（nativeFeedback）都算；本轮开始时间兜底，跨回合的旧时间被它盖住。
+  const turnStart = Number(s.runStartedAt) || Number(s.cardWorkingSince) || 0;
+  return { state: rt.state, meta: rt.meta, lastOutputAt: Math.max(lastPtyOutputAt.get(sessionId) || 0, Number(s.nativeFeedback?.receivedAt) || 0, turnStart) };
+};
+// 返回条看的是用户实际在操作的会话（分屏时是聚焦的那一屏），不是主区编号。
+window.__hubActiveSessionId = () => getFocusedSessionId();
+require('./backstage-jump').installBackstageJump({ document, window });
+window.__hubPageOpen = () => !!currentAppToolbarView() || [...document.body.classList].some(name => name.endsWith('-page-open'));
 // 「重启会话并重发」发出去后：输入框里还是那段原文就清掉，免得用户再点一次发成两条；用户已改过的不动。
 window.__hubClearFloatingDraftIf = (sessionId, text) => {
   const box = document.querySelector(`.floating-input-bar[data-session-id="${CSS.escape(String(sessionId || ''))}"] .floating-input-box`);
@@ -8234,7 +8256,10 @@ ipcRenderer.on('codex-content-updated', (_e, event) => {
 ipcRenderer.on('codex-backstage-updated', (_event, event) => {
   terminalCache.get(event.sessionId)?._codexBackstage?.notify(event);
 });
+// 每个会话最后一次终端输出的时间：跳转后台的状态点据此判断「可能卡住 N 秒」。
+const lastPtyOutputAt = new Map();
 ipcRenderer.on('terminal-data', (_e, { sessionId, data, seq }) => {
+  lastPtyOutputAt.set(sessionId, Date.now());
   terminalWarmup.output(sessionId, data);
   require('./pty-attention-controls').notePtyOutput(sessionId);
   noteStreamDisconnect(sessionId, data);

@@ -96,6 +96,10 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const [, m, d] = day.split('-').map(Number);
     return `${m}-${d} ${clock(at)}`;
   };
+  const backstage = require('./backstage-jump');
+  // 「没有这个能力」：本机确认没装 CodeAgent（检测过且为 false），也没接部门 API 网关。
+  const noEngine = () => codeagentPref.detectedInstalled() === false && !data?.answerRoute;
+  const NEEDS_SETUP_HTML = '<span class="ca-needs-setup">需要先配置：没检测到 CodeAgent，也没接部门 API，问题没法送出去。</span><button type="button" class="ca-btn small primary" data-hub-err-act="known:codeagent-oneclick">一键安装 CodeAgent</button><button type="button" class="ca-btn small" data-hub-err-act="known:open-company-api">接部门 API</button>';
   const call = async (channel, payload) => { const r = await ipcRenderer.invoke('company-assistant:' + channel, payload); if (r && r.ok === false) throw new Error(r.error || '操作未完成'); return r; };
   let md = null;
   const markdown = text => {
@@ -139,6 +143,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       <header class="ca-head">
         <h1>助理</h1><span data-slot="conn"></span>
         <div class="ca-head-right">
+          <span class="ca-head-backstage" data-slot="backstage"></span>
           <button type="button" class="ca-head-btn" data-ca="open-session" title="在会话里看助理的完整记录">${ICON.history}<span>历史</span></button>
           <button type="button" class="ca-head-btn" data-ca="settings" title="助理设置：简报与提醒 / WeLink 与邮箱 / 手机 / 桌宠" aria-label="助理设置">${ICON.gear}<span>设置</span></button></div>
       </header>
@@ -438,17 +443,17 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       } else if (c.state === 'error') {
         // 部门 API key（网关）报错另给「打开网关设置 / 换个模型」（core/assistant-gateway-route.js 的 actions），不套 CodeAgent 修复卡。
         const why = c.stopped ? '已停止这一问' : `没答上：${esc(c.error || '原因未知')}`;
-        answer = `<div class="ca-turn-error${c.stopped ? ' is-stopped' : ''}"><span>${why}</span>${c.providerRepair ? c.providerRepair.canUseManual ? `<button type="button" class="ca-btn small" data-ca="repair-provider:${esc(id)}">改用手动会话在用的供应商</button>` : '<button type="button" class="ca-btn small" data-ca="settings-tab:model">选择模型与供应商</button>' : ''}${(c.gatewayError?.actions || []).includes('gateway-settings') ? '<button type="button" class="ca-btn small" data-ca="gateway-settings">打开网关设置</button>' : ''}${(c.gatewayError?.actions || []).includes('model') ? '<button type="button" class="ca-btn small" data-ca="gateway-model">换个模型</button>' : ''}<button type="button" class="ca-btn small" data-ca="retry:${esc(id)}">重问</button></div>${!c.stopped && !c.gatewayError && window.HubErrorCard ? window.HubErrorCard.knownHtml({ area: 'codeagent', title: c.error || '助理没答上', details: c.error || '' }) : ''}`;
+        answer = `<div class="ca-turn-error${c.stopped ? ' is-stopped' : ''}"><span>${why}</span>${c.providerRepair ? c.providerRepair.canUseManual ? `<button type="button" class="ca-btn small" data-ca="repair-provider:${esc(id)}">改用手动会话在用的供应商</button>` : '<button type="button" class="ca-btn small" data-ca="settings-tab:model">选择模型与供应商</button>' : ''}${(c.gatewayError?.actions || []).includes('gateway-settings') ? '<button type="button" class="ca-btn small" data-ca="gateway-settings">打开网关设置</button>' : ''}${(c.gatewayError?.actions || []).includes('model') ? '<button type="button" class="ca-btn small" data-ca="gateway-model">换个模型</button>' : ''}<button type="button" class="ca-btn small" data-ca="retry:${esc(id)}">重问</button>${c.stopped ? '' : backstage.backstageLinkHtml({ sessionId: data.session?.id || '', from: 'assistant' })}</div>${!c.stopped && !c.gatewayError && window.HubErrorCard ? window.HubErrorCard.knownHtml({ area: 'codeagent', title: c.error || '助理没答上', details: c.error || '' }) : ''}`;
         meta = c.askedAt ? `<time>${when(c.askedAt)}</time>` : '';
       } else {
         // 三段：排队 → CodeAgent 准备中（开会话、送入问题，通常 10–20 秒）→ 正在查（问题已送进去）。
         const guide = c.state === 'running' && c.guide?.kinds?.length ? `按「${c.guide.kinds.join('、')}」作答${c.guide.items ? ` · 已备好材料 ${c.guide.items} 条` : ''} · 正在写…` : '';
         const phase = waitPhase(c);
         const from = phase.from;
-        const since = from ? `<span>${phase.verb} <span data-since="${Number(from)}">${secondsText(Date.now() - from)}</span>${phase.hint ? `<span class="ca-wait-hint">（${phase.hint}）</span>` : ''}</span>` : '';
+        const since = from ? `<span>${phase.verb} <span data-since="${Number(from)}">${secondsText(Date.now() - from)}</span>${phase.hint && !noEngine() ? `<span class="ca-wait-hint">（${phase.hint}）</span>` : ''}</span>` : '';
         const label = guide && phase.label === '正在查…' ? esc(guide) : phase.label;
         // 审计 A3-17：等着的问题可以停下（只结束这一问，其他队列照常）。
-        answer = `<div class="ca-think"><span class="ca-dots"><i></i><i></i><i></i></span>${label}${c.notReadySince != null && !c.answeringAt ? '<button type="button" class="ca-btn small" data-ca="open-session">打开助理会话</button>' : ''}<button type="button" class="ca-btn small ca-stop" data-ca="stop:${esc(id)}">停止这一问</button></div>`;
+        answer = `<div class="ca-think"><span class="ca-dots"><i></i><i></i><i></i></span>${label}${c.notReadySince != null && !c.answeringAt ? (noEngine() ? NEEDS_SETUP_HTML : '<button type="button" class="ca-btn small" data-ca="open-session">打开助理会话</button>') : ''}<button type="button" class="ca-btn small ca-stop" data-ca="stop:${esc(id)}">停止这一问</button></div>`;
         meta = since;
       }
       const assistant = `<div class="ca-turn assistant${c.state === 'done' || c.state === 'error' ? '' : ' is-thinking'}"><span class="ca-turn-avatar"><img src="${ASSISTANT_AVATAR_SRC}" alt=""></span><div class="ca-turn-content">
@@ -465,6 +470,10 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   function render() {
     if (!page || !data) return;
     page.querySelector('[data-slot="conn"]').innerHTML = status();
+    // 跳转后台：助理当前（或最近一问）用的那个会话；还没问过就是灰点，点了就地说明。
+    // 没装 CodeAgent 也没接 API：按钮写「需配置」（没有这个能力 ≠ 出故障）。
+    const bsSlot = page.querySelector('[data-slot="backstage"]'), bsId = data.session?.id || '', bsSetup = noEngine();
+    if (bsSlot && bsSlot.dataset.sid !== bsId + (bsSetup ? '|setup' : '')) { bsSlot.dataset.sid = bsId + (bsSetup ? '|setup' : ''); bsSlot.innerHTML = backstage.backstageButtonHtml({ sessionId: bsId, from: 'assistant', needsSetup: bsSetup }); }
     const panel = page.querySelector('[data-slot="panel"]');
     if (!panel.dataset.kind || panel.dataset.kind === 'login') { const html = loginPanel(); panel.innerHTML = html; panel.hidden = !html; panel.dataset.kind = html ? 'login' : ''; }
     const querySlot = panel.querySelector('[data-slot="query-rows"]');
@@ -988,6 +997,22 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     clearInterval(timer); timer = null; clearInterval(tick); tick = null; clearInterval(phoneTimer); phoneTimer = null; window.removeEventListener('resize', onResize);
   }
   nav();
+  backstage.registerBackstageSource('assistant', {
+    label: '助理',
+    diagnose: async () => {
+      // 自检时重测一次 CodeAgent（装好之后不会一直显示「需配置」）；检测出错按「不知道」处理。
+      try { await codeagentPref.refresh(ipcRenderer, { force: true }); } catch { /* 按已有结果 */ }
+      // 只看最近一问：更早的报错已经过去了，不该盖住后台现在的状态（比如正卡着）。
+      const chat = data?.chat || [], last = chat[chat.length - 1];
+      const failed = last?.state === 'error' && !last.stopped;
+      return { error: (failed ? last.error : '') || data?.session?.error || '', gatewayError: failed ? last.gatewayError || null : null, area: 'codeagent',
+        channel: data?.answerRoute ? 'gateway' : 'codeagent', capability: { codeagent: codeagentPref.detectedInstalled(), api: !!data?.answerRoute } };
+    },
+    emptyText: '助理还没有后台会话：问一句之后就会起会话，到时这里就能跳过去看它在做什么。',
+    reopen: () => open(),
+    // 会话关了：按原生身份恢复或新开一个（同「历史」按钮），再跳过去。
+    recreate: async () => (await call('open-session')).sessionId,
+  });
   // 侧栏「助理」一栏的占位行（助理会话还没打开时）点进来：恢复或新开助理会话，再选中它。
   window.__companyAssistantOpenSession = async () => {
     try { const r = await call('open-session'); close(); await openSession(r.sessionId); }

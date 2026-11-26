@@ -122,7 +122,7 @@ const fb = fallbackLog(oldQ, { sessionId: 'und-1', agent: { state: 'error', erro
 assert.equal(fb.fallback, true); assert.equal(fb.understanding.sessionId, 'und-1');
 assert.deepEqual(fb.lines.map(l => l.kind), ['step', 'step', 'stderr']);
 html = backstageHtml(oldQ, fb, { engines });
-assert.match(html, /详细记录.*需新版后端/); assert.match(html, /CodeAgent 启动异常/); assert.match(html, /data-open-backstage-session="und-1"/); assert.match(html, /data-engine-to="claude:glm"/);
+assert.match(html, /详细记录.*需新版后端/); assert.match(html, /CodeAgent 启动异常/); assert.match(html, /data-hub-backstage="und-1" data-hub-backstage-from="meeting"/); assert.match(html, /data-engine-to="claude:glm"/);
 const newLog = { ok: true, meta: { engine: 'claude', model: 'glm-4.6', mode: 'fresh', speed: 'fast', contextChars: 12000, pid: 77, slot: { running: 1, max: 3 }, command: 'claude --print' }, lines: [{ at: t0, kind: 'event', text: 'system init' }, { at: t0 + 1, kind: 'stderr', text: 'warn' }], understanding: {} };
 const live = { id: 'l1', q: '门限？', state: 'running', phase: 'thinking', speed: 'fast', queuedAt: t0, startedAt: t0 };
 html = backstageHtml(live, newLog, { engines });

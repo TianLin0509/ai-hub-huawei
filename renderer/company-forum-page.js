@@ -6,6 +6,7 @@
 //   新出现的发文带「新」标，页签上显示新发文条数；点开看过的不再算新。
 // 某个站没能自动登录时，在它那一页显示「登录」按钮（弹出 Hub 自己的浏览器窗口，登录一次以后自动同步）。
 // 写法同助理页：盖在主区域上的一层，点左侧其他按钮自动关闭。左侧按钮只在公司版（gate.js）插入。
+const backstage = require('./backstage-jump');
 function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage }) {
   let page = null, data = null, timer = null, panelOpen = false, gate = null;
   let source = 'w3';     // 当前来源页签：站点 id 或 'overview'
@@ -49,6 +50,7 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
     page.innerHTML = `<header class="cf-head">
         <div class="cf-title"><h1>帖子</h1><span class="cf-sub">公司发文 · 心声 · 稼先</span></div>
         <div class="cf-status" data-slot="status"></div>
+        <span class="hub-bs-slot" data-slot="backstage"></span>
         <button type="button" class="cf-btn" data-cf="sync" title="现在重新打开几个站点取一次">刷新</button>
         <button type="button" class="cf-btn" data-cf="settings">设置</button>
       </header>
@@ -195,6 +197,9 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
     if (!page || !data) return;
     if (source !== 'overview' && !data.sites.some(s => s.id === source)) source = sites()[0]?.id || 'overview';
     page.querySelector('[data-slot="status"]').innerHTML = statusHtml();
+    // 跳转后台：写摘要用的整理会话（还没整理过就是灰点，点了就地说明）。
+    const bsSlot = page.querySelector('[data-slot="backstage"]'), bsId = data.session || '';
+    if (bsSlot && bsSlot.dataset.sid !== bsId) { bsSlot.dataset.sid = bsId; bsSlot.innerHTML = backstage.backstageButtonHtml({ sessionId: bsId, from: 'forum' }); }
     const panel = page.querySelector('[data-slot="panel"]');
     if (panelOpen && !panel.dataset.open) { panel.innerHTML = panelHtml(); panel.dataset.open = '1'; }
     panel.hidden = !panelOpen;
@@ -242,6 +247,13 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
     if (name === 'clear-login') { await call('clear-login'); showMessage?.('已退出 Hub 窗口里的登录；平时经 Edge 的登录状态取数，不受影响'); }
   }
 
+  backstage.registerBackstageSource('forum', {
+    label: '帖子',
+    diagnose: () => ({ error: data?.syncError || '', area: 'codeagent' }),
+    emptyText: '还没有整理会话：第一次让 AI 写摘要时才会起会话。',
+    reopen: () => open(),
+    recreate: async () => (await call('open-session')).sessionId,
+  });
   const onResize = () => { place(); render(); };
   async function open() {
     build(); closeOtherPanels();

@@ -12,6 +12,7 @@ const { createStatusPuller } = require('./company-meeting-delta');
 // 会议页轮询（2026-11-25 后台开销）：显示时每 2.5 秒按版本增量拉（只回新增和改过的部分）；会议页隐藏时一律不拉，切回立即全量补齐；
 // 低开销模式下显示时放慢到 5 秒。录音、录屏、转写、理解、问答都在主进程和采集模块里跑，不靠这条轮询。
 const POLL_MS = 2500, POLL_LOW_OVERHEAD_MS = 5000;
+const backstageJump = require('./backstage-jump');
 function createCompanyMeetingPage({ document, window, call, markdown, openSession, openBackstage }) {
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const time = ms => `${String(Math.floor((ms || 0) / 60000)).padStart(2, '0')}:${String(Math.floor((ms || 0) / 1000) % 60).padStart(2, '0')}`;
@@ -471,6 +472,9 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       const who = aiName; /* 底栏也用实际引擎名（engineLabel → engineCurrent），不硬写 CodeAgent */
       agentBox.querySelector('span').textContent = !m ? `${who} 未启动` : agent === 'starting' ? `${who} 预热中` : agent === 'error' ? `${who} 启动异常` : m.job && m.job.state !== 'error' ? `${who} 工作中` : `${who} 已就绪`;
       agentBox.title = m?.engineLabel ? '会议 AI：' + m.engineLabel : '';
+      // 跳转后台（renderer/backstage-jump.js）：底栏 AI 状态旁的「后台」看会议理解会话；状态点读会话表，不新增 IPC 和定时器。
+      const bsSlot = el('bs-slot'), bsId = m?.sessionId || '';
+      if (bsSlot && bsSlot.dataset.sid !== bsId) { bsSlot.dataset.sid = bsId; bsSlot.innerHTML = backstageJump.backstageButtonHtml({ sessionId: bsId, from: 'meeting' }); }
       root.querySelectorAll('[data-speed]').forEach(b => { const on = b.dataset.speed === (m?.speed || 'normal'); b.setAttribute('aria-checked', String(on)); b.disabled = !m; });
       if (document.activeElement !== el('interval')) el('interval').value = String(m ? (m.autoUnderstand === false ? 0 : (m.autoIntervalMin ?? 1)) : 3);
       el('interval').disabled = !m;
@@ -665,7 +669,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
         const copyLog = e.target.closest('[data-backstage-copy]'); if (copyLog) { const q = findQuestion(copyLog.dataset.backstageCopy); if (q) void Promise.resolve().then(() => require('electron').clipboard.writeText(logText(q, currentLog(q.id)))).then(() => { copyLog.textContent = '已复制'; }).catch(err => message(`复制未完成：${err.message}`)); }
         const sessionLog = e.target.closest('[data-open-backstage-session]'); if (sessionLog) void openUnderstandingBackstage(sessionLog.dataset.openBackstageSession);
         if (e.target.closest('[data-act-local="lane-engine"]')) pickEngine();
-        if (e.target.closest('[data-act-local="lane-backstage"]')) void openUnderstandingBackstage(state?.meeting?.sessionId);
+        const laneBs = e.target.closest('[data-act-local="lane-backstage"]'); if (laneBs) void backstageJump.jumpToBackstage(laneBs, state?.meeting?.sessionId || '', 'meeting');
         const retry = e.target.closest('[data-retry-question]'); if (retry && id && !retry.disabled) { retry.disabled = true; void call('meeting-control', { id, op: 'retry-question', value: retry.dataset.retryQuestion }).then(() => refresh()).catch(err => message(err.message)).finally(() => { retry.disabled = false; }); }
         const followup = e.target.closest('[data-followup-question]'); if (followup) { const q = state?.meeting?.answers?.find(q => q.id === followup.dataset.followupQuestion); if (q) { switchTab('chat'); el('question').value = q.q; el('question').focus({ preventScroll: true }); scrollGuard.check(root); } }
         const copy = e.target.closest('[data-copy-answer]'); if (copy) {
@@ -830,6 +834,6 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     if(request!==playRequest||meetingId!==id)return;playback=r;video.currentTime=r.offsetMs/1000;root.querySelector('[data-m="play-time"]').textContent=time(at);if(autoplay)await video.play();
   }
   window.addEventListener('beforeunload', e => { if (capture?.running || capture?.queue.length || capture?.saving || capture?.recorder?.queue.length || capture?.recorder?.saving) { e.preventDefault(); e.returnValue = false; } });
-  return { open, close: () => { if (root) { if (!root.hidden) rememberScroll(); root.hidden = true; el('player').pause(); el('evidence').querySelector('audio')?.pause(); } }, dispose: () => { modelSync.dispose(); clearInterval(poll); clearInterval(chatTimer); if (pushBound) ipcRenderer?.removeListener('company-assistant:meeting-question', onQuestionPush); clearInterval(meterTimer); thumbsObserver?.disconnect(); void capture?.dispose().catch(e => message(e.message)); } };
+  return { open, close: () => { if (root) { if (!root.hidden) rememberScroll(); root.hidden = true; el('player').pause(); el('evidence').querySelector('audio')?.pause(); } }, dispose: () => { modelSync.dispose(); clearInterval(poll); clearInterval(chatTimer); if (pushBound) ipcRenderer?.removeListener('company-assistant:meeting-question', onQuestionPush); clearInterval(meterTimer); thumbsObserver?.disconnect(); void capture?.dispose().catch(e => message(e.message)); }, currentMeeting: () => state?.meeting || null, currentState: () => state || null };
 }
 module.exports = { createCompanyMeetingPage };

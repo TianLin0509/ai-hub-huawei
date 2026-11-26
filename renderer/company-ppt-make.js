@@ -55,7 +55,7 @@ function createPptMake({ root, ipcRenderer, notice, openSession = null, hasSessi
       return;
     }
     const slide = svg ? `<div class="pptk-slide${running ? ' dim' : ''}">${svg}</div>` : '';
-    const wait = running ? `<div class="pptk-busy" role="status"><i class="pptk-spin" aria-hidden="true"></i><b>${esc(running.text)}</b><span data-pptk-clock>已用 ${seconds(running.from)} 秒</span>${job?.waiting ? `<small>${esc(job.waiting)}</small>` : ''}${job?.state === 'waiting_agent' ? '<small>通常 1–3 分钟，可以先去做别的，回来还在这里。</small>' : ''}${!busy && job && ACTIVE.includes(job.state) ? `<div class="pptk-actions">${job.sessionId && openSession ? '<button type="button" class="pptw-btn sec sm" data-pptk="watch">看助理在做什么</button>' : ''}<button type="button" class="pptw-btn ghost sm" data-pptk="stop">停止</button></div>` : ''}</div>` : '';
+    const wait = running ? `<div class="pptk-busy" role="status"><i class="pptk-spin" aria-hidden="true"></i><b>${esc(running.text)}</b><span data-pptk-clock>已用 ${seconds(running.from)} 秒</span>${job?.waiting ? `<small>${esc(job.waiting)}</small>` : ''}${job?.state === 'waiting_agent' ? '<small>通常 1–3 分钟，可以先去做别的，回来还在这里。</small>' : ''}${!busy && job && ACTIVE.includes(job.state) ? `<div class="pptk-actions">${job.sessionId ? require('./backstage-jump').backstageButtonHtml({ sessionId: job.sessionId, from: 'ppt-make' }) : ''}${job.sessionId && openSession ? '<button type="button" class="pptw-btn sec sm" data-pptk="watch">看助理在做什么</button>' : ''}<button type="button" class="pptw-btn ghost sm" data-pptk="stop">停止</button></div>` : ''}</div>` : '';
     const failed = failure ? `<div class="pptk-fail" role="alert"><strong>这一页没有生成出来</strong><p>${esc(failure)}</p><p>下一步：点「重试」再生成一次；想先看版式，点「先看骨架样子」。</p><div class="pptk-actions"><button type="button" class="pptw-btn pri" data-pptk="start">重试</button><button type="button" class="pptw-btn sec" data-pptk="example">先看骨架样子</button></div></div>` : '';
     stage.innerHTML = failed || (slide + wait) || '<p class="pptw-empty">选一个骨架，点「先看骨架样子」。</p>';
     clearInterval(clock); clock = null;
@@ -222,6 +222,8 @@ function createPptMake({ root, ipcRenderer, notice, openSession = null, hasSessi
   let resizeTimer = null;
   const onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (shown) drawList(); }, 120); };
   return {
+    // 跳转后台的自检（renderer/backstage-jump.js 来源 ppt-make）：只认这次点的就是当前做页任务的会话。
+    diagnose(sessionId) { return { error: job && job.sessionId === sessionId && (job.state === 'error' || failure) ? String(job.error || failure || '') : '', area: 'codeagent' }; },
     async show() {
       shown = true; window.addEventListener('resize', onResize);
       try {

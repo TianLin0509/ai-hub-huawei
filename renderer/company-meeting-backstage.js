@@ -77,7 +77,7 @@ function backstageHtml(q, log, { engines = [], error = '', ...extra } = {}) {
     + `<dl class="meeting-backstage-facts">${facts}</dl>` + sessionNote
     + `<ol class="meeting-backstage-lines">${lines}</ol>`
     + understanding
-    + `<div class="meeting-backstage-actions">${btn(`data-backstage-copy="${id}"`, '复制日志')}${inFlight ? btn(`data-cancel-question="${id}"`, '取消这题') : ''}${speedButtons}${engineMenu}${sessionId ? btn(`data-open-backstage-session="${esc(sessionId)}"`, '打开理解会话后台') : ''}</div>`;
+    + `<div class="meeting-backstage-actions">${btn(`data-backstage-copy="${id}"`, '复制日志')}${inFlight ? btn(`data-cancel-question="${id}"`, '取消这题') : ''}${speedButtons}${engineMenu}${sessionId ? require('./backstage-jump').backstageButtonHtml({ sessionId, from: 'meeting', label: '理解会话后台' }) : ''}</div>`;
 }
 
 module.exports = { backstageHtml, fallbackLog, logText, isMissingHandler };
