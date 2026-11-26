@@ -123,8 +123,8 @@ class SpeechQueue {
     if (this.seen.size > 2000) this.seen.delete(this.seen.values().next().value);
     const entry = { id, kind: cleanText(item.kind, 32), title, text: String(item.text == null ? '' : item.text).slice(0, 4000), sessionId: cleanText(item.sessionId, 160) || null, sticky: item.sticky === true };
     if (item.notify !== true) {
-      // 闲聊的回应按钮与话术信息（2026-11-17 r27g）；ack：回应后的一句，停留 ms 毫秒，不计入每小时开口次数，不能说时直接丢掉。
-      const chips = Array.isArray(item.chips) ? item.chips.filter(c => c && ['up', 'down', 'snooze'].includes(c.id)).slice(0, 2).map(c => ({ id: c.id, label: cleanText(c.label, 12) })).filter(c => c.label) : [];
+      // 闲聊的回应按钮与话术信息（2026-11-17 r27g）；到点提醒的「完成 / 10 分钟后」（done / snooze10，2026-11-26）；ack：回应后的一句，停留 ms 毫秒，不计入每小时开口次数，不能说时直接丢掉。
+      const chips = Array.isArray(item.chips) ? item.chips.filter(c => c && ['up', 'down', 'snooze', 'done', 'snooze10'].includes(c.id)).slice(0, 2).map(c => ({ id: c.id, label: cleanText(c.label, 12) })).filter(c => c.label) : [];
       if (chips.length) entry.chips = chips;
       if (item.talk && typeof item.talk === 'object') entry.talk = { line: cleanText(item.talk.line, 40), type: cleanText(item.talk.type, 12), ctx: cleanText(item.talk.ctx, 20) };
       if (item.named === true) entry.named = true;

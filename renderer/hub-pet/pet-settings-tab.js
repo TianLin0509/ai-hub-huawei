@@ -125,8 +125,12 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       </div>
       <div class="pet-tab-row pet-tab-duo">
         <div class="pet-tab-half">
-          <div><b>单击只逗它</b><small>双击打开助理、按住抱抱；关掉＝单击就打开助理。</small></div>
+          <div><b>单击只逗它</b><small>按住抱抱；关掉＝单击就打开助理。</small></div>
           <label class="pet-tab-switch"><input type="checkbox" data-pet="clickPlay"${s.clickMode !== 'open' ? ' checked' : ''}><span></span></label>
+        </div>
+        <div class="pet-tab-half">
+          <div><b>双击记待办</b><small>弹出待办小卡片；关掉＝双击打开助理。</small></div>
+          <label class="pet-tab-switch"><input type="checkbox" data-pet="dblTodo"${s.dblClick !== 'assistant' ? ' checked' : ''}><span></span></label>
         </div>
         <div class="pet-tab-half">
           <div><b>偶尔在任务栏上走走</b><small>十来分钟踱几步，只走桌面空白处。</small></div>

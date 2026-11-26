@@ -7,10 +7,11 @@ const path = require('path');
 const { ASSISTANT_ACTIONS, MODES, ROLES, SpeechQueue, chatterFor, decidePose, localDateKey, speakGate, weeklyNudge } = require('../core/hub-pet/state');
 const { applyReply, cleanName, noteSpoken, normalizePrefs, pickLine } = require('../core/hub-pet/talk');
 const { allowedRange, clampTo, cubicOut, dockOf, flingPlan, flyAt, releasePlan, walkIntervals, walkPlan } = require('../core/hub-pet/motion');
-const { CLICK_MODES, NOTIFY_MODES, SCALE_MAX, SCALE_MIN, createSettingsStore, isUrgentNotice, parseBox, parseScale } = require('../core/hub-pet/settings');
+const { CLICK_MODES, DBL_MODES, NOTIFY_MODES, SCALE_MAX, SCALE_MIN, createSettingsStore, isUrgentNotice, parseBox, parseScale } = require('../core/hub-pet/settings');
 const { DEFAULT_ROLE, createRolePackStore } = require('../core/hub-pet/role-packs');
 const { createFullscreenWatch } = require('../core/hub-pet/fullscreen-watch');
 const { createDiskWatch } = require('../core/hub-pet/disk-watch');
+const { createTodoCard } = require('./hub-pet-todo-card');
 
 const WIN_W = 280;
 const WIN_H = 340;                       // 原大小时的窗口高度；放大后按身体加高（winH）
@@ -393,6 +394,18 @@ function createHubPetController({
   function reply(id, choice) {
     const cur = speech.current;
     if (!cur || cur.id !== String(id || '') || !Array.isArray(cur.chips) || !cur.chips.some(c => c.id === choice)) return false;
+    // 到点提醒气泡上的「完成 / 10 分钟后」（2026-11-26）：不记进闲聊偏好。
+    if (cur.kind === 'reminder') {
+      speech.takeCurrent();
+      pettedAt = clock();
+      let ok = false;
+      if (choice === 'done') ok = confirmReminders([cur]);
+      else if (choice === 'snooze10') { try { ok = !!noticeBus?.snoozeReminder?.(cur.id, 10 * 60000); } catch (_) { ok = false; } }
+      if (!ok) { syncReminders(); speech.push({ id: 'ack-' + now() + '-' + (++ackSeq), kind: 'chatter', title: '没改成，点开提醒再试一次', ack: true, ms: 2600 }); }
+      else speech.push({ id: 'ack-' + now() + '-' + (++ackSeq), kind: 'chatter', title: choice === 'done' ? '好，划掉了' : '好，10 分钟后再叫你', ack: true, ms: 2600 });
+      evaluate();
+      return ok;
+    }
     speech.takeCurrent();
     const s = settings.get();
     const { prefs, ack } = applyReply(s.talkPrefs, { type: cur.talk && cur.talk.type, ctx: cur.talk && cur.talk.ctx, choice, name: s.petName });
@@ -764,13 +777,15 @@ function createHubPetController({
       if (t - lastPetClick < DOUBLE_MS) {
         lastPetClick = 0;
         send('hub-pet:motion', { phase: 'poke' });
-        openAssistant({});
+        // 2026-11-26：双击默认打开待办卡片（卡片右上角有「助理页」）；设置里可改回双击打开助理。
+        if (settings.get().dblClick === 'assistant' || todoCard.toggle({ focus: 'add' }) === false) openAssistant({});
       } else {
         lastPetClick = t;
         send('hub-pet:motion', { phase: 'poke', play: true });
         if (!settings.get().clickHinted) {
           settings.update({ clickHinted: true });
-          speech.push({ id: 'click-hint', kind: 'chatter', sticky: true, title: '单击是逗我玩，双击打开助理，按住是抱抱。想要单击就打开，可在设置里改回来。' });
+          speech.push({ id: 'click-hint', kind: 'chatter', sticky: true, title: settings.get().dblClick !== 'assistant' && todoCard.available()
+            ? '单击是逗我玩，双击记待办，按住是抱抱。右键还能问助理。' : '单击是逗我玩，双击打开助理，按住是抱抱。想要单击就打开，可在设置里改回来。' });
         }
       }
     }
@@ -959,6 +974,15 @@ function createHubPetController({
   let menuAnchor = null;
   let menuSize = { width: MENU_W, height: 420 };
   const menuAlive = () => !!(menuWin && !menuWin.isDestroyed());
+  // 待办卡片（2026-11-26）：贴着桌宠身体弹出；身体框按窗口位置和当前大小算（屏幕坐标）。
+  const todoCard = createTodoCard({ BrowserWindow, ipcMain, rendererDir: path.dirname(htmlPath || ''), noticeBus, ensureOwner, displayFor, logger, now,
+    openAssistant: payload => openAssistant(payload),
+    onShown: () => { hideMenu(); pettedAt = clock(); },
+    petBody: () => {
+      if (!alive()) return null;
+      const w = win.getBounds(), g = geom();
+      return { x: w.x + (WIN_W - g.body) / 2, y: w.y + g.h - INSET.bottom - g.body, width: g.body, height: g.body };
+    } });
   const POSE_TEXT = { idle: '在旁边陪着你', typing: '助理正在干活', happy: '有话要跟你说', sleep: '在打盹', peek: '躲在屏幕边上', tired: '有点累了' };
   const pad2 = n => String(n).padStart(2, '0');
 
@@ -975,6 +999,11 @@ function createHubPetController({
     let pages = {};
     try { pages = getPages?.() || {}; } catch (_) {}
     const quick = [];
+    // 2026-11-26：待办入口放最上面（桌宠提醒就是待办的数据）。
+    if (todoCard.available()) {
+      const n = todoCard.todayCount();
+      quick.push({ type: 'todo-add', label: '添加待办…', icon: 'plus' }, { type: 'todo', label: '打开待办', hint: n ? `今天 ${n}` : '', icon: 'check' });
+    }
     if (typeof askAssistant === 'function' && pages.assistant !== false) quick.push({ type: 'ask', label: '问助理一句…', icon: 'ask' });
     if (dots) quick.push({ type: 'inbox', label: `看 ${dots} 条没看的`, icon: 'inbox' });
     // 2026-11-12：摸摸（和鼠标在身上蹭一样），带上现在的等级。
@@ -1058,6 +1087,7 @@ function createHubPetController({
     }
     if (a.type === 'settings') { hideMenu(); openAssistant({ settingsTab: String(a.tab || 'pet') }); return; }
     if (a.type === 'ask') { hideMenu(); openAsk(); return; }
+    if (a.type === 'todo' || a.type === 'todo-add') { hideMenu(); todoCard.open({ focus: a.type === 'todo-add' ? 'add' : 'list' }); return; }
     if (a.type === 'inbox') { hideMenu(); handleClick('dot'); return; }
     if (a.type === 'pet') { hideMenu(); petted(); return; }
     if (a.type === 'page' && typeof a.page === 'string') { hideMenu(); openItem({ page: a.page }); return; }
@@ -1202,7 +1232,7 @@ function createHubPetController({
         return true;
       }
       if (req.op === 'state') return { lastSent: lastSent ? JSON.parse(lastSent) : null, bounds: alive() ? winBounds() : null, area: alive() ? areaAt(currentPos()) : null, bodyBox: { ...bodyBox }, inset: inset(), edge: edgeCut(), scale: scaleNow(), dock, savedPosition: settings.get().position, savedDetached, visible: alive() && win.isVisible(), petPid: alive() ? win.webContents.getOSProcessId() : null, fullscreenWatch: fsWatch.isRunning(), lastRelease, autoRole: { ...autoRole }, role: settings.get().role,
-        excursion: excursion ? { home: excursion.home, phase: excursion.phase, sit: excursion.plan && excursion.plan.sit } : null, lastWalk, walkScheduled: !!walkTimer, near: nearKey, clickMode: settings.get().clickMode, clickHinted: settings.get().clickHinted, askOpen, drag: drag ? { target: drag.target, moved: drag.moved, hug: drag.hug, start: drag.start } : null, moving: !!moveTimer };
+        excursion: excursion ? { home: excursion.home, phase: excursion.phase, sit: excursion.plan && excursion.plan.sit } : null, lastWalk, walkScheduled: !!walkTimer, near: nearKey, clickMode: settings.get().clickMode, clickHinted: settings.get().clickHinted, dblClick: settings.get().dblClick, todoCard: todoCard.debug(), askOpen, drag: drag ? { target: drag.target, moved: drag.moved, hug: drag.hug, start: drag.start } : null, moving: !!moveTimer };
       if (req.op === 'metrics') {
         const pid = alive() ? win.webContents.getOSProcessId() : null;
         return (app?.getAppMetrics?.() || []).filter(m => m.pid === pid || m.type === 'GPU').map(m => ({ pid: m.pid, type: m.type, cpu: m.cpu && m.cpu.percentCPUUsage }));
@@ -1241,6 +1271,8 @@ function createHubPetController({
     if (typeof patch.showGrowth === 'boolean') clean.showGrowth = patch.showGrowth;
     if (typeof patch.clickPlay === 'boolean') clean.clickMode = patch.clickPlay ? 'play' : 'open';
     if (CLICK_MODES.includes(patch.clickMode)) clean.clickMode = patch.clickMode;
+    if (DBL_MODES.includes(patch.dblClick)) clean.dblClick = patch.dblClick;
+    if (typeof patch.dblTodo === 'boolean') clean.dblClick = patch.dblTodo ? 'todo' : 'assistant';
     if (typeof patch.walk === 'boolean') clean.walk = patch.walk;
     const t = clock();
     if (typeof patch.quietHour === 'boolean') clean.quietUntil = patch.quietHour ? t + 3600000 : 0;
@@ -1422,6 +1454,7 @@ function createHubPetController({
     placed = null;
     if (menuAlive()) menuWin.destroy();
     menuWin = null; menuReady = false;
+    todoCard.close();
     if (owner && !owner.isDestroyed?.()) { try { owner.destroy(); } catch (_) {} }
     owner = null;
     lastSent = '';
@@ -1435,6 +1468,7 @@ function createHubPetController({
     roles.cancel();
     disposed = true;
     for (const [channel, fn] of Object.entries(handlers)) ipcMain.removeListener?.(channel, fn);
+    todoCard.dispose();
     ipcMain.removeHandler?.('hub-pet:get-settings');
     ipcMain.removeHandler?.('hub-pet:set-settings');
     for (const ch of ['hub-pet:roles', 'hub-pet:roles-check', 'hub-pet:role-download']) ipcMain.removeHandler?.(ch);
@@ -1444,7 +1478,7 @@ function createHubPetController({
   // 低开销模式切换后立即重发一次状态（没开桌宠或还没启动时什么都不做）。
   function refreshLowOverhead() { if (enabled() && started && alive()) evaluate(); }
 
-  return { start, stop, dispose, refreshLowOverhead, setSignal, setSettings, setProfile, celebrate, petted, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getWindows: () => [win, menuWin].filter(Boolean), getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles, _reply: reply, _chatterTrack: chatterTrack,
+  return { _todoCard: todoCard, start, stop, dispose, refreshLowOverhead, setSignal, setSettings, setProfile, celebrate, petted, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getWindows: () => [win, menuWin].filter(Boolean), getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles, _reply: reply, _chatterTrack: chatterTrack,
     _restoreRememberedRole: restoreRememberedRole, _autoRole: () => ({ ...autoRole }) };
 }
 

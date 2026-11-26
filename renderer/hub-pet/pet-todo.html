@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'">
+<title>AI Hub 桌宠待办</title>
+<link rel="stylesheet" href="pet-todo.css">
+</head>
+<body>
+  <div id="card" class="card" role="dialog" aria-label="待办">
+    <header class="top">
+      <b id="title">今天</b>
+      <button type="button" class="link" id="open-assistant" title="打开助理页">助理页 ↗</button>
+    </header>
+    <input id="input" class="tin" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="记一件事，回车添加（可写 3点、明天）" aria-label="新待办">
+    <div id="hint" class="hint" hidden></div>
+    <ul id="today" class="tlist" aria-label="今天"></ul>
+    <div id="empty" class="empty" hidden>今天没有待办，记一件吧</div>
+    <div class="fold">
+      <button type="button" class="link" id="tog-later" aria-expanded="false"></button>
+      <button type="button" class="link" id="tog-done" aria-expanded="false"></button>
+    </div>
+    <ul id="later" class="tlist" aria-label="稍后" hidden></ul>
+    <ul id="done" class="tlist" aria-label="已完成" hidden></ul>
+    <div class="foot"><span>与桌宠提醒同一份 · 仅存本机</span><span>拖动可排序</span></div>
+  </div>
+  <script src="pet-todo.js"></script>
+</body>
+</html>

@@ -456,7 +456,8 @@
     if (b && b.notify) b = null;
     if (b && b.id !== bubbleId) {
       bubbleId = b.id;
-      bubbleText.textContent = b.title + (b.sticky ? '（点击确认）' : '');
+      // 带「完成 / 10 分钟后」按钮的提醒不再写「点击确认」（2026-11-26）。
+      bubbleText.textContent = b.title + (b.sticky && !(Array.isArray(b.chips) && b.chips.length) ? '（点击确认）' : '');
       bubbleEl.classList.toggle('sticky', !!b.sticky);
       // 起了名字的闲聊：小标签写名字（2026-11-17 r27g）。
       const tag = KIND[b.kind] || (b.kind === 'chatter' && b.name ? String(b.name).slice(0, 8) : '');

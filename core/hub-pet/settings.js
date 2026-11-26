@@ -19,11 +19,13 @@ const URGENT_KINDS = new Set(['reminder', 'hub-reminder', 'commitment-due', 'wel
 const isUrgentNotice = n => !!n && (n.tone === 'bad' || URGENT_KINDS.has(String(n.kind || '')) || URGENT_KINDS.has(String(n.noticeKind || '')));
 
 const CLICK_MODES = Object.freeze(['play', 'open']);
+// 2026-11-26：双击桌宠打开待办卡片（todo，默认）还是助理页（assistant）。没有待办来源（非公司版）时照旧打开助理。
+const DBL_MODES = Object.freeze(['todo', 'assistant']);
 const OPT_IN_V = 1;
 function defaults() {
   return { enabled: false, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, notifyMode: 'pet', followSessions: true, showGrowth: true, introduced: false, scale: 1, bodyBoxes: {}, petName: '', talkPrefs: normalizePrefs(null), talkRecent: [],
     // 2026-11-17 r27f：单击＝逗它（play，双击才打开助理）或旧习惯单击打开（open）；第一次单击提示过没有；偶尔在任务栏上走动。
-    clickMode: 'play', clickHinted: false, walk: true };
+    clickMode: 'play', clickHinted: false, walk: true, dblClick: 'todo' };
 }
 
 // 大小（2026-10-18）：身体是原大小的 0.6–1.6 倍，按 0.01 取整。认数字和「数字样子的字符串」（手改文件时常见），
@@ -60,6 +62,7 @@ function normalize(raw, base, roleOk = builtinRole) {
   if (typeof raw.introduced === 'boolean') out.introduced = raw.introduced;
   if (CLICK_MODES.includes(raw.clickMode)) out.clickMode = raw.clickMode;
   if (typeof raw.clickHinted === 'boolean') out.clickHinted = raw.clickHinted;
+  if (DBL_MODES.includes(raw.dblClick)) out.dblClick = raw.dblClick;
   if (typeof raw.walk === 'boolean') out.walk = raw.walk;
   const scale = parseScale(raw.scale);
   if (scale != null) out.scale = scale;
@@ -130,4 +133,4 @@ function createSettingsStore({ dataDir, company = false, logger = console, roleO
   };
 }
 
-module.exports = { CLICK_MODES, FILE, NOTIFY_MODES, SCALE_MAX, SCALE_MIN, createSettingsStore, defaults, isUrgentNotice, normalize, parseBox, parseScale };
+module.exports = { CLICK_MODES, DBL_MODES, FILE, NOTIFY_MODES, SCALE_MAX, SCALE_MIN, createSettingsStore, defaults, isUrgentNotice, normalize, parseBox, parseScale };

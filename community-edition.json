@@ -59,11 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "一句话组队：CodeAgent 会话默认知道怎么组队，说「组个队做 X」就会按组队流程提方案、招人",
-    "组队技能升级到 0.6.0：招人去重、超大计划先拒、叫回老成员更稳",
-    "群聊兜底：成员卡住时可从下拉里「抢救」（强制结束、回退上一轮、导出不含正文的诊断）"
+    "桌宠可当待办入口：双击或右键一行记待办，到点提醒可完成或推后 10 分钟"
   ],
-  "version": "5.6.117",
+  "version": "5.6.118",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

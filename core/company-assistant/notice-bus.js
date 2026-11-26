@@ -38,6 +38,12 @@ class NoticeBus extends EventEmitter {
   setReminderSource(source) { this.reminderSource = source; this.emit('reminders-changed'); }
   reminders() { return this.reminderSource?.notices() || []; }
   acknowledgeReminders(ids) { return this.reminderSource?.acknowledge(ids) || []; }
+  // 桌宠待办卡片（2026-11-26）：待办就是桌宠提醒里的条目，经同一个来源读写；没有来源（非公司版）时卡片不出现。
+  hasTodos() { return !!this.reminderSource?.todos; }
+  todos() { return this.reminderSource?.todos?.() || null; }
+  addTodo(input) { if (!this.hasTodos()) throw new Error('待办暂不可用'); return this.reminderSource.addTodo(input); }
+  todoAction(input) { return this.hasTodos() ? this.reminderSource.todoAction(input) : false; }
+  snoozeReminder(id, ms) { return this.reminderSource?.snooze?.(id, ms) || false; }
 }
 
 let shared = null;

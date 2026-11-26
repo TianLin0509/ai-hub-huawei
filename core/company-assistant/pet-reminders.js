@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const { randomUUID } = require('node:crypto');
 const D = require('./data');
+const { whenText, bjDay } = require('../hub-pet/todo-parse');
 
 const FILE = 'pet-reminders.json';
 const MAX_PENDING = 50;
@@ -11,6 +12,12 @@ const SESSION_HOURLY_LIMIT = 5;
 const ORDINARY_HOURLY_LIMIT = 20;
 const SESSION_PENDING_LIMIT = 10;
 const HOUR_MS = 60 * 60 * 1000;
+// 桌宠待办卡片（2026-11-26）：不定时待办也存在这里。未完成的不定时待办存成 state='delivered' + todoOpen + untimed，
+// at 记创建时刻、deliveredAt 同写——这样回退到旧版本时：文件照样能读（旧版要求 at 是数字），旧版也只认 pending 才提醒、
+// 只认 pending 才列出，所以这些待办在旧版里既不弹也不丢，升级回来照常显示。不用 at=null：旧版会判整个文件损坏、停掉全部提醒。
+const isOpen = item => item.state === 'pending' || (item.state === 'delivered' && item.todoOpen === true);
+const SNOOZE_MAX_MS = 7 * 24 * HOUR_MS;
+const DONE_SHOW = 20;
 
 class PetReminders {
   constructor(assistant) {
@@ -41,15 +48,16 @@ class PetReminders {
   }
   write(data) { this.a.write(FILE, { ...data, items: data.items.filter(item => item.state === 'pending' || !Number.isFinite(item.completedAt) || item.completedAt >= this.a.now() - RETAIN_MS) }); }
   changed() { this.a.bus.emit?.('reminders-changed'); this.a.changed(); }
-  view(item) { return { ...item, atDisplay: D.displayTime(item.at) }; }
-  list() { return this.read().items.filter(item => item.state === 'pending').sort((a, b) => a.at - b.at).map(item => this.view(item)); }
+  view(item) { return { ...item, atDisplay: item.untimed ? '不定时' : D.displayTime(item.at) }; }
+  list() { return this.read().items.filter(isOpen).sort((a, b) => a.at - b.at).map(item => this.view(item)); }
   notice(item) {
     return { id: item.id, kind: 'reminder', title: item.missed ? '错过的提醒：' + item.title : item.title,
       text: [item.missed ? `Hub 关闭期间错过，原定 ${D.displayTime(item.at)}` : '', item.detail].filter(Boolean).join('\n'),
-      sticky: item.sticky, at: item.deliveredAt, scheduledAt: item.at, detail: { reminderId: item.id }, sessionId: this.a.state().sessionId || null };
+      sticky: item.sticky, at: item.deliveredAt, scheduledAt: item.at, detail: { reminderId: item.id }, sessionId: this.a.state().sessionId || null,
+      chips: [{ id: 'done', label: '完成' }, { id: 'snooze10', label: '10 分钟后' }] };
   }
   notices() {
-    try { return this.read().items.filter(item => item.state === 'pending' && item.deliveredAt != null && item.at <= this.a.now()).map(item => this.notice(item)); }
+    try { return this.read().items.filter(item => item.state === 'pending' && !item.untimed && item.deliveredAt != null && item.at <= this.a.now()).map(item => this.notice(item)); }
     catch { this.warn(); return []; }
   }
   execute(args = {}, source = null) {
@@ -58,8 +66,8 @@ class PetReminders {
       if (typeof args.id !== 'string' || !args.id) throw new Error('取消提醒需要 list 返回的 id');
       const data = this.read(), item = data.items.find(item => item.id === args.id);
       if (!item) throw new Error('找不到这条提醒');
-      if (item.state !== 'pending') return { cancelled: false, reminder: this.view(item), message: '这条提醒已完成或取消' };
-      item.state = 'cancelled'; item.completedAt = this.a.now();
+      if (!isOpen(item)) return { cancelled: false, reminder: this.view(item), message: '这条提醒已完成或取消' };
+      item.state = 'cancelled'; item.completedAt = this.a.now(); delete item.todoOpen;
       this.write(data); this.schedule(); this.changed();
       return { cancelled: true, reminder: this.view(item) };
     }
@@ -83,7 +91,7 @@ class PetReminders {
       if (data.items.filter(item => item.sourceSessionId === source.id && item.state === 'pending').length >= SESSION_PENDING_LIMIT) throw new Error(`这个会话的未完成提醒已达 ${SESSION_PENDING_LIMIT} 条，请先确认一些提醒`);
       if ((args.detail || '').length + '\n\n来自会话：'.length + source.title.length > 4000) throw new Error('提醒详情加上来源会话说明后不能超过 4000 字');
     }
-    if (data.items.filter(item => item.state === 'pending').length >= MAX_PENDING) throw new Error('未完成提醒已达 50 条，请先确认或取消一些提醒');
+    if (data.items.filter(isOpen).length >= MAX_PENDING) throw new Error('未完成提醒已达 50 条，请先确认或取消一些提醒');
     const item = { id: 'pet-reminder:' + randomUUID(), title: args.title.trim(), detail: args.detail || '', at,
       sticky: args.sticky !== false, state: 'pending', createdAt: now, deliveredAt: null, missed: false };
     if (source) {
@@ -101,11 +109,89 @@ class PetReminders {
   }
   acknowledge(ids) {
     const wanted = new Set(ids), data = this.read(), completed = [];
-    for (const item of data.items) if (wanted.has(item.id) && item.state === 'pending') {
-      item.state = 'acknowledged'; item.completedAt = this.a.now(); completed.push(item.id);
+    for (const item of data.items) if (wanted.has(item.id) && isOpen(item)) {
+      item.state = 'acknowledged'; item.completedAt = this.a.now(); delete item.todoOpen; completed.push(item.id);
     }
     if (completed.length) { this.write(data); this.schedule(); this.changed(); }
     return completed;
+  }
+  // ---------- 桌宠待办卡片（2026-11-26） ----------
+  // 用户在卡片里手建的一条：at 为毫秒或 null（不定时）；later 放进「稍后」。不受会话限额，受 50 条未完成上限。
+  addTodo({ title, at = null, later = false } = {}) {
+    const name = String(title || '').trim();
+    if (!name || [...name].length > 80 || /[\u0000-\u001f\u007f]/.test(name)) throw new Error('待办不能为空、不能含控制字符，且最多 80 字');
+    const now = this.a.now();
+    if (at != null && (!Number.isFinite(at) || at <= now || at > now + 366 * 24 * HOUR_MS)) throw new Error('提醒时间要在现在之后、一年以内');
+    const data = this.read();
+    if (data.items.filter(isOpen).length >= MAX_PENDING) throw new Error('未完成的待办已有 50 条，先勾掉几条再记');
+    const untimed = at == null;
+    const item = { id: 'pet-reminder:' + randomUUID(), title: name, detail: '', at: untimed ? now : at, sticky: true, state: untimed ? 'delivered' : 'pending',
+      createdAt: now, deliveredAt: untimed ? now : null, missed: false, todo: true };
+    if (untimed) { item.untimed = true; item.todoOpen = true; }
+    if (later && untimed) item.later = true;
+    const group = this.groupOf(item, now), orders = data.items.filter(row => isOpen(row) && Number.isFinite(row.order) && this.groupOf(row, now) === group).map(row => row.order);
+    if (orders.length) item.order = Math.min(...orders) - 1;   // 有人排过序的组：新记的放最上面
+    data.items.push(item); this.write(data); this.createdInProcess.add(item.id);
+    if (!untimed) this.schedule();
+    this.changed();
+    return this.view(item);
+  }
+  // 今天 / 稍后：定了时间的按北京日期分（今天及以前算今天）；不定时的看 later 标记。
+  groupOf(item, now = this.a.now()) {
+    if (item.untimed) return item.later ? 'later' : 'today';
+    return bjDay(item.at) <= bjDay(now) ? 'today' : 'later';
+  }
+  todos() {
+    const now = this.a.now(), items = this.read().items;
+    const order = (a, b) => (Number.isFinite(a.order) ? a.order : Infinity) - (Number.isFinite(b.order) ? b.order : Infinity)
+      || (a.untimed ? 1 : 0) - (b.untimed ? 1 : 0) || (a.untimed ? a.createdAt - b.createdAt : a.at - b.at);
+    const row = item => ({ id: item.id, title: item.title, when: item.untimed ? '' : whenText(item.at, now), due: !item.untimed && item.at <= now,
+      fromSession: !!item.sourceSessionId, done: !isOpen(item) });
+    const open = items.filter(isOpen);
+    const done = items.filter(item => !isOpen(item) && (item.state === 'acknowledged' || item.state === 'delivered') && Number.isFinite(item.completedAt) && bjDay(item.completedAt) === bjDay(now))
+      .sort((a, b) => b.completedAt - a.completedAt).slice(0, DONE_SHOW);
+    return {
+      today: open.filter(item => this.groupOf(item, now) === 'today').sort(order).map(row),
+      later: open.filter(item => this.groupOf(item, now) === 'later').sort(order).map(row),
+      done: done.map(row), max: MAX_PENDING,
+    };
+  }
+  // op：done 完成 / reopen 恢复 / remove 删掉（记为取消）/ reorder 按 ids 的顺序重排。
+  todoAction({ op, id, ids } = {}) {
+    if (op === 'done') return this.acknowledge([String(id || '')]).length > 0;
+    const data = this.read(), now = this.a.now();
+    if (op === 'reorder') {
+      if (!Array.isArray(ids) || !ids.length || ids.length > 200) return false;
+      const byId = new Map(data.items.filter(isOpen).map(item => [item.id, item]));
+      let n = 0;
+      for (const key of ids) { const item = byId.get(String(key)); if (item) item.order = n++; }
+      if (!n) return false;
+      this.write(data); this.changed(); return true;
+    }
+    const item = data.items.find(row => row.id === String(id || ''));
+    if (!item) return false;
+    if (op === 'reopen') {
+      if (isOpen(item) || (item.state !== 'acknowledged' && item.state !== 'delivered')) return false;
+      if (data.items.filter(isOpen).length >= MAX_PENDING) throw new Error('未完成的待办已有 50 条，先勾掉几条再恢复');
+      delete item.completedAt;
+      // 还没到点的照常到点提醒；已经提醒过的（或本来就不定时的）改成不定时待办，免得桌宠再说一遍。
+      if (!item.untimed && item.at > now) { item.state = 'pending'; item.deliveredAt = null; }
+      else { item.state = 'delivered'; item.untimed = true; item.todoOpen = true; item.deliveredAt = item.deliveredAt ?? now; }
+    } else if (op === 'remove') {
+      if (!isOpen(item)) return false;
+      item.state = 'cancelled'; item.completedAt = now; delete item.todoOpen;
+    } else return false;
+    this.write(data); this.schedule(); this.changed();
+    return true;
+  }
+  // 气泡上的「10 分钟后」：把这条推后，到时再说一次。
+  snooze(id, ms = 10 * 60 * 1000) {
+    const data = this.read(), now = this.a.now(), item = data.items.find(row => row.id === String(id || ''));
+    if (!item || !isOpen(item) || !(ms >= 60 * 1000 && ms <= SNOOZE_MAX_MS)) return false;
+    item.state = 'pending'; item.at = now + ms; item.deliveredAt = null; item.missed = false;
+    delete item.untimed; delete item.later; delete item.todoOpen;
+    this.write(data); this.schedule(); this.changed();
+    return true;
   }
   tick({ startup = false } = {}) {
     if (!this.running) return;
