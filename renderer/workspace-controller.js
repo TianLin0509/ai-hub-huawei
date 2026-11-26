@@ -1353,7 +1353,8 @@
     document.querySelector(`#new-session-model-cards [data-model-card="${CSS.escape(id)}"]`)?.focus();
   }
 
-  // 权限模式（core/permission-modes.js）：按工具记住上次（renderer/launch-last-permission.js），本次打开里点选的优先。
+  // 权限模式（core/permission-modes.js）：每个工具有自己的默认档（renderer/launch-last-permission.js，「设为默认」改它），
+  // 本次打开里点选的只用于这次启动（本次覆盖）；新用户默认最保守的一档，老用户升级保留原来的选择。
   const permissionModes = require('../core/permission-modes');
   const lastPermission = require('./launch-last-permission');
   let permissionPick = Object.create(null);
@@ -1392,38 +1393,48 @@
     const note = document.getElementById('new-session-permission-note');
     const desc = document.getElementById('new-session-permission-desc');
     const reset = document.getElementById('new-session-permission-reset');
+    const makeDefault = document.getElementById('new-session-permission-setdefault');
     if (!field || !select) return;
     const show = selectedKind !== 'powershell';
     field.hidden = !show;
     if (note) note.hidden = !show;
     if (!show) return;
     const supported = permissionModes.supportsSwitch(selectedKind);
-    const options = supported ? permissionModes.optionsFor(selectedKind)
-      : [{ id: permissionModes.DEFAULT_MODE, label: `${permissionModes.MODES[permissionModes.DEFAULT_MODE].label}（${permissionModes.UNSUPPORTED_NOTE}）`, desc: '' }];
-    const signature = selectedKind + '|' + options.map(option => option.id).join(',');
+    const userDefault = supported ? lastPermission.recall(localStorage, selectedKind) : permissionModes.DEFAULT_MODE;
+    // 五档全列：不支持的灰掉、悬停看原因（公司版下拉 launch-select-popover.js 认 disabled 与 title）。
+    const options = permissionModes.optionsFor(selectedKind, { userDefault });
+    const signature = selectedKind + '|' + userDefault + '|' + options.map(option => option.id + (option.supported ? '' : '-')).join(',');
     if (select.dataset.builtFor !== signature) {
-      select.innerHTML = options.map(option => `<option value="${escapeHtml(option.id)}" title="${escapeHtml(option.desc)}">${escapeHtml(option.label)}</option>`).join('');
+      select.innerHTML = options.map(option => `<option value="${escapeHtml(option.id)}"${option.supported ? '' : ' disabled'} title="${escapeHtml(option.desc)}">${escapeHtml(option.label)}</option>`).join('');
       select.dataset.builtFor = signature;
     }
     const mode = currentPermissionMode();
     select.value = mode;
     select.disabled = !supported || submitting;
     field.classList.toggle('is-unsupported', !supported);
-    if (desc) {
-      desc.textContent = !supported ? `这个工具${permissionModes.UNSUPPORTED_NOTE}权限模式，始终完全放开：${permissionModes.BYPASS_RISK}`
-        : mode === permissionModes.DEFAULT_MODE ? `完全放开：${permissionModes.BYPASS_RISK}`
-        : permissionModes.describe(selectedKind, mode) + (mode === 'default' || mode === 'acceptEdits' ? ' 需要确认时会话显示「等待输入」，点进终端选择即可。' : '');
-    }
-    const risky = mode === permissionModes.DEFAULT_MODE;
-    if (note) note.dataset.risk = risky ? '1' : '';
+    const bypass = mode === permissionModes.DEFAULT_MODE;
+    const override = supported && mode !== userDefault;
+    const grey = options.filter(option => !option.supported);
+    const hint = [
+      !supported ? `这个工具${permissionModes.UNSUPPORTED_NOTE}权限模式，始终完全放开：${permissionModes.BYPASS_RISK}`
+        : bypass ? `完全放开：${permissionModes.BYPASS_RISK}`
+        : permissionModes.describe(selectedKind, mode) + (mode === 'default' || mode === 'acceptEdits' ? ' 需要确认时会话显示「等待输入」，点进终端选择即可。' : ''),
+      override ? `这次启动用「${permissionModes.MODES[mode].label}」；默认仍是「${permissionModes.MODES[userDefault].label}」，点「设为默认」以后都用它。` : '',
+      supported ? permissionModes.liveSwitchNote(selectedKind) : '',
+      supported && grey.length ? '灰掉的档：' + grey.map(option => `${permissionModes.MODES[option.id].label}——${option.desc}`).join(' ') : '',
+    ].filter(Boolean).join('\n');
+    if (desc) desc.textContent = override ? `仅本次：${permissionModes.MODES[mode].label}（默认 ${permissionModes.MODES[userDefault].label}）` : `默认：${permissionModes.MODES[userDefault].label}`;
+    if (note) note.dataset.risk = bypass ? '1' : '';
+    if (makeDefault) { makeDefault.hidden = !override; makeDefault.disabled = submitting; }
     if (reset) {
-      const stored = supported && lastPermission.recall(localStorage, selectedKind) !== permissionModes.DEFAULT_MODE;
-      reset.hidden = !supported || (!stored && mode === permissionModes.DEFAULT_MODE);
+      reset.hidden = !supported || override || !lastPermission.hasCustomDefault(localStorage, selectedKind);
       reset.disabled = submitting;
+      reset.title = supported ? `回到「${permissionModes.MODES[permissionModes.launchDefault(selectedKind)].label}」` : '';
     }
-    // 档位说明（含「完全放开」的风险提示）进「权限模式」旁的 ⓘ，完全放开时图标染成琥珀色；下面只在要「恢复默认」时留一个小按钮。
-    fieldHint.setIconHint(fieldHint.fieldLabel(field), desc?.textContent || '', { tone: risky ? 'risk' : 'info' });
-    if (note) { note.dataset.hintLevel = 'status'; note.hidden = !reset || reset.hidden; }
+    // 档位说明（含「完全放开」的风险提示、已开会话怎么换档、灰掉的原因）进「权限模式」旁的 ⓘ，完全放开时图标染成琥珀色；
+    // 下面只在「设为默认」「恢复默认」有用时留一行。
+    fieldHint.setIconHint(fieldHint.fieldLabel(field), hint, { tone: bypass ? 'risk' : 'info' });
+    if (note) { note.dataset.hintLevel = 'status'; note.hidden = (!reset || reset.hidden) && (!makeDefault || makeDefault.hidden); }
   }
 
   // 低开销模式在别处切了（含启动时主进程推来的真值）：启动中心开着就当场重画运行方式（Gemini P2-1）。
@@ -2428,7 +2439,6 @@
       try {
         require('./codeagent-preference').rememberKind(launchKindKey());
         require('./launch-last-workspace').remember(localStorage, { mode: workspaceMode, workspace });
-        if (permissionModes.supportsSwitch(selectedKind)) lastPermission.remember(localStorage, selectedKind, currentPermissionMode());
         if (guardAvailable()) { if (guardChecked()) localStorage.setItem(GUARD_STORAGE_KEY, '1'); else localStorage.removeItem(GUARD_STORAGE_KEY); }
       } catch (error) { followup = followup || { step: 'remember', error }; }
       if (!followup && session && session.createWarning) {
@@ -2733,8 +2743,19 @@
     }
     const permissionSelect = document.getElementById('new-session-permission');
     if (permissionSelect) {
-      permissionSelect.addEventListener('change', () => {
-        permissionPick[selectedKind] = permissionModes.normalize(selectedKind, permissionSelect.value) || permissionModes.DEFAULT_MODE;
+      permissionSelect.addEventListener('change', async () => {
+        const kind = selectedKind;
+        const value = permissionModes.normalize(kind, permissionSelect.value);
+        if (!value) { paint(); return; }
+        // 选「完全放开」：第一次清楚提示风险、确认一次，记住后不再弹（老用户升级时已记为确认过）。
+        if (value === permissionModes.DEFAULT_MODE && !lastPermission.bypassAcknowledged(localStorage)) {
+          paint();
+          const ok = await require('./ui-feedback').confirmHubAction(`${permissionModes.BYPASS_RISK}\n\n确认后这台电脑上不再提示；随时可以改回「每步确认」。`,
+            { document, title: '改成「完全放开」？', acceptLabel: '我知道风险，改成完全放开', danger: true });
+          if (!ok || kind !== selectedKind) { paint(); return; }
+          lastPermission.acknowledgeBypass(localStorage);
+        }
+        permissionPick[kind] = value;
         paint();
       });
     }
@@ -2744,7 +2765,15 @@
     if (permissionReset) {
       permissionReset.addEventListener('click', () => {
         lastPermission.forget(localStorage, selectedKind);
-        permissionPick[selectedKind] = permissionModes.DEFAULT_MODE;
+        delete permissionPick[selectedKind];
+        paint();
+      });
+    }
+    const permissionMakeDefault = document.getElementById('new-session-permission-setdefault');
+    if (permissionMakeDefault) {
+      permissionMakeDefault.addEventListener('click', () => {
+        lastPermission.setDefault(localStorage, selectedKind, currentPermissionMode());
+        delete permissionPick[selectedKind];
         paint();
       });
     }

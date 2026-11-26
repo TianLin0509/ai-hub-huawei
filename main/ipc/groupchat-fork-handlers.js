@@ -142,6 +142,16 @@ function registerGroupChatForkIpc(ipcMain, deps) {
       overrides,
     });
     if (!plan.ok) return plan;
+    // DSH 的权限档记在原生会话记录里，分支会原样继承（Hub 去掉 permissionMode 也改不回来）：
+    // 以保守档启动的 DSH 分支进群聊后，改文件时会停在「允许一次 / 拒绝」上，群聊里没人点就卡住。
+    const sourcePermission = require('../../core/permission-modes').normalize(source.kind, source.permissionMode);
+    if (/^deepseek-acp(?:-resume)?$/.test(String(source.kind || '')) && sourcePermission && sourcePermission !== 'bypassPermissions') {
+      return {
+        ok: false,
+        error: 'dsh-permission-inherited',
+        message: `「${source.title || 'DSH'}」是以「${require('../../core/permission-modes').MODES[sourcePermission].label}」启动的 DSH 会话，分支进群聊后仍会停在确认上、群聊里没人点就会卡住。请在群聊里直接新增 DSH 成员，或用「完全放开」启动的 DSH 会话加入。`,
+      };
+    }
     if (plan.needsAcpFork) {
       const native = typeof sessionManager.getNativeSession === 'function'
         ? sessionManager.getNativeSession(source.id)

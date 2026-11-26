@@ -270,6 +270,10 @@ class DshCliSession extends EventEmitter {
       if (!replay) this.emit('bound', { threadId: this.threadId, model: this.currentModel,
         reasoningEffort: header.reasoningEffort, configOptions: this.configOptions });
     }
+    // 非完全放开档（core/permission-modes.js dshPermission）：越界操作要用户在终端里点「允许一次 / 拒绝」
+    // （dsh-user-approval 的 approval/asked → approval/decided）。等的时候侧栏显示「等待输入」，免得看起来像一直在跑。
+    if (!replay && event.type === 'approval/asked') this.apply({ state: 'waiting', reason: 'DSH 请你确认一次越界操作：点「后台」进终端选「允许一次」或「拒绝」' });
+    if (!replay && event.type === 'approval/decided' && this.runtime.state === 'waiting') this.apply({ state: 'running', reason: null });
     if (event.type === 'request/context' && Number(d.contextWindow) > 0) {
       const window = Number(d.contextWindow);
       if (window !== this.contextWindow) { this.contextWindow = window; this.emitUsage(); }

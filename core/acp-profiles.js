@@ -200,6 +200,8 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
       { id: 'acp', config: { provider: providerId, model } }];
     if (companyRoute) routePatches.unshift(...companyRoute.disabledPatches,
       ...require('./dsh-tools-compat').companyToolsPatch({ modules: opts.dshCliRuntime?.modules, entryPath: entry.entryPath }));
+    // 启动中心选的权限模式（core/permission-modes.js dshPermission）：没选（组队、群聊、助理等后台会话）仍是完全放开。
+    const dshPerm = kind === 'deepseek-acp' ? require('./permission-modes').dshPermission(opts.autonomous === true ? null : opts.permissionMode) : null;
     if (opts.dshCliRuntime && !opts.dshCardAcp) {
       args[args.indexOf(entry.entryPath)] = dshRuntimeFile('dsh-cli-launch.mjs');
       env.AI_HUB_DSH_CLI_ENTRY = entry.entryPath;
@@ -209,7 +211,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
       pointLinkAt(opts.dshCliRuntime.modules, link);
       writeJson(path.join(profileHome, 'package.json'), { name: 'hub-dsh-cli-profile', private: true,
         dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', opts.dshCliRuntime.tuiPackage || '@deepseek-harness-tui/dsh-tui'], patchReload: 'startup' } } });
-      Object.assign(env, { DSH_PERMISSION_MODE: 'danger-full-access', DSH_TUI_BACKEND: 'dsh',
+      Object.assign(env, { DSH_PERMISSION_MODE: dshPerm.sandbox, DSH_TUI_BACKEND: 'dsh',
         DSH_TUI_WORKSPACE_TARGET: opts.cwd, DSH_TUI_NO_LAUNCHPAD: '1' });
       if (opts.acpSid || opts.acpFork?.sessionId) env.DSH_TUI_RESUME_SESSION = opts.acpFork?.sessionId || opts.acpSid;
       // Hub already owns credential, model and workspace onboarding.
@@ -222,7 +224,13 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
         config: { provider: providerId, model, backend: 'dsh', fullscreen: true, launchpad: false,
           workspace: opts.cwd, sessionId: env.DSH_TUI_RESUME_SESSION,
           effort: deepseekRoute && !['high', 'max'].includes(opts.effort) ? undefined : opts.effort,
-          modes: [{ id: 'default', plan: false, sandbox: 'danger-full-access', approval: 'never' }] } });
+          modes: dshPerm.modes } });
+      // dsh-tui 的配置层在 Windows 上把沙箱钉死为完全放开、审批钉死为 never（它认为 Windows 没有沙箱后端），
+      // DSH_PERMISSION_MODE 因此不生效。选了保守档时由 Hub 的补丁（排在 dsh-tui 之后）改回所选沙箱 + 越界要问；
+      // 完全放开不加这两行，老用户的启动配置与升级前一致。
+      if (dshPerm.policy !== 'bypass') routePatches.push(
+        { id: 'sandbox-policy', config: { mode: dshPerm.sandbox, workspaceRoot: opts.cwd } },
+        { id: 'approval', config: { policy: 'ask' } });
       if (mcpServers.length) routePatches.push({ insert: mcpServers.map((s, i) => ({
         id: 'hub-mcp-' + i, name: '@deepseek-ai/dsh-mcp-client', config: {
           serverName: s.name, failOnStartupError: true,
@@ -232,7 +240,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
         },
       })) });
     } else if (opts.dshCardAcp) {
-      Object.assign(env, { DSH_PERMISSION_MODE: 'danger-full-access' });
+      Object.assign(env, { DSH_PERMISSION_MODE: dshPerm.sandbox });
     } else if (entry.bridgePath) {
       if (!path.isAbsolute(entry.bridgePath) || !fs.existsSync(path.join(entry.bridgePath, 'package.json'))) throw new Error('DeepSeek ACP 扩展包路径无效');
       const scope = path.join(env.DSH_HOME, 'profiles/acp/node_modules/@openma');
@@ -275,11 +283,13 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     env:baseEnv,dataDir});
   // DeepSeek 线路只提供 high / max；套餐 flash 档的 low 等档位换线路后不存在，交给外壳默认，免得启动时被拒。
   const effort = deepseekRoute && !['high', 'max'].includes(opts.effort) ? undefined : opts.effort;
+  const dshPermOut = kind === 'deepseek-acp' ? require('./permission-modes').dshPermission(opts.autonomous === true ? null : opts.permissionMode) : null;
   return { id: opts.id, kind, cwd: opts.cwd, profileId, tokenPlanRoute: route.route,
     userContextWarning: userContext?.warning || null,
     tokenPlanWait: route.waitForReset ? { missingKey: route.missingKey } : null, model, effort,mcpServers,
-    permissionPolicy: 'bypass',
-    defaultMode: {qwen:'yolo','deepseek-acp':'danger-full-access',glm:'yolo'}[kind],
+    // DSH 非完全放开档：越界申请要用户点「允许一次 / 拒绝」，不能由 Hub 自动批准。
+    permissionPolicy: dshPermOut ? dshPermOut.policy : 'bypass',
+    defaultMode: dshPermOut ? dshPermOut.sandbox : {qwen:'yolo',glm:'yolo'}[kind],
     resumeId: opts.acpFork?.sessionId || opts.acpSid, forkCli:opts.acpFork?.forkCli===true, restoredRuntime: opts.nativeRuntime, forkHistory: opts.acpFork?.history,
     storeDir: path.join(dataDir, 'acp-history'), home, authMethod, authMeta,
     launch: { command: nodePath, args, cwd: opts.cwd, env, secrets: [key] } };

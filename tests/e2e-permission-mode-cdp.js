@@ -1,9 +1,12 @@
 'use strict';
-// 启动中心「权限模式」端到端（2026-11-20）：全新数据目录、隔离 Hub、无头 CDP、替身 Claude CLI（tests/fixtures/fake-claude.ps1）。
-//   1. 全新用户打开启动中心 → Claude 默认「完全放开」并显示风险提示；1440 宽下启动中心不出纵向滚动；
-//   2. 鼠标点「每步确认」建会话 → CLI 收到 --permission-mode default → 跑工具时停在确认框，Hub 显示等待输入；在终端里回 1 继续；
-//   3. 重开启动中心显示上次所选 →「恢复默认」回到完全放开；
-//   4. 休眠后从侧栏点开恢复、以及整个 Hub 重启后恢复，CLI 仍按 default 启动。
+// 启动中心「权限模式」端到端（2026-11-20，11-26 改为「设为默认 + 本次覆盖」、新用户默认每步确认）：
+// 全新数据目录、隔离 Hub、无头 CDP、替身 Claude / Codex / CodeAgent CLI（tests/fixtures/）。
+//   1. 全新用户打开启动中心 → Claude 默认「每步确认」，五档全列、auto 灰掉；1440 宽下启动中心不出纵向滚动；
+//   2. 选「完全放开」先弹一次风险确认 → 点「设为默认」→ 再把这次改成「每步确认」（本次覆盖）建会话
+//      → CLI 收到 --permission-mode default → 跑工具时停在确认框，Hub 显示等待输入；在终端里回 1 继续；
+//   3. 重开启动中心显示默认「完全放开」（本次覆盖没落盘）→「恢复默认」回到每步确认；
+//   4. 休眠后从侧栏点开恢复、以及整个 Hub 重启后恢复，CLI 仍按 default 启动；
+//   5. Codex 默认每步确认建会话；CodeAgent 启动中心可选「只讨论不改」（开发机上没有真 CodeAgent，启动参数由单测核对）。
 // 不连任何 AI 服务。用法：node tests/e2e-permission-mode-cdp.js（截图与报告写到 HUB_E2E_ARTIFACT_DIR 或 artifacts/permission-mode-gui）
 const fs = require('fs');
 const os = require('os');
@@ -83,6 +86,8 @@ async function main() {
   const permSeg = value => `.lcc-seg[data-for="new-session-permission"] [data-lcc-value="${value}"]`;
   const selected = 'document.getElementById("new-session-permission").value';
   async function pickPermission(value) {
+    await expandMore();
+    await until('document.getElementById("new-session-permission")?.getBoundingClientRect().width > 0', 'permission select visible', 15000);
     if (await cdp.eval(`!!document.querySelector(${JSON.stringify(permSeg(value))})?.getBoundingClientRect().width`)) { await click(permSeg(value)); return 'segment'; }
     await click('#new-session-permission');
     await until(`!!document.querySelector('.launch-select-option[data-value="${value}"]')`, 'permission dropdown open');
@@ -106,18 +111,19 @@ async function main() {
     await launch('perm-mode');
     await until('[...document.querySelectorAll(".community-provider")].some(e => e.dataset.provider === "claude" && e.dataset.installed === "1") ', 'Claude detected');
 
-    // 1. 全新用户：默认完全放开 + 风险提示；1440 宽不出纵向滚动
+    // 1. 全新用户：默认每步确认（不默认完全放开）；五档全列、auto 灰掉；1440 宽不出纵向滚动
     await openLauncher();
-    assert.equal(await cdp.eval(selected), 'bypassPermissions');
-    const options = await cdp.eval('[...document.getElementById("new-session-permission").options].map(o => o.value)');
-    assert.deepEqual(options, ['bypassPermissions', 'acceptEdits', 'default', 'plan'], 'Claude 4 档，不含 auto');
-    assert.match(await cdp.eval('document.getElementById("new-session-permission-desc").textContent'), /不再问你.*不要只为少点确认而选它/);
+    assert.equal(await cdp.eval(selected), 'default', '新用户默认每步确认');
+    const options = await cdp.eval('[...document.getElementById("new-session-permission").options].map(o => o.value + (o.disabled ? "-" : ""))');
+    assert.deepEqual(options, ['default', 'acceptEdits', 'plan', 'auto-', 'bypassPermissions'], 'Claude 4 档可选，auto 灰掉');
+    assert.match(await cdp.eval('document.getElementById("new-session-permission").options[0].textContent'), /每步确认（默认）/);
     assert.equal(await cdp.eval('document.getElementById("new-session-permission-reset").hidden'), true);
+    assert.equal(await cdp.eval('document.getElementById("new-session-permission-setdefault").hidden'), true);
     report.permissionBlockHeight = await cdp.eval(`(()=>{const f=document.getElementById('new-session-permission-field').getBoundingClientRect(),n=document.getElementById('new-session-permission-note').getBoundingClientRect();return Math.round(Math.max(f.bottom,n.bottom)-f.top);})()`);
     const scrollers = await cdp.eval(`(()=>{const m=document.getElementById('new-session-menu');return [m,...m.querySelectorAll('*')].filter(e=>{const s=getComputedStyle(e);return /(auto|scroll)/.test(s.overflowY)&&e.scrollHeight>e.clientHeight+2&&e.getBoundingClientRect().height>0;}).map(e=>(e.id||e.className)+':'+e.scrollHeight+'/'+e.clientHeight);})()`);
     report.launchCenterScrollers = scrollers;
-    await shot('01-launch-default-bypass');
-    report.checks.push(`全新用户：Claude 默认「完全放开」、4 档可选、风险提示；1440×900 下有纵向滚动的区域：${scrollers.length ? scrollers.join(', ') : '无'}`);
+    await shot('01-launch-fresh-default');
+    report.checks.push(`全新用户：Claude 默认「每步确认」、4 档可选、auto 灰掉；1440×900 下有纵向滚动的区域：${scrollers.length ? scrollers.join(', ') : '无'}`);
 
     // CodeAgent / Codex / DSH 的显示（本机没装也能看界面）
     const kinds = await cdp.eval('[...document.querySelectorAll(".new-session-option[data-kind]")].filter(b => b.getBoundingClientRect().width > 0).map(b => b.dataset.kind)');
@@ -125,23 +131,42 @@ async function main() {
       if (!kinds.includes(kind)) continue;
       await click(`.new-session-option[data-kind="${kind}"]`);
       await sleep(400);
-      const view = await cdp.eval('({ hidden: document.getElementById("new-session-permission-field").hidden, options: [...document.getElementById("new-session-permission").options].map(o => o.value + "=" + o.textContent), disabled: document.getElementById("new-session-permission").disabled, desc: document.getElementById("new-session-permission-desc").textContent, sectionHidden: document.getElementById("new-session-config-section").hidden })');
+      const view = await cdp.eval('({ hidden: document.getElementById("new-session-permission-field").hidden, value: document.getElementById("new-session-permission").value, options: [...document.getElementById("new-session-permission").options].map(o => o.value + (o.disabled ? "-" : "") + "=" + o.textContent), disabled: document.getElementById("new-session-permission").disabled, desc: document.getElementById("new-session-permission-desc").textContent, sectionHidden: document.getElementById("new-session-config-section").hidden })');
       report[`view_${kind}`] = view;
       if (!view.sectionHidden) await shot(`01-launch-${kind}`);
-      if (kind === 'codeagent' && !view.sectionHidden) assert.ok(view.options.some(o => o.startsWith('auto=自动判断')), 'CodeAgent 有自动判断');
-      if (kind === 'codex' && !view.sectionHidden) { assert.equal(view.disabled, false); assert.deepEqual(view.options.map(o => o.split('=')[0]), ['bypassPermissions', 'default']); }
-      if (kind === 'pi' && !view.sectionHidden) { assert.equal(view.disabled, true); assert.match(view.options[0], /暂不支持切换/); }
+      if (kind === 'codeagent' && !view.sectionHidden) { assert.ok(view.options.some(o => o.startsWith('auto=自动判断')), 'CodeAgent 有自动判断'); assert.equal(view.value, 'default'); }
+      if (kind === 'codex' && !view.sectionHidden) { assert.equal(view.disabled, false); assert.deepEqual(view.options.map(o => o.split('=')[0]), ['default', 'acceptEdits-', 'plan-', 'auto-', 'bypassPermissions']); assert.equal(view.value, 'default'); }
+      if (kind === 'pi' && !view.sectionHidden) { assert.equal(view.disabled, true); assert.equal(view.value, 'bypassPermissions'); }
     }
-    report.checks.push('CodeAgent 下拉含「自动判断」；Codex 两档（完全放开 / 每步确认）；pi 只显示「完全放开（暂不支持切换）」并灰显（配置区可见时）');
+    report.checks.push('CodeAgent 五档含「自动判断」、默认每步确认；Codex 可选每步确认 / 完全放开、其余灰掉；pi 只能完全放开并灰显（配置区可见时）');
     await click('.new-session-option[data-kind="claude"]');
     await until('!document.getElementById("new-session-permission-field").hidden', 'back to Claude');
 
-    // 2. 选「每步确认」建会话
-    report.pickedWith = await pickPermission('default');
-    await until(`${selected} === "default"`, 'default picked');
-    assert.match(await cdp.eval('document.getElementById("new-session-permission-desc").textContent'), /都先问你/);
-    assert.equal(await cdp.eval('document.getElementById("new-session-permission-reset").hidden'), false);
-    await shot('02-launch-picked-default');
+    // 2. 选「完全放开」：第一次弹风险确认；先点取消不变，再选并确认；点「设为默认」；再把这次改回「每步确认」（本次覆盖）
+    report.pickedWith = await pickPermission('bypassPermissions');
+    await until('!!document.querySelector("dialog[open] .hub-button-primary")', 'bypass confirm dialog');
+    report.bypassDialog = await cdp.eval('document.querySelector("dialog[open]").innerText');
+    assert.match(report.bypassDialog, /不再问你/);
+    await shot('02a-bypass-confirm');
+    await click('dialog[open] .hub-dialog-actions .hub-button:not(.hub-button-primary)');
+    await until(`${selected} === "default"`, 'cancel keeps default');
+    await pickPermission('bypassPermissions');
+    await until('!!document.querySelector("dialog[open] .hub-button-primary")', 'bypass confirm dialog again');
+    await click('dialog[open] .hub-button-primary');
+    await until(`${selected} === "bypassPermissions"`, 'bypass picked');
+    assert.equal(await cdp.eval('localStorage.getItem("hub.launch.permissionBypassAck.v1")'), '1');
+    assert.equal(await cdp.eval('document.getElementById("new-session-permission-setdefault").hidden'), false, '本次覆盖时出现「设为默认」');
+    await shot('02b-override-bypass');
+    await click('#new-session-permission-setdefault');
+    await until('document.getElementById("new-session-permission-setdefault").hidden', 'set as default');
+    assert.equal(await cdp.eval('JSON.parse(localStorage.getItem("hub.launch.lastPermissionMode.v1")).claude'), 'bypassPermissions');
+    assert.equal(await cdp.eval('document.getElementById("new-session-permission-reset").hidden'), false, '设过默认后可恢复默认');
+    await pickPermission('default');
+    await until(`${selected} === "default"`, 'default picked as override');
+    assert.equal(await cdp.eval('!!document.querySelector("dialog[open]")'), false, '改保守档不弹确认');
+    assert.match(await cdp.eval('document.getElementById("new-session-permission-desc").textContent'), /仅本次：每步确认/);
+    await shot('02c-launch-override-default');
+    report.checks.push('第一次选「完全放开」弹风险确认（取消不变、确认后记住）；「设为默认」写入默认；再选「每步确认」显示「仅本次」');
     // 公司版全新用户默认选公司模型卡，替身 CLI 用不了公司反代：改用「沿用本机 CLI 配置」。
     if (await cdp.eval(`!!document.querySelector('[data-model-card="own"]')?.getBoundingClientRect().width`)) await click('[data-model-card="own"]');
     await click('#new-session-submit');
@@ -170,16 +195,19 @@ async function main() {
     await until(`document.querySelector(${JSON.stringify(composer)})?.innerText.includes("完成")`, 'turn completed');
     report.checks.push('跑工具时 CLI 停在确认框（终端显示 Do you want to proceed?），Hub 状态为等待输入；在终端回 1 后继续并完成');
 
-    // 3. 重开启动中心：显示上次所选；恢复默认
+    // 3. 重开启动中心：显示默认「完全放开」（本次覆盖没落盘）；第二次选完全放开不再弹确认；恢复默认回到每步确认
     await openLauncher();
-    assert.equal(await cdp.eval(selected), 'default', '记住上次');
-    await shot('04-launch-remembers-default');
+    assert.equal(await cdp.eval(selected), 'bypassPermissions', '默认是设过的完全放开，本次覆盖没落盘');
+    await shot('04-launch-shows-saved-default');
     await click('#new-session-permission-reset');
-    await until(`${selected} === "bypassPermissions"`, 'reset to default');
+    await until(`${selected} === "default"`, 'reset to product default');
     assert.equal(await cdp.eval('localStorage.getItem("hub.launch.lastPermissionMode.v1")'), null);
+    await pickPermission('bypassPermissions');
+    await sleep(600);
+    assert.equal(await cdp.eval('!!document.querySelector("dialog[open]")'), false, '确认过一次不再弹');
     await shot('05-launch-reset');
     await click('#new-session-cancel');
-    report.checks.push('重开启动中心显示上次的「每步确认」；点「恢复默认」回到完全放开并清掉记录');
+    report.checks.push('重开启动中心显示默认「完全放开」（本次覆盖未落盘）；「恢复默认」回到每步确认并清掉记录；再选完全放开不再弹确认');
 
     // 4a. 休眠 → 侧栏点开恢复
     const suspended = await cdp.eval(`ipcRenderer.invoke('suspend-session', { sessionId: ${q} })`);
@@ -213,10 +241,8 @@ async function main() {
     const codexArgs = () => { try { return fs.readFileSync(codexTrace, 'utf8').split(/\r?\n/).filter(line => line.startsWith('codex-args:') && !/^codex-args: (app-server|exec|login|mcp)\b/.test(line)); } catch { return []; } };
     await openLauncher();
     await click('.new-session-option[data-kind="codex"]');
-    await until('document.getElementById("new-session-permission").options.length === 2', 'Codex permission options');
-    await pickPermission('default');
-    await until(`${selected} === "default"`, 'codex default picked');
-    assert.match(await cdp.eval('document.getElementById("new-session-permission-desc").textContent'), /只读沙箱/);
+    await until('document.getElementById("new-session-permission").options.length === 5', 'Codex permission options');
+    await until(`${selected} === "default"`, 'codex default is ask');
     await shot('07-launch-codex-default');
     if (await cdp.eval(`!!document.querySelector('[data-model-card="own"]')?.getBoundingClientRect().width`)) await click('[data-model-card="own"]');
     await click('#new-session-submit');
@@ -235,7 +261,21 @@ async function main() {
     report.codexSavedPermission = saved.permissionMode;
     assert.equal(saved.permissionMode, 'default', '会话文件里记下了 Codex 的权限模式');
     await shot('08-codex-session');
-    report.checks.push('Codex 选「每步确认」建会话：CLI 不带旁路参数，approval_policy=on-request、sandbox_mode=read-only；会话文件记下 permissionMode=default');
+    report.checks.push('Codex 默认「每步确认」建会话：CLI 不带旁路参数，approval_policy=on-request、sandbox_mode=read-only；会话文件记下 permissionMode=default');
+
+    // 5b. CodeAgent：选「只讨论不改」建会话 → 替身 CLI 收到 --permission-mode plan
+    await openLauncher();
+    await click('.new-session-option[data-kind="codeagent"]');
+    await until('document.getElementById("new-session-permission").options.length === 5 && !document.getElementById("new-session-permission").disabled', 'CodeAgent permission options');
+    await pickPermission('plan');
+    await until(`${selected} === "plan"`, 'codeagent plan picked');
+    await shot('08b-launch-codeagent-plan');
+    // CodeAgent 是公司内网工具，开发机上没有真 CLI；替身在隔离 Hub 里起不来（号池/模型探测链路），启动参数由单测
+    // tests/unit-permission-modes.test.js 逐档核对（5 档含 auto 都原样带 --permission-mode）。这里只核对界面选档。
+    report.codeagentPicked = await cdp.eval('document.getElementById("new-session-permission").value');
+    assert.equal(report.codeagentPicked, 'plan');
+    await click('#new-session-cancel');
+    report.checks.push('CodeAgent 启动中心可选「只讨论不改」（截图）；CLI 启动参数由单测逐档核对，开发机无真 CLI 未端到端');
 
     // 6. 五个工具各截一张启动中心：权限模式那一行独占整行（2026-11-20 负责人返工：Codex 6 列网格里说明被挤成一字一行）。
     // DSH 本机没装，点按钮会弹安装说明，这里用 Hub 自己「带工具打开启动中心」的入口直接选中它。

@@ -18,7 +18,7 @@ function loadSessionManager() {
   try { return require('../core/session-manager'); } finally { Module._load = load; }
 }
 
-test('mode table: Claude 4 档、CodeAgent 5 档含 auto、Codex 2 档、其余只有完全放开', () => {
+test('mode table: Claude 4 档、CodeAgent 5 档含 auto、Codex 2 档、DSH 3 档（另见 unit-permission-modes-dsh）、其余只有完全放开', () => {
   assert.deepEqual(modes.modesFor('claude'), ['bypassPermissions', 'acceptEdits', 'default', 'plan']);
   assert.deepEqual(modes.modesFor('claude-resume'), modes.modesFor('claude'));
   assert.deepEqual(modes.modesFor('codeagent'), ['bypassPermissions', 'acceptEdits', 'default', 'plan', 'auto']);
@@ -26,7 +26,7 @@ test('mode table: Claude 4 档、CodeAgent 5 档含 auto、Codex 2 档、其余�
   assert.equal(modes.normalize('codex-resume', 'default'), 'default');
   assert.equal(modes.normalize('codex', 'plan'), null);
   assert.match(modes.describe('codex', 'default'), /只读沙箱/);
-  for (const kind of ['deepseek', 'deepseek-acp', 'pi', 'powershell']) {
+  for (const kind of ['deepseek', 'pi', 'powershell']) {
     assert.deepEqual(modes.modesFor(kind), ['bypassPermissions'], kind);
     assert.equal(modes.supportsSwitch(kind), false, kind);
     assert.equal(modes.normalize(kind, 'default'), null, kind);
@@ -35,7 +35,7 @@ test('mode table: Claude 4 档、CodeAgent 5 档含 auto、Codex 2 档、其余�
   assert.equal(modes.normalize('codeagent', 'auto'), 'auto');
   assert.equal(modes.normalize('claude', 'default; rm -rf /'), null);
   assert.equal(modes.normalize('claude', 'dontAsk'), null);
-  assert.match(modes.optionsFor('claude')[0].label, /完全放开（默认）/);
+  assert.match(modes.optionsFor('claude', { userDefault: 'bypassPermissions' }).find(o => o.id === 'bypassPermissions').label, /完全放开（默认）/);
   assert.match(modes.BYPASS_RISK, /不要只为少点确认而选它/);
 });
 
@@ -172,29 +172,6 @@ test('回归守护：组队成员、群聊、后台助理建会话都不带 perm
   assert.match(sm, /normalize\('codeagent', opts\.permissionMode\) \|\| 'bypassPermissions'/, 'CodeAgent 缺省 bypass');
   // autonomous 不落盘 permissionMode：恢复后由 autonomous 标记重建旁路。
   assert.match(sm, /opts\.autonomous !== true && require\('\.\/permission-modes'\)\.normalize\(kind, opts\.permissionMode\)/);
-});
-
-test('启动中心记住上次：按工具分别记，恢复默认只清当前工具，坏记录当没记过', () => {
-  const last = require('../renderer/launch-last-permission');
-  const data = new Map();
-  const storage = { getItem: k => (data.has(k) ? data.get(k) : null), setItem: (k, v) => data.set(k, String(v)), removeItem: k => data.delete(k) };
-  assert.equal(last.recall(storage, 'claude'), 'bypassPermissions', '全新用户默认完全放开');
-  assert.equal(last.remember(storage, 'claude', 'default'), 'default');
-  assert.equal(last.remember(storage, 'codeagent', 'auto'), 'auto');
-  assert.equal(last.remember(storage, 'claude', 'auto'), null, 'Claude 不记 auto');
-  assert.equal(last.recall(storage, 'claude'), 'default');
-  assert.equal(last.recall(storage, 'claude-resume'), 'default');
-  assert.equal(last.recall(storage, 'codeagent'), 'auto');
-  assert.equal(last.recall(storage, 'codex'), 'bypassPermissions');
-  last.forget(storage, 'claude');
-  assert.equal(last.recall(storage, 'claude'), 'bypassPermissions');
-  assert.equal(last.recall(storage, 'codeagent'), 'auto', '恢复默认只清当前工具');
-  last.remember(storage, 'codeagent', 'bypassPermissions');
-  assert.equal(data.has(last.STORAGE_KEY), false, '全回到默认时不留记录');
-  data.set(last.STORAGE_KEY, '{bad json');
-  assert.equal(last.recall(storage, 'claude'), 'bypassPermissions');
-  data.set(last.STORAGE_KEY, JSON.stringify({ claude: 'dontAsk' }));
-  assert.equal(last.recall(storage, 'claude'), 'bypassPermissions');
 });
 
 test('Codex（二期）：完全放开保留旁路参数；每步确认去掉旁路、改为只读沙箱 + 按需批准；新建/分支/恢复/重拉 7 处都走同一开关', () => {

@@ -35,6 +35,9 @@ const usesCardDriver = (kind, opts = {}, config = {}) => isCardSession(kind, opt
 // DSH 的共享进程和真实终端要读同一份会话记录，所以按「线路 + 模型 + 固定的号」分目录，一个会话终身不变。
 function dshCardScope(config = {}, opts = {}) {
   const parts = [config.dshBackend || '', config.dshUpstream || '', opts.model || config.dshApiModel || '', opts.companyProxyAccount || ''];
+  // 权限模式是共享进程的启动参数（DSH_PERMISSION_MODE），不同档不能共用一个进程；完全放开不进 parts，老会话的目录不变。
+  const permission = require('./permission-modes').normalize('deepseek-acp', opts.permissionMode);
+  if (permission && permission !== 'bypassPermissions') parts.push('permission:' + permission);
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 24);
 }
 
