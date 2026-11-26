@@ -247,6 +247,8 @@ function buildSessionResumeMeta(session, overrides = {}) {
       ? session.contextEffectiveObservedAt
       : null,
     purpose: session.purpose || null,
+    // Hub 招来的团队成员：重启、唤醒、工作区迁移后系统提示仍不带组队指路。
+    ...(session.hubTeamMember ? { hubTeamMember: true } : {}),
     researchSessionId: session.researchSessionId || null,
     hiddenFromSidebar: !!session.hiddenFromSidebar,
   };

@@ -6,6 +6,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const { createHash } = require('node:crypto');
 
 const DEP_LINKS = ['node_modules'];
 
@@ -19,7 +20,14 @@ function git(args, cwd, timeout = 120000) {
 const real = p => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
 const same = (a, b) => real(a).toLowerCase() === real(b).toLowerCase();
 const day = t => { const d = new Date(t); return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`; };
-const slug = s => String(s || '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'repo';
+const slug = s => {
+  const name = String(s || '');
+  const ascii = name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'repo';
+  // 非 ASCII 部分不能只删掉：不同中文仓库会得到相同目录名。
+  return /[^\x00-\x7f]/.test(name)
+    ? ascii.slice(0, 15) + '-' + createHash('sha256').update(name).digest('hex').slice(0, 8)
+    : ascii.slice(0, 24);
+};
 
 // 只有「git 仓库主目录」才需要：已是 worktree、不是 git、子目录都原样返回 null。
 async function mainCheckout(cwd) {

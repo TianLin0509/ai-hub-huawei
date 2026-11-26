@@ -84,6 +84,8 @@ const RESUME_META_FIELDS = [
   'branchIndex',
   'branchAutoTitlePending',
   'purpose',
+  // Hub 招来的团队成员：恢复后系统提示仍不带组队指路（core/team-guide.js）。
+  'hubTeamMember',
   'researchSessionId',
   'hiddenFromSidebar',
   'completionNotificationEnabled',
@@ -374,6 +376,8 @@ function handlePersistSessions(list, meetingList, deps, { deferStateSave = false
     // 运行方式、Lite 标记与功能选型以主进程为准（渲染层漏带时 Hub 重启后会被当成 PTY 会话或选型已变）。
     if (authoritative?.codeagentRunMode === 'serve') session.codeagentRunMode = 'serve';
     if (authoritative?.codeagentLiteFeature === true) session.codeagentLiteFeature = true;
+    // 团队成员标记只在主进程定（招人时写入），渲染层自动保存漏带时以主进程为准。
+    if (authoritative?.hubTeamMember === true) session.hubTeamMember = true;
     if (authoritative?.featureAgent) { session.featureAgent = authoritative.featureAgent; session.featureAgentChoice = authoritative.featureAgentChoice || ''; }
     for (const field of ['codeagentActualModel', 'codeagentRequestedModel', 'codeagentLaunchModel']) {
       if (authoritative?.[field]) session[field] = authoritative[field];

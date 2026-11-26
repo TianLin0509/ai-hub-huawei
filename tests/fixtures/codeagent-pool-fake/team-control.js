@@ -34,6 +34,44 @@ module.exports = ({ sessionId, transcript, cwd, fireHook, prompt, menu }) => {
     fs.unlinkSync(release); writeAnswer(held.uuid, 'STOP_FIXTURE_OLD_LATE_ANSWER');
     fs.writeFileSync(path.join(dir, `${sid}.late-written`), JSON.stringify(held)); held = null;
   }, 100);
+  // CODEAGENT_TEAM_FAKE_GUIDE=1: stand-in for a model that obeys the launch system prompt (R47 team guide).
+  // If the --append-system-prompt-file it was launched with carries the team guide and the user asks for a team,
+  // it runs the production hub-team CLI (status → accounts → propose); otherwise it answers alone.
+  // No real model is involved; this only proves the guide reaches the CLI and the team path is reachable.
+  function followTeamGuide(text) {
+    const argv = process.argv.slice(2), at = argv.indexOf('--append-system-prompt-file');
+    let system = '';
+    try { system = at >= 0 ? fs.readFileSync(argv[at + 1], 'utf8') : ''; } catch { system = ''; }
+    // Follow the guide literally: the company-team skill in this account's skills/, and the Hub data dir team\hub-team.cmd via PowerShell
+    // (same call shape as the skill's section 0), not the source script.
+    const hubData = process.env.CLAUDE_HUB_DATA_DIR || path.join(process.env.USERPROFILE || '', '.ai-hub-community');
+    const teamCommand = path.join(hubData, 'team', 'hub-team.cmd');
+    const skillFile = path.join(process.env.CODEAGENT3_CONFIG_DIR || '', 'skills', 'company-team', 'SKILL.md');
+    let skill = '';
+    try { skill = fs.readFileSync(skillFile, 'utf8'); } catch { skill = ''; }
+    const record = { sid, text, systemFile: at >= 0 ? argv[at + 1] : null, guide: system.includes('## 组队指路'),
+      skillFile, skillReadable: /name:\s*company-team/.test(skill), teamCommand, teamCommandExists: fs.existsSync(teamCommand), steps: [] };
+    const cli = args => {
+      const quoted = args.map(a => "'" + String(a).replace(/'/g, "''") + "'").join(' ');
+      const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+        `[Console]::OutputEncoding=[Text.Encoding]::UTF8; & $env:HUB_TEAM_COMMAND ${quoted}`],
+        { env: { ...process.env, HUB_TEAM_COMMAND: teamCommand }, encoding: 'utf8', timeout: 45000, windowsHide: true });
+      record.steps.push({ args, code: r.status, out: String(r.stdout || '').slice(0, 4000), err: String(r.stderr || '').slice(0, 2000) });
+      return r;
+    };
+    let answer = '没有收到组队指路，这件事我自己来做。';
+    if (record.guide && record.skillReadable && record.teamCommandExists) {
+      cli(['status']); cli(['accounts']);
+      const planFile = path.join(dir, `${sid}.plan.json`);
+      fs.writeFileSync(planFile, JSON.stringify({ goal: text.slice(0, 200), members: [
+        { role: '实现', task: '按负责人的接口约定实现功能并自测', title: '实现-夹具', worktree: false },
+        { role: '审查', task: '独立审查实现并给出问题清单', title: '审查-夹具', worktree: false }] }), 'utf8');
+      const r = cli(['propose', '--plan-file', planFile]);
+      answer = r.status === 0 ? `已按组队指路提交组队计划：${String(r.stdout || '').trim().slice(0, 300)}` : `组队计划提交失败：${String(r.stderr || r.stdout || '').trim().slice(0, 300)}`;
+    }
+    fs.writeFileSync(path.join(dir, `${sid}.guide.json`), JSON.stringify(record, null, 2));
+    return answer;
+  }
   let pending = '', typed = '', pasting = false;
   function submit() {
     const text = typed.trim(); typed = '';
@@ -51,6 +89,10 @@ module.exports = ({ sessionId, transcript, cwd, fireHook, prompt, menu }) => {
       fireHook('PreToolUse', 'tool-start', { tool_name: 'Bash', tool_use_id: 'fixture-wait-' + uuid,
         tool_input: { command: 'fixture wait for cancellation' } });
       return;
+    }
+    if (process.env.CODEAGENT_TEAM_FAKE_GUIDE === '1' && /组.{0,2}队/.test(text)) {
+      writeAnswer(uuid, followTeamGuide(text));
+      fireHook('Stop', 'stop'); prompt(); return;
     }
     writeAnswer(uuid, stopFixture && text.includes('STOP_FIXTURE_NEXT') ? 'STOP_FIXTURE_CURRENT_ANSWER' : '夹具已收到消息。');
     fireHook('Stop', 'stop');

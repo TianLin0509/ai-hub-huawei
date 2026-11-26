@@ -1945,7 +1945,7 @@ class SessionManager extends EventEmitter {
     // <pasted_content> 并标注「未必是用户本人写的」，约束力打折扣（2026-10-12 真实 Haiku 实测）。
     // 已带其他系统提示文件的会话（DeepSeek 记忆等）不改，仍随第一条消息送。
     // CodeAgent 同样支持（2026-10-13 公司真机 1.2615.02.01 实测：-p 下 --append-system-prompt-file 生效）。
-    const hubRulesSystem = (kind === 'claude' || kind === 'claude-resume' || isCodeAgentKind(kind) || deepseekClaude.isDeepSeekClaudeKind(kind)) ? this.hubRulesSystemPrompt(opts) : null;
+    const hubRulesSystem = (kind === 'claude' || kind === 'claude-resume' || isCodeAgentKind(kind) || deepseekClaude.isDeepSeekClaudeKind(kind)) ? this.hubRulesSystemPrompt(opts, opts.purpose, kind) : null;
     if (hubRulesSystem) opts = { ...opts, appendSystemPromptFile: hubRulesSystem.file };
     else if (this.memoryService?.hubRules?.isSystemPromptFile(opts.appendSystemPromptFile)) opts = { ...opts, appendSystemPromptFile: undefined };
     const id = opts.id || uuid();
@@ -2939,6 +2939,8 @@ class SessionManager extends EventEmitter {
       memoryLinkWarning: memoryLinkWarning || null,
       userContextWarning: userContextWarning || ptyProcess.options?.userContextWarning || null,
       ...(opts.workspaceLabel ? { workspaceLabel: String(opts.workspaceLabel) } : {}),
+      // Hub 招来的团队成员：重拉 CLI 时系统提示同样不带组队指路。Team member: relaunch also skips the team guide.
+      ...(opts.hubTeamMember ? { hubTeamMember: true } : {}),
       meetingId: opts.meetingId || null,
       // Delivery is opt-in per conversation. Never inherit the former global
       // switch into a newly-created session.
@@ -4811,12 +4813,15 @@ try {
   // 返回 true 已写命令，false 找不到 session 或 kind 不支持。
   // 返回要写进 Claude 系统提示的规则文件；不适用时返回 null（见 _createSession 的说明）。
   // version 仍是通用规则那一版（随消息补送靠它判断「系统提示里已有同一版」），文件本身的版本另记 fileVersion。
-  hubRulesSystemPrompt(opts = {}, purpose = opts.purpose) {
+  hubRulesSystemPrompt(opts = {}, purpose = opts.purpose, kind = opts.kind) {
     const store = this.memoryService?.hubRules;
     if (!store) return null;
     if (require('./hub-rules').skipsHubRules(purpose)) return null;
     if (opts.appendSystemPromptFile && !store.isSystemPromptFile(opts.appendSystemPromptFile)) return null;
-    const extra = require('./auto-dispatch-rules').autoRuleFor(purpose);
+    // 组队指路（core/team-guide.js）不看规则页开关；Hub 招来的团队成员、群聊成员与自动分配任务会话不带。
+    // Team guide ignores the Rules-page toggle; team members, group-chat members and auto-dispatch sessions skip it.
+    const extra = require('./team-guide').joinExtras([require('./auto-dispatch-rules').autoRuleFor(purpose),
+      require('./team-guide').teamGuideFor({ kind, purpose, hubTeamMember: opts.hubTeamMember, meetingId: opts.meetingId })]);
     let rules = null;
     try { rules = store.injection(); }
     catch (error) { console.warn('[hub-rules] 读取规则失败：', error && error.message); }
@@ -4830,6 +4835,10 @@ try {
       console.warn('[hub-rules] 规则写入系统提示失败，改为随第一条消息送达：', error && error.message);
       return null;
     }
+  }
+  // 原地重拉时判断要不要带组队指路的几项（core/team-guide.js）。Fields deciding the team guide on relaunch.
+  static teamGuideOpts(info) {
+    return { kind: info && info.kind, hubTeamMember: !!(info && info.hubTeamMember), meetingId: (info && info.meetingId) || null };
   }
   // 会话记录里的「启动时写进系统提示的规则」
   static hubRulesRecord(r) {
@@ -4896,7 +4905,7 @@ try {
       const config = { ...require('./codeagent-config').resolveCodeAgentConfig(process.env),
         ...(s.info && s.info.codeagentConfigDir ? { configDir: s.info.codeagentConfigDir } : {}) };
       // 原地重拉是一个全新的 CodeAgent 进程，按当前规则重新写进系统提示（同 Claude）。
-      const relaunchRules = this.hubRulesSystemPrompt({}, s.info && s.info.purpose);
+      const relaunchRules = this.hubRulesSystemPrompt(SessionManager.teamGuideOpts(s.info), s.info && s.info.purpose);
       if (s.info) s.info.hubRulesSystem = SessionManager.hubRulesRecord(relaunchRules);
       const known = s.info.codeagentPoolAccount ? require('./codeagent-pool').accountModels(config.configDir) : null;
       const pool = known ? { account: { models: known.models, modelsAuthoritative: known.authoritative, modelsSource: known.probedSource } } : null;
@@ -5058,7 +5067,7 @@ try {
         : (require('./permission-modes').normalize('claude', s.info && s.info.permissionMode) || 'bypassPermissions');
       const relaunchPermissionFlag = supportedClaudeFragment('--permission-mode', claudePermissionModeArg({ permissionMode: relaunchPermission }));
       // 原地重拉是一个全新的 Claude 进程，按当前规则重新写进系统提示。
-      const relaunchRules = this.hubRulesSystemPrompt({}, s.info && s.info.purpose);
+      const relaunchRules = this.hubRulesSystemPrompt(SessionManager.teamGuideOpts(s.info), s.info && s.info.purpose);
       if (s.info) s.info.hubRulesSystem = SessionManager.hubRulesRecord(relaunchRules);
       const rulesFlag = relaunchRules ? supportedClaudeFragment('--append-system-prompt-file', ` --append-system-prompt-file "${relaunchRules.file}"`) : '';
       const addDirFlag = supportedClaudeFragment('--add-dir', claudeNativeAddDirs(s.info && s.info.addDirs).map(dir => ` --add-dir "${dir}"`).join(''));
@@ -5067,7 +5076,7 @@ try {
     } else if (deepseekClaude.isDeepSeekClaudeKind(kind)) {
       // PTY 的环境变量（接入端点、Key、模型名、配置目录）在会话创建时已经写好，原地重拉只需同一套参数。
       const route = s.info && (s.info.deepseekActiveRoute || s.info.deepseekRoute);
-      const relaunchRules = this.hubRulesSystemPrompt({}, s.info && s.info.purpose);
+      const relaunchRules = this.hubRulesSystemPrompt(SessionManager.teamGuideOpts(s.info), s.info && s.info.purpose);
       if (s.info) s.info.hubRulesSystem = SessionManager.hubRulesRecord(relaunchRules);
       const rulesFlag = relaunchRules ? supportedClaudeFragment('--append-system-prompt-file', ` --append-system-prompt-file "${relaunchRules.file}"`) : '';
       const wire = deepseekClaude.wireModel(modelId, route);
@@ -5250,6 +5259,7 @@ try {
       ...(info.provider ? { provider: info.provider } : {}),
       ...(info.nativeSession ? { nativeSession: info.nativeSession } : {}),
       ...(info.purpose ? { purpose: info.purpose } : {}),
+      ...(info.hubTeamMember ? { hubTeamMember: true } : {}),
       ...(info.featureAgent ? { featureAgent: info.featureAgent, featureAgentChoice: info.featureAgentChoice } : {}),
       ...(info.apiGatewayRoute ? { apiGatewayRoute: true } : {}),
       writingContextWarning: info.writingContextWarning || null,

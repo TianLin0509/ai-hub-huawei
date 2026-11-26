@@ -52,9 +52,9 @@ test(`成员超过上限 ${MAX_MEMBERS} 名：不自动建、不突破上限，�
   const h=harness(t);
   await h.service.invoke('lead-0001','propose',{goal:'先招到差一个满',members:Array.from({length:MAX_MEMBERS-1},()=>member())});
   assert.equal(h.created.length,MAX_MEMBERS-1);
-  await assert.rejects(h.service.invoke('lead-0001','propose',{goal:'再招两个',members:[member(),member()]}),new RegExp(`最多 ${MAX_MEMBERS} 名成员`));
+  await assert.rejects(h.service.invoke('lead-0001','propose',{goal:'再招两个',members:[{...member(),task:'new-a'},{...member(),task:'new-b'}]}),new RegExp(`最多 ${MAX_MEMBERS} 名成员`));
   assert.equal(h.created.length,MAX_MEMBERS-1);
-  const one=await h.service.invoke('lead-0001','propose',{goal:'补最后一个',members:[member()]});
+  const one=await h.service.invoke('lead-0001','propose',{goal:'补最后一个',members:[{...member(),task:'new-last'}]});
   assert.equal(one.status,'approved');assert.equal(h.created.length,MAX_MEMBERS);
 });
 test('账号不合规（不在号池 / 已不可用 / 模型名无效）：不自动建，错误说明与人工批准相同',async t=>{

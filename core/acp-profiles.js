@@ -12,6 +12,13 @@ const PROVIDER_CLI_KINDS = ['pi'];
 function isAcpKind(kind) { const base = String(kind).replace(/-resume$/, ''); return ACP_KINDS.includes(base) || PROVIDER_CLI_KINDS.includes(base); }
 function isPiKind(kind) { return String(kind || '').replace(/-resume$/, '') === 'pi'; }
 // Windows 上新建目录链接偶尔遇到 EBUSY/EPERM（杀毒或索引正占着刚建的目录）；短暂等一下重试，最多 5 次。
+// DSH 模型名校验：relaxed（公司模型 / 自有接口 / API 网关）允许 / : ( ) + @；套餐线路只允许字母数字和 . _ -。
+// 放宽口径也不收 ..（纵深防御：模型名现在只进 JSON，不拼路径，但别让以后的用法踩到）。
+function dshModelNameOk(model, relaxed) {
+  const value = String(model || '');
+  if (relaxed && value.includes('..')) return false;
+  return (relaxed ? /^[A-Za-z0-9][A-Za-z0-9._:/()+@-]{0,127}$/ : /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/).test(value);
+}
 function linkWithRetry(target, link) {
   for (let attempt = 1; ; attempt++) {
     try { fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir'); return; }
@@ -104,8 +111,8 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     : deepseekRoute ? fallback.FALLBACK_MODELS.map(id => ({ id, label: id, source: 'deepseek-api' }))
     : catalog.acpModelOptions(kind, model);
   // 公司模型 / 网关 / 自有接口的模型名按自有接口同口径放宽（部门平台的模型名常带 / : 或括号，R45-3 审查 P1-2）；只有套餐线路用严格口径。
-  const companyName = /^[A-Za-z0-9][A-Za-z0-9._:/()+@-]{0,127}$/;
-  if(!(companyRoute ? companyName : /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/).test(model))throw new Error(companyRoute ? `DSH 的模型名「${model}」格式不对：只能含字母、数字和 . _ : / - ( ) + @，请在设置里点「测试连接」从列表里选` : '请填写套餐模型 ID，不可切到其他供应商命名空间');
+  // 网关路线的模型名另由 launchModel 限定在网关模型表内；放宽口径仍拒收 ..（dshModelNameOk）。
+  if(!dshModelNameOk(model, !!companyRoute))throw new Error(companyRoute ? `DSH 的模型名「${model}」格式不对：只能含字母、数字和 . _ : / - ( ) + @，请在设置里点「测试连接」从列表里选` : '请填写套餐模型 ID，不可切到其他供应商命名空间');
   let mcpServers=[];
   if(opts.assistantMcpServers) {
     if(opts.purpose!=='hub-assistant'||!Array.isArray(opts.assistantMcpServers)
@@ -277,4 +284,4 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     storeDir: path.join(dataDir, 'acp-history'), home, authMethod, authMeta,
     launch: { command: nodePath, args, cwd: opts.cwd, env, secrets: [key] } };
 }
-module.exports = { dshRuntimeFile, ACP_KINDS, PROVIDER_CLI_KINDS, LABELS, PLAN_BASE_URL, isAcpKind, isPiKind, buildAcpOptions, linkWithRetry };
+module.exports = { dshRuntimeFile, ACP_KINDS, PROVIDER_CLI_KINDS, LABELS, PLAN_BASE_URL, isAcpKind, isPiKind, buildAcpOptions, linkWithRetry, dshModelNameOk };

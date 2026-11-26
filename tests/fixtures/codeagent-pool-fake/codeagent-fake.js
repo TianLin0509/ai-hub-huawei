@@ -19,8 +19,15 @@ if (args[0] === '--version') {
   return;
 }
 // CODEAGENT_POOL_FAKE_HELP_SETTINGS=1：--help 像 1.2615.02.05 一样列出 --settings（Hub 据此用 --settings 固定会话模型）。
-if (args[0] === '--help' && process.env.CODEAGENT_POOL_FAKE_HELP_SETTINGS === '1') {
-  process.stdout.write('Usage: codeagent [options]\n  --settings <file-or-json>  Load additional settings\n  --resume <id>\n', () => process.exit(0));
+if (args[0] === '--help') {
+  const settings = process.env.CODEAGENT_POOL_FAKE_HELP_SETTINGS === '1' ? '  --settings <file-or-json>  Load additional settings\n' : '';
+  process.stdout.write('Usage: codeagent [options]\n' + settings + '  --resume <id>\n  --model <id>\n  --permission-mode <mode>\n  --skip-safe-check\n  --disable-update\n  --append-system-prompt-file <file>\n  --mcp-config <file>\n  --add-dir <dir>\n', () => process.exit(0));
+  return;
+}
+// This PTY fixture has no HTTP serve protocol. Capability/model probes must
+// fail promptly instead of starting an interactive CLI with no consumer.
+if (args[0] === 'serve') {
+  process.stderr.write('PTY fixture does not implement serve\n', () => process.exit(1));
   return;
 }
 const configDir = process.env.CODEAGENT3_CONFIG_DIR || '';

@@ -485,7 +485,7 @@ function registerSessionIpc(ipcMain, deps) {
     const base = options.launchOpts || {
       cwd: old.cwd, title: old.title, model: sessionModelId(old), permissionMode: old.permissionMode, workspaceGuard: old.workspaceGuard === true, purpose: old.purpose,
       featureAgent: old.featureAgent, featureAgentChoice: old.featureAgentChoice, autonomous: old.autonomous, noInheritCursor: old.noInheritCursor,
-      openInBackground: old.openInBackground, addDirs: old.addDirs, workspaceLabel: old.workspaceLabel, pinned: old.pinned, codeagentPoolAccount: old.codeagentPoolAccount,
+      openInBackground: old.openInBackground, addDirs: old.addDirs, workspaceLabel: old.workspaceLabel, hubTeamMember: old.hubTeamMember === true, pinned: old.pinned, codeagentPoolAccount: old.codeagentPoolAccount,
       ...require('../../core/codeagent-model-choice').routeFields(old),
     };
     const opts = { ...base, codeagentRunMode: 'pty' };
@@ -2079,6 +2079,7 @@ function registerSessionIpc(ipcMain, deps) {
       cwd: old.cwd,
       meetingId: old.meetingId || undefined,
       ...(old.workspaceLabel ? { workspaceLabel: old.workspaceLabel } : {}),
+      ...(old.hubTeamMember ? { hubTeamMember: true } : {}),
       ...(old.pinned ? { pinned: true } : {}),
       ...(old.bottomed ? { bottomed: true } : {}),
       ...(typeof old.lastMessageTime === 'number' ? { lastMessageTime: old.lastMessageTime } : {}),

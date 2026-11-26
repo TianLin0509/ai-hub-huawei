@@ -5,7 +5,7 @@
 //   hub-team accounts
 //   accounts 返回号池 rows；用 account 指定账号，model 可选且须在该账号的 models 清单里。
 //   省略 model 时沿用账号模型；不支持修改推理档位和速度。
-//   hub-team propose --plan-file 计划.json        计划：{"goal":"…","members":[{"role":"…","task":"…","kind":"codeagent","account":"…","model":"…","cwd":"…","title":"…"}]}
+//   hub-team propose --plan-file 计划.json        计划：{"goal":"…","members":[{"role":"…","task":"…","account":"…","model":"…","cwd":"…","title":"…"}]}
 //   hub-team send --to lead|m1 --message "…" [--wake|--no-wake] [--interrupt] [--deliver]
 //   hub-team send --to m1 --message-file 消息.md
 //   hub-team read --id 12（短号数字或 msg-xxx 长编号）读取完整原文；仅本队负责人和消息参与者可读
@@ -17,11 +17,13 @@ const http = require('node:http');
 
 function parse(argv) {
   const out = { _: [] };
+  const flags = new Set(['wake', 'no-wake', 'interrupt', 'deliver', 'off']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith('--')) { out._.push(a); continue; }
     const key = a.slice(2), next = argv[i + 1];
-    if (next === undefined || next.startsWith('--')) out[key] = true;
+    if (flags.has(key)) out[key] = true;
+    else if (next === undefined) throw Error(`参数 --${key} 缺少值；多行正文请用 --message-file，计划用 --plan-file`);
     else { out[key] = next; i++; }
   }
   return out;
@@ -53,9 +55,12 @@ function buildRequest(argv) {
 
 function post(body, env = process.env) {
   const port = Number(env.CLAUDE_HUB_PORT), token = env.CLAUDE_HUB_TOKEN, sessionId = env.CLAUDE_HUB_SESSION_ID;
-  if (!port || !token || !sessionId) return Promise.reject(Error('没找到 Hub 会话环境变量（CLAUDE_HUB_PORT / CLAUDE_HUB_TOKEN / CLAUDE_HUB_SESSION_ID）；这个命令只能在 Hub 里的会话中运行'));
   const teamToken = env.CLAUDE_HUB_TEAM_TOKEN;
-  if (!teamToken) return Promise.reject(Error('当前会话启动于旧版 Hub，重启该会话后可用'));
+  const missing = ['CLAUDE_HUB_PORT', 'CLAUDE_HUB_TOKEN', 'CLAUDE_HUB_SESSION_ID', 'CLAUDE_HUB_TEAM_TOKEN'].filter(key => !env[key]);
+  if (missing.length || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.reject(Error(
+    `组队身份不可用：${missing.length ? '缺少 ' + missing.join(' / ') : 'CLAUDE_HUB_PORT 不是有效端口'}。` +
+    '请在 Hub 左侧栏新建或重新打开 CodeAgent PTY 会话后运行 status；CodeAgent-Lite（serve）、DSH 与外部终端目前未接通此组队入口。' +
+    '若旧会话只缺 CLAUDE_HUB_TEAM_TOKEN，请重开该会话以注入身份。不要复制、打印或手工补写其他会话的令牌，无需重启整个 Hub。'));
   const data = Buffer.from(JSON.stringify({ ...body, token, sessionId, teamToken }), 'utf8');
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, path: '/api/team', method: 'POST',

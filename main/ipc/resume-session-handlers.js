@@ -342,6 +342,7 @@ function createResumeSessionHandler(deps) {
       cwd: (isGemini && meta.geminiProjectRoot) ? meta.geminiProjectRoot : meta.cwd,
       ...(meta.cwdFellBackFrom ? { cwdFellBackFrom: meta.cwdFellBackFrom } : {}),
       ...(meta.workspaceLabel ? { workspaceLabel: meta.workspaceLabel } : {}),
+      ...(meta.hubTeamMember ? { hubTeamMember: true } : {}),
       meetingId: meta.meetingId || null,
       completionNotificationEnabled: meta.completionNotificationEnabled === true,
       model: safeResumeModel || undefined,

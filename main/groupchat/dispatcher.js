@@ -1728,6 +1728,8 @@ function createGroupChatDispatcher(deps) {
             workflowRun,
             runId,
           });
+          // 这一轮已被「回退上一轮」撤掉（强制结束后发送才失败回来）：不再广播完成，免得界面把它画回来。
+          if (turnRecord0 && turnRecord0.discarded) return { status: 'discarded', turnNum, results: immediateFailures };
           const meta0 = (turnRecord0 && turnRecord0.meta) || { dispatchMode: 'group' };
           emitGroupChat('groupchat-turn-complete', { meetingId, turnNum, runId, mode: 'group', results: immediateFailures, meta: meta0, superseded: false, completedAt: Date.now() });
           notifyGroupChatComplete({
@@ -1849,6 +1851,7 @@ function createGroupChatDispatcher(deps) {
         workflowRun,
         runId,
       });
+      if (turnRecord && turnRecord.discarded) return { status: 'discarded', turnNum, results };
       const meta = turnRecord.meta || { dispatchMode: 'group' };
       // 被抢占判定：完成时若 meeting 的最新派发序号已超过自己 → 用户已发更新的轮，
       //   本轮是被 supersede 的旧轮。前端据此跳过「清 currentMode」避免抹掉新轮思考态。
@@ -2040,9 +2043,10 @@ function createGroupChatDispatcher(deps) {
         const members = groupMembersForMeeting(meeting);
         const memberBySid = Object.fromEntries(members.map(member => [member.sid, member]));
         const results = attempts.map(attempt => resultFromPersistedAttempt(orch, attempt));
-        orch.completeTurn(turnNum, userMessage && userMessage.content || '', results, memberBySid, {}, {
+        const recovered = orch.completeTurn(turnNum, userMessage && userMessage.content || '', results, memberBySid, {}, {
           dispatchMode: 'recovery', runId,
         });
+        if (recovered && recovered.discarded) continue;
         emitGroupChat('groupchat-turn-complete', {
           meetingId: meeting.id,
           turnNum,

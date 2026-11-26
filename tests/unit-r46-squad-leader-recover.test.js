@@ -327,3 +327,18 @@ test('审查 P2-1：原地重拉 CLI 时记下新进程的启动时刻（spawned
   const body = src.slice(src.indexOf('  relaunchCli(sessionId, options = {}) {'), src.indexOf('  getAllSessions() {'));
   assert.match(body, /s\.pty\.write\(cmd\);[\s\S]{0,300}s\.info\.spawnedAt = Date\.now\(\)/);
 });
+
+test('R47 审查 P2：群聊「抢救 → 回退上一轮」后，掉线停下的小队任务作废，按钮收起，不能再接着做', async () => {
+  const t = setup({ leaderScript: ['exit'] });
+  t.engine.configure('g1', { enabled: true });
+  await t.engine.userTurn('g1', { userInput: '给考勤加弹性制' }, t.base);
+  const halted = await t.settle();
+  assert.equal(halted.recoverable, true);
+  assert.equal(t.engine.discardRecovery('g1'), true);
+  const after = t.engine.view('g1').run;
+  assert.equal(after.status, 'stopped');
+  assert.equal(after.recoverable, false);
+  assert.match(after.note, /已回退上一轮/);
+  assert.throws(() => t.engine.resume('g1'), /没有停下待接着做/);
+  assert.equal(t.engine.discardRecovery('g1'), false, '没有可作废的就不动');
+});

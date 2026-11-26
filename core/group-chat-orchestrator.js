@@ -946,6 +946,10 @@ class GroupChatOrchestrator {
   }
 
   rollbackTurn(turnNum, runId = null) {
+    // 撤掉的 run 记下来：被强制结束、但发送还在途的旧派发稍后仍会回调 completeTurn / patchTurnResult，
+    //   不拦就会把刚撤掉的一轮写回来（轮号被新一轮复用时还会串进新轮）。run 编号带随机串，新轮不会撞上。
+    //   随状态落盘（只留最近 100 个）：重启后的回执恢复流程也不会把它补回来。
+    this._retireRuns(runId ? [runId] : this._runIdsOfTurn(turnNum));
     this.state.messages = this.state.messages.filter(m => m.turnNum !== turnNum);
     if (this.state.answerFiles) delete this.state.answerFiles[String(Number(turnNum))];
     this.state.turns = this.state.turns.filter(t => t.n !== turnNum);
@@ -963,6 +967,24 @@ class GroupChatOrchestrator {
     this._clearPendingPromptsForRun(turnNum, runId);
     this._saveState('run_rolled_back', { runId, turnNum, status: ATTEMPT_SUPERSEDED });
   }
+
+  _runIdsOfTurn(turnNum) {
+    const n = Number(turnNum);
+    const ids = [];
+    const run = this.state.activeRun;
+    if (run && Number(run.turnNum) === n) ids.push(run.runId);
+    const turn = this.state.turns.find(t => Number(t.n) === n);
+    if (turn) ids.push(turn.runId);
+    for (const m of this.state.messages) if (m && Number(m.turnNum) === n) ids.push(m.runId);
+    for (const a of Object.values(this.state.attempts || {})) if (a && Number(a.turnNum) === n) ids.push(a.runId);
+    return ids;
+  }
+  _retireRuns(ids) {
+    const list = Array.isArray(this.state.retiredRunIds) ? this.state.retiredRunIds : [];
+    for (const id of ids) if (id && !list.includes(String(id))) list.push(String(id));
+    this.state.retiredRunIds = list.slice(-100);
+  }
+  isRetiredRun(runId) { return !!(runId && Array.isArray(this.state.retiredRunIds) && this.state.retiredRunIds.includes(String(runId))); }
 
   _appendMessage(msg) {
     const message = {
@@ -1312,6 +1334,10 @@ class GroupChatOrchestrator {
   }
 
   completeTurn(turnNum, userInput, results, memberBySid, statsBySid = {}, opts = {}) {
+    // 已被回退撤掉的 run 晚到的结算一律丢弃（见 rollbackTurn），返回占位让调用方不再广播「本轮完成」。
+    if (opts.runId && this.isRetiredRun(opts.runId)) {
+      return { n: turnNum, runId: String(opts.runId), discarded: true, meta: { dispatchMode: opts.dispatchMode || 'group', discarded: true } };
+    }
     let turn = this.state.turns.find(t => t.n === turnNum);
     const isExistingTurn = !!turn;
     const by = isExistingTurn && turn.by && typeof turn.by === 'object' ? turn.by : {};
@@ -1584,6 +1610,35 @@ class GroupChatOrchestrator {
     this._saveState('run_cleared', { runId, turnNum });
   }
 
+  // 抢救「强制结束本轮」（main/ipc/groupchat-rescue-handlers.js）：clearTurnInProgress 只认当前轮与当前 run，
+  // Hub 重启残留、run 编号对不上或 currentTurn 为 0 时它什么都不做，界面就一直「思考中」。
+  // 这里无条件收回待命：已落盘的成员回答、本轮用户消息和 attempt 记录都保留，只清掉在途标记。
+  forceIdle(reason = 'force_settle') {
+    const turnNum = Number(this.state.currentTurn) || 0;
+    const runId = (this.state.activeRun && this.state.activeRun.runId) || null;
+    const wasMode = this.state.currentMode || 'idle';
+    const openAttempts = Object.values(this.state.attempts || {}).some(a => a && !isTerminalAttemptStatus(a.status) && (!turnNum || Number(a.turnNum) === turnNum));
+    if (wasMode === 'idle' && (!this.state.activeRun || isTerminalAttemptStatus(this.state.activeRun.status)) && !openAttempts) return { changed: false, turnNum, runId, wasMode, attemptsClosed: 0 };
+    this.state.currentMode = 'idle';
+    if (this.state.activeRun) {
+      this.state.activeRun = { ...this.state.activeRun, status: ATTEMPT_INTERRUPTED, forcedIdle: String(reason), completedAt: Date.now(), updatedAt: Date.now() };
+    }
+    // 本轮还没收尾的 attempt 记为中断，免得之后的恢复流程按「还在跑」把它重新拉起来。
+    let attemptsClosed = 0;
+    for (const attempt of Object.values(this.state.attempts || {})) {
+      if (!attempt || isTerminalAttemptStatus(attempt.status)) continue;
+      if (turnNum && Number(attempt.turnNum) !== turnNum) continue;
+      attempt.status = ATTEMPT_INTERRUPTED;
+      attempt.recoveryReason = String(reason);
+      attempt.updatedAt = Date.now();
+      attemptsClosed++;
+    }
+    if (turnNum) delete this._activePrompts[turnNum];
+    if (turnNum) this._clearPendingPromptsForRun(turnNum, runId);
+    this._saveState('run_force_idle', { runId, turnNum, reason: String(reason) });
+    return { changed: true, turnNum, runId, wasMode, attemptsClosed };
+  }
+
   // ---- Markdown answers (core/group-answer-files.js) -------------------------
   // A member with a registered answer file only ever shows that file's text;
   // transcript-derived results keep updating status and attempts, never content.
@@ -1659,6 +1714,7 @@ class GroupChatOrchestrator {
     finality,
     completedAt,
   } = {}) {
+    if (runId && this.isRetiredRun(runId)) return null;
     const turn = this.state.turns.find(t => t.n === turnNum);
     const userMsg = this.state.messages.find(m => m && m.role === 'user' && Number(m.turnNum) === Number(turnNum));
     // turns 只在全员结算后创建；进行中/崩溃中断轮次仍有 u{n}，允许先保存可用结果。

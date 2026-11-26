@@ -20,6 +20,7 @@ test('company plans create only CodeAgent, preserve account/model intent, and de
   assert.deepEqual(h.created.map(r=>[r.kind,r.opts.codeagentPoolPick,r.opts.model,r.opts.codeagentModelPick]),[['codeagent','pool-a','GLM-5.2',true],['codeagent','pool-b','MiniMax-M2.7',true]]);
   assert.ok(h.created.every(r=>r.opts.codeagentAccount==='pool'),'session manager must actually enter the pool-account launch path');
   assert.ok(h.created.every(r=>r.opts.openInBackground===true),'team creation must preserve the current view');
+  assert.ok(h.created.every(r=>r.opts.hubTeamMember===true),'members are marked so their system prompt skips the team guide (R47)');
   for(let i=0;i<4;i++){await new Promise(r=>setImmediate(r));await h.service.flush('lead-0001');}
   assert.ok(h.sent.some(s=>s.text.includes('本团队只使用 CodeAgent')));assert.ok(h.sent.every(s=>!s.text.includes('ai-peers')&&!s.text.includes('\u7530\u54e5')));
   await h.service.invoke('member-1xxx','send',{to:'lead',message:'成员回复',wake:true});

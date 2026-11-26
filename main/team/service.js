@@ -33,6 +33,7 @@ const RECEIPT_WAIT_MS = 3 * 60 * 1000;
 const LEAD = 'lead';
 const PERSONAL_MEMBER_LIMIT = 3; // 个人账号上同时干活的成员数；超出的成员消息留在队列里。
 const PERSONAL_CLAIM_MS = 30 * 1000; // 刚提交、回合状态还没变成运行中时先占住名额。
+const PLAN_DEDUPE_MS = 10 * 60 * 1000;
 // 交付即收工：成员用 --deliver 交付后，交付消息送进负责人会话、负责人这一轮处理完（不在运行）且至少过了这么久，
 // 又没再给它派活，就让它离队并休眠，腾出内存。
 // 本段与下面的拉起退避、全队空转提醒共用一个总开关 config team.antiStall（默认开；=false 完全回到旧行为）。
@@ -260,23 +261,23 @@ function createTeamService(deps) {
   function rejectTuning(raw) {
     const fields = ['model', 'effort', 'codexSpeedTier', 'fastMode', 'speed']
       .filter(key => key !== 'model' && Object.hasOwn(raw || {}, key));
-    if (fields.length) throw Error(`公司组队计划只支持选择账号和模型，不能指定 ${fields.join(' / ')}`);
+    if (fields.length) throw Error(`公司组队计划只支持选择账号和模型，不能指定 ${fields.join(' / ')}；去掉这些字段。如需指定 DeepSeek 模型，请先跑 accounts，从该账号的 models 中选择并填写 model 字段；不要用 effort、fastMode 或 kind 选模型`);
   }
-  function normalizePlan(args, team) {
+  function normalizePlan(args, team, checkCapacity = true) {
     rejectTuning(args);
     const goal = String(args.goal || '').trim();
     const list = Array.isArray(args.members) ? args.members : [];
     if (!goal) throw Error('计划要写 goal：这批人一起要完成什么');
-    if (!list.length) throw Error('计划至少招 1 人：members 是数组，每项写 role、task，可选 kind、account、cwd、title');
+    if (!list.length) throw Error('计划至少招 1 人：members 是数组，每项写 role、task，可选 title、cwd、account、model');
     const active = occupiedSlots(team);
-    if (active + list.length > MAX_MEMBERS) throw Error(`每位负责人最多 ${MAX_MEMBERS} 名成员（现有 ${active} 名）`);
+    if (checkCapacity && active + list.length > MAX_MEMBERS) throw Error(`每位负责人最多 ${MAX_MEMBERS} 名成员（现有 ${active} 名）`);
     const accountList=listAccounts();
     return { goal, members: list.map((raw, i) => {
       rejectTuning(raw);
       const role = String(raw?.role || '').trim(), task = String(raw?.task || '').trim();
       const kind = String(raw?.kind || 'codeagent').trim();
       if (!role || !task) throw Error(`第 ${i + 1} 人要写 role（分工）和 task（开工任务，可写任务书路径）`);
-      if (!allowedKinds.includes(kind)) throw Error(`第 ${i + 1} 人的 kind 只能是 ${allowedKinds.join(' / ')}`);
+      if (!allowedKinds.includes(kind)) throw Error(`第 ${i + 1} 人的 kind 只能是 ${allowedKinds.join(' / ')}；请去掉 kind。如需指定 DeepSeek 模型，请先跑 accounts，从该账号的 models 中选择并填写 model 字段`);
       let account = String(raw?.account || accountList.recommendedId || '').trim();
       let model='';
       {
@@ -306,12 +307,56 @@ function createTeamService(deps) {
         ...(raw?.fresh === true ? { fresh: true } : {}), ...(raw?.worktree === false ? { worktree: false } : {}) };
     }) };
   }
+  function memberPlanKey(spec, callerSid) {
+    const cwd = path.resolve(spec.cwd || sessionManager.getSession(callerSid)?.cwd || '.');
+    return JSON.stringify([spec.role, spec.task, spec.kind, spec.account, spec.model, spec.title,
+      process.platform === 'win32' ? cwd.toLowerCase() : cwd, spec.fresh === true, spec.worktree !== false]);
+  }
+  function removeDuplicates(plan, team, callerSid, requestedKeys) {
+    const candidates = new Map(), duplicates = [];
+    const keys = plan.members.map(m => requestedKeys.get(m));
+    for (const p of team?.plans || []) {
+      const age = now() - p.submittedAt;
+      if (age < 0 || age >= PLAN_DEDUPE_MS || !['pending', 'approved'].includes(p.status)) continue;
+      // 新版计划会撤回旧待批单；待批项只能整单复用，部分过滤会把旧任务一起撤掉。
+      const storedKeys = p.memberKeys || p.members.map(m => memberPlanKey(m, callerSid));
+      if (p.status === 'pending' && (storedKeys.length !== keys.length || !storedKeys.every((key, i) => key === keys[i]))) continue;
+      for (let i = 0; i < p.members.length; i++) {
+        const spec = p.members[i], member = team.members.find(m => m.memberId === spec.memberId);
+        if (p.status === 'approved' && !['active', 'creating'].includes(member?.status)) continue;
+        const key = p.memberKeys?.[i] || memberPlanKey(spec, callerSid);
+        if (!candidates.has(key)) candidates.set(key, []);
+        candidates.get(key).push({ planId: p.id, ...(spec.memberId ? { memberId: spec.memberId } : {}), title: spec.title });
+      }
+    }
+    // 叫回的老成员不进 plan.members、不写 memberKeys：在成员上记下叫回时的指纹，10 分钟内重交同一计划按重复处理。
+    for (const m of team?.members || []) {
+      const age = now() - (m.recalledAt || 0);
+      if (!m.recalledKey || m.status !== 'active' || age < 0 || age >= PLAN_DEDUPE_MS) continue;
+      if (!candidates.has(m.recalledKey)) candidates.set(m.recalledKey, []);
+      candidates.get(m.recalledKey).push({ memberId: m.memberId, title: m.title, recalled: true });
+    }
+    plan.members = plan.members.filter(spec => {
+      const matches = candidates.get(requestedKeys.get(spec));
+      if (!matches?.length) return true;
+      duplicates.push(matches.shift());
+      return false;
+    });
+    return duplicates;
+  }
   async function propose(callerSid, args) {
     if(!/^codeagent(?:-resume)?$/.test(sessionManager.getSession(callerSid)?.kind || ''))throw Error('公司组队请从 CodeAgent 会话提交计划');
     if (teamOfMember(callerSid)) throw Error('成员不能招人；需要人手请向负责人提');
     let team = teamOfLead(callerSid);
     require('../../core/secret-guard').assertPlanFree(args);
-    const plan = normalizePlan(args, team);
+    const plan = normalizePlan(args, team, false);
+    // 默认选号是用户的 auto 意图；推荐号会随新成员活跃数轮换，不能参与重试指纹。
+    const requestedKeys = new Map(plan.members.map((m, i) => [m, memberPlanKey({ ...m,
+      account: String(args.members[i]?.account || '').trim() ? m.account : '' }, callerSid)]));
+    const duplicates = removeDuplicates(plan, team, callerSid, requestedKeys);
+    if (!plan.members.length) return { ok: true, status: 'duplicate', duplicates,
+      note: '10 分钟内相同计划已提交，没有重复招人；先用 status 核对原计划和成员，失败项可单独重交。' };
+    if (occupiedSlots(team) + plan.members.length > MAX_MEMBERS) throw Error(`每位负责人最多 ${MAX_MEMBERS} 名成员（现有 ${occupiedSlots(team)} 名）`);
     const recalled = [], hints = [];
     if (team && antiStall()) {
       const { planRecalls, recallText } = require('./recall-match');
@@ -330,6 +375,7 @@ function createTeamService(deps) {
           const rec = team.members.find(m => m.memberId === d.memberId);
           try {
             send(callerSid, { to: d.memberId, message: recallText(spec, rec) });
+            if (rec) { rec.recalledKey = requestedKeys.get(spec); rec.recalledAt = now(); }
             recalled.push({ memberId: d.memberId, insteadOf: spec.title, reason: d.reason });
             continue;
           } catch (error) { hints.push({ memberId: d.memberId, for: spec.title, reason: `叫回未成功（${error.message}），按计划新招` }); }
@@ -338,7 +384,7 @@ function createTeamService(deps) {
       }
       plan.members = keep;
     }
-    const reuse = r => ({ ...r, ...(recalled.length ? { recalled } : {}), ...(hints.length ? { hints,
+    const reuse = r => ({ ...r, ...(duplicates.length ? { duplicates } : {}), ...(recalled.length ? { recalled } : {}), ...(hints.length ? { hints,
       hintNote: '岗位相近的老成员可用 send --to 编号 叫回；明确要新人时在计划项中加 fresh: true。' } : {}) });
     if (!plan.members.length) {
       for (const p of team.plans) if (p.status === 'pending') { p.status = 'withdrawn'; p.decidedAt = now(); p.note = '负责人改为叫回原成员'; }
@@ -350,7 +396,8 @@ function createTeamService(deps) {
       teams.set(callerSid, team);
     }
     for (const p of team.plans) if (p.status === 'pending') { p.status = 'withdrawn'; p.decidedAt = now(); p.note = '负责人提交了新版计划'; }
-    const item = { id: newId('plan'), status: 'pending', ...plan, submittedAt: now() };
+    // 保留请求时的指纹；批准会填写实际模型和 worktree，不能拿变更后的值比对重试。
+    const item = { id: newId('plan'), status: 'pending', ...plan, memberKeys: plan.members.map(m => requestedKeys.get(m)), submittedAt: now() };
     team.plans.push(item);
     save(team);
     if (autoApproveLeads()) {
@@ -422,7 +469,8 @@ function createTeamService(deps) {
         if (worktree) { member.worktree = worktree; spec.worktreeInfo = worktree; save(team); }
         // 等 git 期间 Hub 开始关闭：不再建会话，名额留 creating，重启时按 interrupted 通知负责人（Codex 审查 P1）。
         if (frozen) break;
-        const opts = { cwd: worktree?.path || baseCwd, title: spec.title, workspaceLabel: spec.title, openInBackground: true,
+        // hubTeamMember：成员的系统提示不带组队指路（core/team-guide.js），成员不能再招人。Members skip the team guide.
+        const opts = { cwd: worktree?.path || baseCwd, title: spec.title, workspaceLabel: spec.title, openInBackground: true, hubTeamMember: true,
           ...(spec.account === PERSONAL_ACCOUNT_ID ? { codeagentAccount: 'personal' } : { codeagentAccount: 'pool', codeagentPoolPick: spec.account }),
           modelCreationContext: `负责人 ${lead?.title || leadSid} / 新成员 ${spec.title || spec.role}` };
         if (spec.model) { opts.model = spec.model; opts.codeagentModelPick = true; }

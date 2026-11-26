@@ -198,6 +198,19 @@ function createSquadEngine(deps) {
     emit(id);
   }
 
+  // 群聊「抢救 → 回退上一轮」之后：停下待续的小队任务作废（它要重发的那一棒属于已撤的对话），收起「重启负责人并继续」入口。
+  // After the group-chat rescue rolls back a turn, a halted squad run can no longer resume: drop its resume entry.
+  function discardRecovery(id) {
+    const run = runs.get(id);
+    if (!run || run.status !== 'error' || (!run.recover && !run.pending)) return false;
+    run.recover = null;
+    run.pending = null;
+    run.status = 'stopped';
+    run.note = '已回退上一轮，小队这次任务不再接着做；重新发话即可。';
+    emit(id);
+    return true;
+  }
+
   // 「重启负责人并继续」/「重新交给负责人」：立刻返回，后台重启并重发停下时那一棒，再接着原来的轮次走。
   // Resume button: returns at once; restarts the leader in the background, resends the pending leg and continues the same run.
   function resume(id) {
@@ -405,7 +418,7 @@ function createSquadEngine(deps) {
     }
   }
 
-  return { config, configure, stop, freeze, view, userTurn, resume, _runs: runs };
+  return { config, configure, stop, freeze, view, userTurn, resume, discardRecovery, _runs: runs };
 }
 
 function registerSquadIpc(ipcMain, getEngine) {

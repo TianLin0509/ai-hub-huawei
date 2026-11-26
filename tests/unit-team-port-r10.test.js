@@ -130,6 +130,19 @@ test('真实交付休眠后提返工计划叫回原会话，撤销旧待批单�
   assert.equal(h.team().members[0].status, 'active'); assert.equal(h.team().members[0].deliveredAt, undefined);
 });
 
+test('R47 审查 P2：叫回老成员后 10 分钟内重交同一计划按重复处理，不再新招；过了 10 分钟照常', async t => {
+  const h = await setup(t); await h.release();
+  const rework = { ...h.spec, task: '按审查意见返工 m1' };
+  const r = await h.propose([rework]);
+  assert.equal(r.status, 'recalled'); assert.equal(h.count(), 2);
+  await h.settle();
+  const again = await h.propose([rework]);
+  assert.equal(again.status, 'duplicate', JSON.stringify(again)); assert.equal(again.duplicates[0].memberId, 'm1');
+  assert.equal(h.count(), 2, '没有多建会话');
+  h.advance(10 * MIN + 1);
+  const later = await h.propose([rework]);
+  assert.notEqual(later.status, 'duplicate');
+});
 test('运行表缺少上下文占用时，使用侧栏已保存的 CodeAgent 占用', async t => {
   const h = await setup(t); await h.release();
   h.sessions.set('member-1xxx', { ...h.metadata.get('member-1xxx'), contextPct: undefined });

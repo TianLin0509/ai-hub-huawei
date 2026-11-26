@@ -50,6 +50,7 @@ if (typeof document !== 'undefined') (function () {
   const _gcSoftBanner = require('./groupchat-soft-banner.js').createSoftBannerStore();
   // 小队模式（2026-11-19）：负责人派工、成员做完自动交回。状态变了就重画顶栏、进度条和群聊记录。
   const SquadUI = require('./squad-ui.js');
+  const RescueUI = require('./groupchat-rescue-ui.js');
   SquadUI.onChange(meetingId => {
     const meeting = meetingData[meetingId];
     if (!meeting || meetingId !== activeMeetingId) return;
@@ -4641,12 +4642,8 @@ if (typeof document !== 'undefined') (function () {
   //   真正的状态收敛仍由随后的 groupchat-turn-complete 完成（interrupted 结算会让
   //   dispatcher 的 allSettled 立即 resolve）；这里只做「没有 watcher 可停」的兜底：
   //   后端已把 orchestrator 收回 idle，前端也要同步清乐观思考态，否则卡片会一直转。
-  ipcRenderer.on('groupchat-turn-interrupted', (_event, payload = {}) => {
-    if (!_acceptGcPush(payload)) return;
-    const { meetingId, stopped, pendingDispatch } = payload;
-    if (!meetingId) return;
-    if (Array.isArray(stopped) && stopped.length > 0) return; // 走正常 turn-complete 收敛
-    if (pendingDispatch) return; // 有轮正卡在发送中，它自己会以 interrupted 收敛，别抢着清
+  // 清掉渲染层对「本轮在跑」的本地缓存（乐观轮次、在跑成员、流式片段），下次刷新按后端状态重画。
+  function _clearGcLocalRunState(meetingId) {
     delete _gcOptimisticTurn[meetingId];
     delete _gcActiveSids[meetingId];
     delete _gcAttemptIdsBySid[meetingId];
@@ -4655,6 +4652,37 @@ if (typeof document !== 'undefined') (function () {
       cached._partialBy = null;
       cached.currentMode = null;
     }
+  }
+
+  ipcRenderer.on('groupchat-turn-interrupted', (_event, payload = {}) => {
+    if (!_acceptGcPush(payload)) return;
+    const { meetingId, stopped, pendingDispatch } = payload;
+    if (!meetingId) return;
+    if (Array.isArray(stopped) && stopped.length > 0) return; // 走正常 turn-complete 收敛
+    if (pendingDispatch) return; // 有轮正卡在发送中，它自己会以 interrupted 收敛，别抢着清
+    _clearGcLocalRunState(meetingId);
+    if (meetingId !== activeMeetingId) return;
+    const meeting = meetingData[meetingId];
+    if (!_isPanelCapableMeeting(meeting)) return;
+    refreshGroupChatPanel(meeting);
+    renderToolbar(meeting);
+  });
+
+  // 抢救动作完成（本窗口或别处触发）：强制结束、回退会改后端轮次状态，本地缓存按后端重来。
+  function _afterGcRescue(meeting, action, result, inMenu) {
+    if (!meeting || !meeting.id) return;
+    if (!result || result.ok === false) {
+      if (!inMenu) _showGcEscapeNotice((result && (result.message || result.reason)) || '抢救操作失败', 'error');
+      return;
+    }
+    // 改了后端轮次的动作，刷新交给后端的 groupchat-rescued 推送（下面），这里只出提示条，免得刷两遍。
+    const text = RescueUI.summary(action, result);
+    if (text && meeting.id === activeMeetingId) _showGcEscapeNotice(text);
+  }
+  ipcRenderer.on('groupchat-rescued', (_event, payload = {}) => {
+    const { meetingId, action } = payload || {};
+    if (!meetingId || action === 'restart-member') return;
+    _clearGcLocalRunState(meetingId);
     if (meetingId !== activeMeetingId) return;
     const meeting = meetingData[meetingId];
     if (!_isPanelCapableMeeting(meeting)) return;
@@ -6429,7 +6457,7 @@ if (typeof document !== 'undefined') (function () {
       <!-- 2026-06-28 maintainer：删 header 进度条（与标题旁 meta 的"已N轮·本轮N/M"文字信息重叠），保留 meta。_updateHeaderProgress 的 progEl 分支会因元素缺失自动跳过。 -->
       <div class="mr-header-right">
         ${layoutButtonsHtml ? `<div class="mr-header-primary-actions">${layoutButtonsHtml}</div>` : ''}
-        <div class="mr-header-primary-actions">${gcMembersBtnHtml}${gcMessageScopeHtml}${OrchUI.enabled(meeting) ? '' : SquadUI.headerButton(meeting)}${meeting.groupChat ? `<button type="button" class="mr-header-btn${_gcToolsExpanded[meeting.id] ? ' active' : ''}" id="mr-btn-group-tools" aria-expanded="${!!_gcToolsExpanded[meeting.id]}" aria-controls="mr-gc-tools" title="展开或收起搜索与本轮进度">群聊工具</button>` : ''}${viewToggleHtml}</div>
+        <div class="mr-header-primary-actions">${gcMembersBtnHtml}${gcMessageScopeHtml}${OrchUI.enabled(meeting) ? '' : SquadUI.headerButton(meeting)}${meeting.groupChat ? `<button type="button" class="mr-header-btn${_gcToolsExpanded[meeting.id] ? ' active' : ''}" id="mr-btn-group-tools" aria-expanded="${!!_gcToolsExpanded[meeting.id]}" aria-controls="mr-gc-tools" title="展开或收起搜索与本轮进度">群聊工具</button>` : ''}${RescueUI.headerButton(meeting)}${viewToggleHtml}</div>
         <div class="mr-header-secondary-actions" aria-label="会议工具">
           <button class="mr-header-btn" id="mr-btn-add-sub" title="${meeting.groupChat ? '添加新的 AI 成员' : '添加子会话'}">${meeting.groupChat ? '+ 成员' : '+ 添加'}</button>
           ${meeting.workspace ? `<button class="btn-zoom btn-file-manager-toggle" id="mr-btn-files" title="打开当前工作目录的文件管理" aria-label="打开当前工作目录的文件管理" aria-pressed="false"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.8 4.4A1.4 1.4 0 0 1 3.2 3h3l1.3 1.4h5.3a1.4 1.4 0 0 1 1.4 1.4v6a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4Z"/><path d="M5 7.2h6M5 9.5h4"/></svg></button>` : ''}
@@ -6515,6 +6543,19 @@ if (typeof document !== 'undefined') (function () {
       }
       groupToolsBtn.setAttribute('aria-expanded', String(open));
       groupToolsBtn.classList.toggle('active', open);
+    });
+    // 群聊「抢救」下拉（renderer/groupchat-rescue-ui.js）：平时一个小按钮，点开才列兜底动作。
+    const rescueBtn = document.getElementById('mr-btn-rescue');
+    if (rescueBtn) rescueBtn.addEventListener('click', () => {
+      if (document.getElementById('mr-rescue-pop')) { RescueUI.closeMenu(); return; }
+      const current = meetingData[meeting.id] || meeting;
+      RescueUI.openMenu(current, rescueBtn, {
+        // 成员名只取「 · 」前那段（会话标题后半是群名，按钮放不下也没区分度），前面带 @m1 这类编号。
+        members: _getGcSlots(current).filter(Boolean).map(slot => ({ sid: slot.sid,
+          label: `@${slot.memberId} ${String(slot.displayLabel || slot.label || '').split(' · ')[0]}`.trim() })),
+        isTurnRunning: () => _isGroupTurnRunning(meetingData[meeting.id] || current),
+        onResult: (action, result, { inMenu } = {}) => _afterGcRescue(current, action, result, inMenu),
+      });
     });
     if (groupMembersBtn) groupMembersBtn.addEventListener('click', () => {
       if (memberSplit?.mode() === 'two') setGroupLayout('overview', meeting);

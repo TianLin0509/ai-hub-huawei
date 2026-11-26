@@ -1,7 +1,7 @@
 'use strict';
 
 function delegationGuidance() {
-  return '本团队只使用 CodeAgent；需要额外人手向负责人说明。';
+  return '本团队只使用 CodeAgent；需要额外人手向负责人说明，由负责人用 hub-team propose 创建成员，让用户在左侧栏看到、点开和追问。Task、subagent（子任务）工具只用于自己做事，不算用户要求的侧栏团队。多行消息用 --message-file，计划用 --plan-file，避免 .cmd 截断换行；PowerShell 调用命令路径前加 &。';
 }
 
 // 开工时直接交给成员，不依赖负责人再次转述。

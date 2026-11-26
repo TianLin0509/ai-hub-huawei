@@ -2399,7 +2399,7 @@ try {
   require('./main/groupchat/squad-engine').registerSquadIpc(ipcMain, () => global.__squadEngine);
 } catch (e) { console.warn('[squad] engine init failed:', e && e.message); }
 
-registerGroupchatTurnIpc(ipcMain, {
+const groupTurnControls = {
   dispatchGroupChatTurn: (meetingId, args) => global.__squadEngine
     ? global.__squadEngine.userTurn(meetingId, args, routeUserGroupTurn)
     : routeUserGroupTurn(meetingId, args),
@@ -2413,6 +2413,23 @@ registerGroupchatTurnIpc(ipcMain, {
       || (global.__loopEngine ? global.__loopEngine.stopLoop(meetingId, options) : false);
     return squadStopped || other;
   },
+};
+registerGroupchatTurnIpc(ipcMain, groupTurnControls);
+// 群聊「抢救」下拉（强制结束本轮 / 重启成员 / 回退上一轮 / 跳过未交 / 导出诊断），复用上面的中断与停引擎链路。
+require('./main/ipc/groupchat-rescue-handlers.js').registerGroupchatRescueIpc(ipcMain, {
+  meetingManager, groupchat, getHubDataDir, sessionManager, sendToRenderer,
+  getActiveWatchers: () => groupChatDispatcher.getActiveWatchers(),
+  interruptMeetingTurn: groupTurnControls.interruptGroupChatTurn,
+  stopLoop: groupTurnControls.stopLoop,
+  restartSession: (sid) => sessionOperations.restartSession(sid),
+  // 四套引擎都要看：小队、交付流程在两棒之间轮次是空闲的，只看循环引擎会放行「回退上一轮」，撤掉引擎正要交回的那轮。
+  isWorkflowRunning: (meetingId) => require('./main/ipc/groupchat-rescue-handlers.js').workflowBusy({
+    loopEngine: global.__loopEngine, deliveryEngine: global.__deliveryEngine,
+    devFileEngine: global.__devFileEngine, squadEngine: global.__squadEngine,
+  }, meetingId),
+  // 回退上一轮后，小队负责人掉线停下的任务作废（R47 审查 P2）。
+  discardSquadRecovery: (meetingId) => !!(global.__squadEngine && global.__squadEngine.discardRecovery(meetingId)),
+  appVersion: require('./core/distribution').editionVersion || app.getVersion(),
 });
 
 // Phase 2b：main 进程循环引擎（崩溃续跑 + 成员 wake），复用 dispatcher。try 包裹，绝不影响启动。

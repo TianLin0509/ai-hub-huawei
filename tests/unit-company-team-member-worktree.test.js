@@ -6,9 +6,9 @@ const { prepareMemberWorktree, kickoffLines, mayNeedWorktree } = require('../mai
 const { createTeamService } = require('../main/team/service');
 
 const git = (args, cwd) => execFileSync('git', args, { cwd, windowsHide: true, stdio: 'pipe' }).toString().trim();
-function fixtureRepo() {
+function fixtureRepo(repoName = 'proj') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'company-member-wt-'));
-  const repo = path.join(root, 'proj'), wtRoot = path.join(root, 'wts');
+  const repo = path.join(root, repoName), wtRoot = path.join(root, 'wts');
   fs.mkdirSync(repo); fs.mkdirSync(wtRoot); fs.mkdirSync(path.join(repo, 'node_modules'));
   fs.writeFileSync(path.join(repo, 'node_modules', 'marker.txt'), 'dep');
   fs.mkdirSync(path.join(repo, '.agents'));
@@ -29,6 +29,24 @@ function cleanup(root) {
   }
   fs.rmSync(root, { recursive: true, force: true });
 }
+
+test('不同中文仓库名生成稳定、互不相同的 ASCII worktree 名称', async t => {
+  const slugs = [];
+  for (const name of ['中文甲', '中文乙', 'mixed-中文']) {
+    const { root, repo } = fixtureRepo(name);
+    t.after(() => cleanup(root));
+    const now = new Date(2026, 10, 24, 12).getTime();
+    const first = await prepareMemberWorktree({ cwd: repo, memberId: 'm1', leadSid: 'lead-id', now });
+    const again = await prepareMemberWorktree({ cwd: repo, memberId: 'm2', leadSid: 'lead-id', now });
+    assert.ok(first && !first.error, JSON.stringify(first));
+    assert.ok(again && !again.error, JSON.stringify(again));
+    const slug = path.basename(first.path).replace(/^\d{8}-/, '').replace(/-m1-leadid$/, '');
+    assert.match(slug, /^[A-Za-z0-9._-]+-[a-f0-9]{8}$/);
+    assert.equal(path.basename(again.path), `20261124-${slug}-m2-leadid`);
+    slugs.push(slug);
+  }
+  assert.equal(new Set(slugs).size, 3);
+});
 
 test('仓库主目录：在 worktreeRoot 下建 worktree、分支从主干拉、node_modules 挂链接；撞名加后缀', async t => {
   const { root, repo, wtRoot } = fixtureRepo();

@@ -187,6 +187,8 @@ function _buildSessionPayload(hubId, data, existing = loadSessionFile(hubId)) {
       : null,
     branchAutoTitlePending: !!data.branchAutoTitlePending,
     purpose: data.purpose || null,
+    // Hub 招来的团队成员，恢复后系统提示仍不带组队指路（core/team-guide.js）。Team member flag survives restart.
+    ...(data.hubTeamMember ? { hubTeamMember: true } : {}),
     // 后台功能会话的功能选型（core/feature-agent-choice.js）：恢复后据此判断选型是否变了、要不要换会话。
     ...(typeof data.featureAgent === 'string' && /^[A-Za-z]{1,32}$/.test(data.featureAgent)
       ? { featureAgent: data.featureAgent, featureAgentChoice: typeof data.featureAgentChoice === 'string' ? data.featureAgentChoice.slice(0, 2000) : '' } : {}),

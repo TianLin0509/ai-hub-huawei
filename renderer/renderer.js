@@ -10921,6 +10921,7 @@ function persistWorkscene(flush = false) {
         kimiSid: s.kimiSid || null,
         kimiSessionDir: s.kimiSessionDir || null,
         purpose: s.purpose || null,
+        ...(s.hubTeamMember ? { hubTeamMember: true } : {}),
         researchSessionId: s.researchSessionId || null,
         hiddenFromSidebar: !!s.hiddenFromSidebar,
         completionNotificationEnabled: s.completionNotificationEnabled === true,
