@@ -2836,7 +2836,8 @@ const companyProxyService = new (require('./main/company-proxy-service').Company
   // 助理用部门 API key 时（core/assistant-gateway-route.js）也要本机反代常驻：网关上游只在本机反代里。
   isEnabled: () => (getHubConfig().companyCli === true && (usesGatewayRoute() || (!require('./core/lan-pool').read(getHubDataDir()).client?.enabled
     && (getHubConfig().companyProxyEnabled === true || require('./core/lan-pool').read(getHubDataDir()).host?.enabled === true))))
-    || require('./core/assistant-gateway-route').inUse(getHubDataDir()),
+    || require('./core/assistant-gateway-route').inUse(getHubDataDir())
+    || require('./core/feature-agent-choice').harnessInUse(getHubDataDir()),
   // 换号、退回个人号、反代起不来：用会话提示条讲给用户听（renderer.js 的 session-notice）。
   // 换号/退回个人号是常驻提示条，用户手动关（只在每类第一次时弹，见 company-proxy-service）。
   // 自动处理好的只进日志，个人账号登录读不出来显式标 blocking（分类见 company-proxy-service 的 noticeKindFor）。
@@ -2869,6 +2870,15 @@ const lanPoolService = new (require('./main/lan-pool-service').LanPoolService)({
   // 共享停摆、地址变化、主机掉线或恢复：用会话提示条告诉用户，不让共享悄悄失效。
   onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: notice.persistent ? 'warning' : 'info', persistent: notice.persistent === true,
     noticeKind: notice.noticeKind || 'auto' }),
+});
+// 后台功能选外壳（Claude Code / Codex + 部门 key 或公司模型）：模型卡状态点读反代状态，单次任务用前按来源拉起反代（同 ensureSessionLaunchAuth）。
+require('./core/feature-agent-choice').setRuntime({
+  proxyStatus: () => lanPoolService.clientProxyStatus() || companyProxyService.status(),
+  ensureProxy: async source => {
+    if (source === 'gateway') return companyProxyService.ensureRunning();
+    if (lanPoolService.client()?.enabled) { const shared = await lanPoolService.snapshot({ force: true }); return shared?.ready ? { state: 'running' } : { state: 'not-ready', message: lanPoolService.error || '共享主机模型服务尚未就绪' }; }
+    return companyProxyService.ensureReady();
+  },
 });
 // Windows 分层 Job Object + 低开销模式 EcoQoS（2026-11-23 P2，core/win32-job-qos.js）：CodeAgent 终端、共享 serve、临时 serve、
 // 后台 CodeAgent 单次问答各自装进独立的进程盒子，结束时连脱离父进程的孙进程一起收；Hub 被强杀时内核自动清盒。
@@ -3344,9 +3354,11 @@ try {
       // 会议伴侣能用的终端和模型（core/company-assistant/meeting-engine.js）：装了才列；公司版的 Claude Code / Codex 要设成「公司模型」才算接上。
       meetingTerminals: () => {
         const setup = require('./core/community-setup'), cfg = getHubConfig(), proxy = require('./core/company-model-proxy');
-        const viaConfig = backend => cfg.companyCli === true ? (backend === 'proxy' ? proxy.MODELS.map(m => ({ id: m.id, label: m.label })) : null) : [{ id: '', label: '' }];
+        // 走部门 API key（上游是网关）时列网关模型，不列公司模型（2026-11-26：以前一律列公司模型，选了也不是实际走的线路）。
+        const viaConfig = (backend, upstream) => cfg.companyCli === true ? (backend === 'proxy' ? (upstream === 'gateway'
+          ? proxy.gatewayModelIds(getHubDataDir()).map(id => ({ id, label: `部门 API key · ${id}` })) : proxy.MODELS.map(m => ({ id: m.id, label: m.label }))) : null) : [{ id: '', label: '' }];
         const has = id => { try { return !!setup.findCommand(id); } catch { return false; } };
-        return { codeagent: has('codeagent'), claude: has('claude') ? viaConfig(cfg.claudeBackend) : null, codex: has('codex') ? viaConfig(cfg.codexBackend) : null };
+        return { codeagent: has('codeagent'), claude: has('claude') ? viaConfig(cfg.claudeBackend, cfg.claudeUpstream) : null, codex: has('codex') ? viaConfig(cfg.codexBackend, cfg.codexUpstream) : null };
       },
       nodeExecutable: process.execPath,
       onChanged: () => { sendToRenderer('company-assistant:changed', {}); avatarService?.onAuthChanged(); },

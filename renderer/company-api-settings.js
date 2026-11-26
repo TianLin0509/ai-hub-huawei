@@ -675,8 +675,10 @@
       finally { save.disabled = false; }
     };
   }
-  async function open(kind = 'claude', profileId) {
+  // options.mode：直接停在某张来源卡上（如「功能使用的 Agent」的「去配置部门 API key」传 'gateway'）。
+  async function open(kind = 'claude', profileId, options = {}) {
     if (profileId !== undefined) { viewProfile[kind] = profileId; viewMode[kind] = 'own'; }
+    if (options?.mode === 'gateway') viewMode[kind] = 'gateway';
     const target = makeDialog();
     target.innerHTML = heading('自有 API', '正在读取配置…');
     bindClose(target);

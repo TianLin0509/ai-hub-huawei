@@ -15,6 +15,17 @@ async function run(selected, prompt, { dataDir, signal, timeoutMs = 60000, env =
     require('./codeagent-launch-env').applyAccountEnv(launchEnv, { configDirEnv: config.configDirEnv, configDir: config.configDir });
   }
   if (kind === 'claude') launchEnv.CLAUDE_CODE_DISABLE_CLAUDE_MDS = '1';
+  // 公司版外壳（core/feature-agent-choice.js）：Claude Code / Codex 只当外壳，模型经本机反代走部门 API key 或公司模型，
+  // 和启动中心同一条线路（company-model-proxy applyClaudeEnv / applyCodexEnv）。不读 CLI 自己的登录。
+  const source = (kind === 'claude' || kind === 'codex') ? selected.source : '';
+  if (source) {
+    if (!['gateway', 'company'].includes(source)) throw new Error('所选模型来源不可用，请恢复默认');
+    const gateway = source === 'gateway', proxy = require('./company-model-proxy');
+    await require('./feature-agent-choice').ensureProxy(source);
+    const tag = `feature-${crypto.randomUUID().slice(0, 8)}`;
+    if (kind === 'claude') proxy.applyClaudeEnv(launchEnv, { dataDir, sessionId: tag, model: selected.model, gateway });
+    else proxy.applyCodexEnv(launchEnv, { dataDir, sessionId: tag, model: selected.model, projectDir: cwd, gateway });
+  }
   if (kind === 'codex' && !launchEnv.CODEX_HOME) launchEnv.CODEX_HOME = require('./codex-usage-scope')
     .resolveCodexUsageScope(require('./hub-config').getConfig(), { hubDataDir: dataDir }).home;
   const helpResult = await runOnce({ command, args: kind === 'codex' ? ['exec', '--help'] : ['--help'], cwd, env: launchEnv, signal, timeoutMs, onActivity });

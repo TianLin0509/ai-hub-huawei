@@ -263,13 +263,18 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
         }
         for (const e of engines) {
           if (requestSignal.aborted) break;
+          let harness = null;
           try {
-            const r = e.id === 'codeagent' ? await runCodeAgent(e.command, prompt, ctx)
-              : e.id === 'claude' ? await runClaude(e.command, prompt, ctx) : await runCodex(e.command, prompt, ctx);
+            // 公司版外壳：先走部门 API key / 公司模型（和启动中心同一份来源）；都没有才沿用本机 CLI 自己的配置。
+            harness = e.id !== 'codeagent' ? require('../feature-agent-choice').harnessDefault(dataDir, e.id, { env, findCommand }) : null;
+            const r = harness ? { answer: await require('../feature-agent-run').run(harness, prompt,
+              { dataDir, env, signal: requestSignal, onActivity, runOnce, findCommand, timeoutMs: left(ctx) }), model: harness.model }
+              : e.id === 'codeagent' ? await runCodeAgent(e.command, prompt, ctx)
+                : e.id === 'claude' ? await runClaude(e.command, prompt, ctx) : await runCodex(e.command, prompt, ctx);
             return { ok: true, answer: r.answer, engine: e.id, engineLabel: e.label, model: r.model, warning, ms: now() - t0, tried };
           } catch (error) {
             if (error && error.stopped) break;
-            if (!requestSignal.aborted && !error?.timedOut && modelChoice.modelUnavailable(error)) return await retryModel({ kind: e.id, model: error.model || defaultModel(e.id) }, error, ctx);
+            if (!requestSignal.aborted && !error?.timedOut && modelChoice.modelUnavailable(error)) return await retryModel({ kind: e.id, model: harness?.model || error.model || defaultModel(e.id), ...(harness ? { source: harness.source } : {}) }, error, ctx);
             tried.push({ engine: e.id, label: e.label, error: String(error && error.message || error) });
             if (error && error.timedOut) throw error; // 超时不再换下一个引擎
           }

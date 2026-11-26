@@ -32,7 +32,10 @@ async function main() {
       const gw = { kind: 'api-gateway', label: '部门 API key（网关）', available: true, reason: '', defaultModel: 'glm-5.3-flash', allowCustom: true,
         models: [{ id: 'glm-5.3-flash', label: 'glm-5.3-flash' }, { id: 'deepseek-v4.1-flash', label: 'deepseek-v4.1-flash' }] };
       const fake = st => ({ ...st, backends: [...st.backends.filter(b => b.kind !== 'api-gateway'), gw],
-        features: st.features.map(f => f.kinds.includes('api-gateway') ? { ...f, choice: { kind: 'api-gateway', model: '' }, selected: { kind: 'api-gateway', model: '' }, warning: '' } : f) });
+        // 公司版界面（2026-11-26）：部门 key 显示为「Claude Code」外壳，选项与当前值由主进程给（options / current）。
+        features: st.features.map(f => f.kinds.includes('api-gateway') ? { ...f, choice: { kind: 'api-gateway', model: '' }, selected: { kind: 'api-gateway', model: '' }, warning: '',
+          current: { backend: 'claude', model: '' }, options: [...(f.options || []).filter(o => o.value !== 'claude'), { value: 'claude', label: 'Claude Code', available: true, reason: '', store: 'api-gateway',
+            allowCustom: true, defaultModel: '部门 API key · glm-5.3-flash', models: gw.models.map(m => ({ value: m.id, id: m.id, label: '部门 API key · ' + m.id })) }] } : f) });
       window.__gwCustomCalls = [];
       ipc.invoke = async (channel, req) => {
         if (channel === 'feature-agents:get') return fake(await real(channel, req));
@@ -43,9 +46,9 @@ async function main() {
     await c.eval('window.__hubOpenConfigModal()');
     await c.eval(`document.querySelector('#cfg-tab-agents').click()`);
     await c.eval('window.__featureAgents.refresh()'); // 打开设置时的读取可能早于上面的替换，这里按替换后的数据重画一次
-    await wait(`document.querySelectorAll('#cfg-feature-agents [data-fa-row]').length===7 && document.querySelectorAll('#cfg-feature-agents [data-fa-backend]')[1].value==='api-gateway'`);
+    await wait(`document.querySelectorAll('#cfg-feature-agents [data-fa-row]').length===7 && document.querySelectorAll('#cfg-feature-agents [data-fa-backend]')[1].value==='claude'`);
     const layout = await c.eval(`(() => { const p=document.querySelector('#config-main-view'); return { h:p.clientHeight, sh:p.scrollHeight, rowHints:document.querySelectorAll('#cfg-feature-agents .fa-row .fa-hint').length,
-      gw:Array.from(document.querySelectorAll('#cfg-feature-agents [data-fa-backend]')).filter(s => s.value==='api-gateway').length }; })()`);
+      gw:Array.from(document.querySelectorAll('#cfg-feature-agents [data-fa-backend]')).filter(s => s.value==='claude').length }; })()`);
     assert.ok(layout.sh <= layout.h + 2, `日常功能页一屏：${JSON.stringify(layout)}`);
     assert.equal(layout.rowHints, 0, '8 项都选网关也不逐行挂提示');
     result.checks.push(`日常功能页 ${layout.gw} 项选部门 key 后仍一屏（clientHeight ${layout.h} / scrollHeight ${layout.sh}），行内 0 条提示`);

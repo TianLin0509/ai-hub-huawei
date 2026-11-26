@@ -5,6 +5,10 @@ const path = require('node:path');
 const eq = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
 function defaultModel(dataDir, kind, { config = require('../hub-config').getConfig(), env = process.env,
   resolveCodeAgent = require('../codeagent-config').resolveCodeAgentConfig } = {}) {
+  if (kind !== 'codeagent' && require('../company-api-config').isCompany()) {
+    const saved = require('../default-model-preference').readDefaultModels(config)[kind];
+    return saved && require('../model-id').isSafeModelId(saved) ? saved : '';
+  }
   if (kind !== 'codeagent') return require('../default-model-preference').resolveDefaultModel(kind, config);
   const dir = resolveCodeAgent(env)?.configDir;
   if (!dir) return '';
@@ -33,9 +37,10 @@ function alternative(dataDir, failed, { env = process.env, findCommand, config, 
   const models = failed.kind === 'codeagent'
     ? require('../codeagent-assistant-route').modelOptions(dataDir, 'personal', resolveCodeAgent(env)?.configDir)
     : require('../feature-agent-choice').catalog(dataDir, { env, findCommand }).find(b => b.kind === failed.kind && b.available)?.models || [];
-  const options = models.filter(m => !m.unavailable && !eq(m.id, failed.model));
+  // 公司版外壳的模型带来源（部门 key / 公司模型），替代也只在同一来源里找，不跨来源换线路。
+  const options = models.filter(m => !m.unavailable && !eq(m.id, failed.model) && (!failed.source || m.source === failed.source));
   const preferred = defaultModel(dataDir, failed.kind, { env, config, resolveCodeAgent });
   const next = options.find(m => eq(m.id, preferred)) || options[0];
-  return next ? { kind: failed.kind, model: next.id, ...require('../codeagent-model-choice').routeFields(next) } : null;
+  return next ? { kind: failed.kind, model: next.id, ...(failed.source ? { source: failed.source } : {}), ...require('../codeagent-model-choice').routeFields(next) } : null;
 }
 module.exports = { defaultModel, modelUnavailable, alternative };

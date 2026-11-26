@@ -59,9 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "桌宠可当待办入口：双击或右键一行记待办，到点提醒可完成或推后 10 分钟"
+    "「功能使用的 Agent」的后端与模型和启动中心一致：Claude Code / Codex / DSH 只当外壳，模型只列部门 API key 与公司模型，不再出现公司用不了的模型；之前选错的自动回默认并提示重选；没配 key 时一键去配置"
   ],
-  "version": "5.6.118",
+  "version": "5.6.119",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

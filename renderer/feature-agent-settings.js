@@ -2,14 +2,8 @@
 // 全局设置和功能入口共用行组件与 IPC；即时保存，不改启动中心的默认模型。
 (function featureAgentSettings() {
   const { ipcRenderer } = require('electron');
-  const choiceValues = require('../core/codeagent-model-choice');
   const esc = text => String(text ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   let state = null, popup = null, group = 'common', presetNote = '';
-  function modelsFor(f, backend) {
-    const models = backend?.models || [];
-    if (!['help', 'pptMap', 'progress'].includes(f.id)) return models;
-    return [...new Map(models.map(m => [m.id, { id: m.id, label: m.id, unavailable: m.unavailable }])).values()];
-  }
   const style = document.createElement('style');
   style.textContent = `
     #cfg-feature-agents { padding:8px 0; }
@@ -54,16 +48,20 @@
     }
     const features = state?.features.filter(f => !ids || ids.includes(f.id)) || [];
     host.innerHTML = features.map(f => {
-      const selected = f.choice, backend = state.backends.find(b => b.kind === selected?.kind);
-      const models = modelsFor(f, backend);
-      const current = selected?.model ? choiceValues.choiceValue({ id: selected.model, ...selected, provider: selected.codeagentModelProvider,
-        providerLabel: selected.codeagentModelProviderLabel, menuLabel: selected.codeagentModelMenuLabel }) : '';
-      const backendOptions = state.backends.filter(b => f.kinds.includes(b.kind) && (b.available || b.kind === selected?.kind));
+      // 选项表与当前值都由主进程给（core/feature-agent-choice.js featureOptions / currentValues）：公司版的 Claude Code / Codex / DSH
+      // 只当外壳，模型只有部门 API key 和公司模型两种来源，和启动中心同一份枚举。
+      const selected = f.choice, cur = f.current || { backend: '', model: '' };
+      const options = f.options || [];
+      const backend = options.find(o => o.value === cur.backend);
+      const models = backend?.models || [];
+      const backendOptions = options.filter(o => o.available || o.value === cur.backend || o.reason);
       const defaultBackend = f.id === 'meeting' ? '默认·会议所选' : `默认（当前：${f.defaultText.split(' · ')[0]}）`;
       const backendTitle = selected ? backend?.label || selected.kind : `默认（当前：${f.defaultText}）`;
+      const stale = cur.model && !models.some(m => m.value === cur.model);
+      const staleLabel = selected?.model ? `${selected.model}（${f.legacy ? '公司里用不了' : '不可用'}）` : '本机默认模型（公司里用不了）';
       return `<div class="fa-row" data-fa-row="${f.id}"><label for="fa-backend-${host.id}-${f.id}">${esc(f.label)}</label>
-        <select data-fa-backend id="fa-backend-${host.id}-${f.id}" aria-label="${esc(f.label)}后端" title="${esc(backendTitle)}"><option value="" title="${esc(f.defaultText)}">${esc(defaultBackend)}</option>${backendOptions.map(b => `<option value="${esc(b.kind)}"${b.kind === selected?.kind ? ' selected' : ''}${b.available ? '' : ' disabled'}>${esc(b.label)}${b.available ? '' : `（${esc(b.reason || '不可用')}）`}</option>`).join('')}</select>
-        <select data-fa-model aria-label="${esc(f.label)}模型"${selected ? '' : ' disabled'}><option value="">默认（当前：${esc(backend?.defaultModel || f.defaultText)}）</option>${selected?.model && !models.some(m => choiceValues.choiceValue(m) === current) ? `<option selected value="${esc(current)}">${esc(selected.model)}（不可用）</option>` : ''}${models.map(m => `<option value="${esc(choiceValues.choiceValue(m))}"${choiceValues.choiceValue(m) === current ? ' selected' : ''}${m.unavailable ? ' disabled' : ''}>${esc(m.label || m.id)}</option>`).join('')}${backend?.allowCustom ? '<option value="__custom__">手填模型名…</option>' : ''}</select>
+        <select data-fa-backend id="fa-backend-${host.id}-${f.id}" aria-label="${esc(f.label)}后端" title="${esc(backendTitle)}"><option value="" title="${esc(f.defaultText)}">${esc(defaultBackend)}</option>${backendOptions.map(b => `<option value="${esc(b.value)}"${b.value === cur.backend ? ' selected' : ''}${b.available ? '' : ' disabled'} title="${esc(b.reason || b.label)}">${esc(b.label)}${b.available ? '' : `（${esc(b.reason || '不可用')}）`}</option>`).join('')}</select>
+        <select data-fa-model aria-label="${esc(f.label)}模型"${selected && backend?.available ? '' : ' disabled'}><option value="">默认（当前：${esc(backend?.defaultModel || f.defaultText)}）</option>${stale || (f.legacy && !cur.model) ? `<option selected value="${esc(cur.model)}">${esc(staleLabel)}</option>` : ''}${models.map(m => `<option value="${esc(m.value)}"${m.value === cur.model ? ' selected' : ''}${m.unavailable ? ' disabled' : ''}>${esc(m.label || m.id)}</option>`).join('')}${backend?.allowCustom ? '<option value="__custom__">手填模型名…</option>' : ''}</select>
         ${selected ? '<button class="fa-reset" data-fa-reset type="button">恢复默认</button>' : ''}${f.warning ? `<span class="fa-warning" role="status">${esc(f.warning)}</span>` : ''}${gatewayExtras(f, backend, features.length)}</div>`;
     }).join('') + footer(features, host);
     if (host.id === 'fa-assistant-settings') {
@@ -113,13 +111,20 @@
   // 部门 API key（网关）：8 项会话功能都能选（2026-11-24）。说明统一放在底部一行（细节放 ⓘ），和保存结果同一行，不每行挂提示，
   // 设置页「日常功能」不因此变长（一个 Tab 一屏）；ⓘ 在截断文字之外，永不被裁。行内只在「只有助理一项、本机又没有 CodeAgent」时
   // 提示可改用部门 key。手填模型框默认收起，下拉选「手填模型名…」才展开。
-  const GATEWAY_INFO = '选「部门 API key（网关）」的功能改由本机 Claude Code 经 Hub 的本机反代连部门网关作答，不经 CodeAgent；'
+  const GATEWAY_INFO = '选「Claude Code · 部门 API key」的功能由本机 Claude Code 当外壳、经 Hub 的本机反代连部门网关作答，不经 CodeAgent；'
     + 'key 用设置里「API 网关」已保存的那把（Windows 账户加密，不落明文），会话只挂该功能自己的工具。没装 CodeAgent、又保存过部门 key 时，助理默认就用它，其他功能要在这里选。'
     + '模型表来自网关；表里没有但网关能用的模型可以手填，先试跑一句测通再用。报错会写清原因并给出重填 key / 换模型按钮。';
-  const GATEWAY_LINE = '「部门 API key（网关）」由本机 Claude Code 经反代作答';
+  const GATEWAY_LINE = 'Claude Code、Codex 只当外壳，模型来自你的部门 API key 或公司模型';
+  // 公司版外壳没有可用模型（没存部门 key、也没有 CodeAgent 账号）：底部一行说清缺什么，旁边一键去配置（开箱即用），不每行重复。
+  function setupNeed(features) {
+    for (const f of features) for (const o of f.options || []) if (o.setup === 'gateway' && !o.available) return o;
+    return null;
+  }
   function footer(features, host) {
-    const note = features.some(f => f.kinds.includes('api-gateway'))
-      ? `<span class="fa-gw"><span title="${esc(GATEWAY_LINE)}">${esc(GATEWAY_LINE)}</span><i title="${esc(GATEWAY_INFO)}" aria-label="${esc(GATEWAY_INFO)}">ⓘ</i></span>` : '';
+    const need = setupNeed(features);
+    const setup = need ? `<span class="fa-gw" data-fa-setup><span title="${esc(need.reason)}">Claude Code / Codex 只当外壳，${esc(need.reason || '需要先保存部门 API key')}</span><button type="button" class="fa-reset" data-fa-open-gateway>去配置部门 API key</button><i title="${esc(GATEWAY_INFO)}" aria-label="${esc(GATEWAY_INFO)}">ⓘ</i></span>` : '';
+    const note = setup || (features.some(f => f.kinds.includes('api-gateway'))
+      ? `<span class="fa-gw"><span title="${esc(GATEWAY_LINE)}">${esc(GATEWAY_LINE)}</span><i title="${esc(GATEWAY_INFO)}" aria-label="${esc(GATEWAY_INFO)}">ⓘ</i></span>` : '');
     const status = host?.id === 'fa-settings-page' ? presetNote : '';
     return `<div class="fa-foot">${note}<span role="status" data-fa-message${status ? ` title="${esc(status)}"` : ''}>${esc(status)}</span></div>`;
   }
@@ -127,7 +132,7 @@
     if (!f.kinds.includes('api-gateway')) return '';
     // 底部已有网关说明：行内只留「只有助理一项、本机没有 CodeAgent」时的引导，不重复「正在用」。
     const noCodeagent = state?.backends.find(b => b.kind === 'codeagent')?.available === false;
-    const line = count === 1 && f.id === 'assistant' && noCodeagent && f.selected?.kind !== 'api-gateway' ? '没有 CodeAgent 也能用：后端选「部门 API key（网关）」' : '';
+    const line = count === 1 && f.id === 'assistant' && noCodeagent && f.selected?.kind !== 'api-gateway' ? '没有 CodeAgent 也能用：后端选「Claude Code」，模型用部门 API key' : '';
     const hint = line ? `<span class="fa-hint">${line}</span>` : '';
     const custom = backend?.allowCustom ? `<div class="fa-custom" data-fa-custom hidden><input data-fa-custom-input maxlength="128" placeholder="模型名，例如 deepseek-v4.1-flash-1017" aria-label="手填模型名"><button type="button" class="fa-reset" data-fa-custom-check>检测并使用</button><span role="status" data-fa-custom-msg></span></div>` : '';
     return hint + custom;
@@ -162,12 +167,13 @@
     document.querySelectorAll('[data-feature-agents]').forEach(host => rows(host, host.dataset.featureAgents.split(',')));
     mount();
   }
-  async function save(row, choice) {
+  // ui = { backend, model }：下拉里的原值，由主进程换成要存的选择（公司版外壳 + 来源）；null = 恢复默认。
+  async function save(row, ui) {
     presetNote = '';
     const host = row.parentElement, message = host.querySelector('[data-fa-message]');
     row.querySelectorAll('select,button').forEach(el => { el.disabled = true; });
     try {
-      const result = await ipcRenderer.invoke('feature-agents:set', { feature: row.dataset.faRow, choice });
+      const result = await ipcRenderer.invoke('feature-agents:set', { feature: row.dataset.faRow, ui: ui || { backend: '', model: '' } });
       if (!result?.ok) throw new Error(result?.error || '保存失败');
       state = result; refresh();
       (document.getElementById(host.id) || host).querySelector('[data-fa-message]').textContent = '已保存，下次任务生效';
@@ -179,13 +185,12 @@
   document.addEventListener('change', event => {
     const row = event.target.closest('[data-fa-row]'); if (!row) return;
     if (event.target.matches('[data-fa-backend]')) {
-      void save(row, event.target.value ? { kind: event.target.value, model: '' } : null);
+      void save(row, { backend: event.target.value, model: '' });
     } else if (event.target.matches('[data-fa-model]') && event.target.value === '__custom__') {
       const box = row.querySelector('[data-fa-custom]');
       if (box) { box.hidden = false; box.querySelector('input')?.focus(); }
     } else if (event.target.matches('[data-fa-model]')) {
-      const choice = choiceValues.decodeChoice(event.target.value);
-      void save(row, { kind: row.querySelector('[data-fa-backend]').value, model: choice.id, ...choiceValues.routeFields(choice) });
+      void save(row, { backend: row.querySelector('[data-fa-backend]').value, model: event.target.value });
     }
   });
   function close() { popup?.remove(); popup = null; }
@@ -208,6 +213,7 @@
     const entry = event.target.closest('[data-feature-agent]');
     if (entry) { void open(entry.dataset.featureAgent.split(','), entry); return; }
     if (event.target.closest('[data-fa-close]')) { close(); return; }
+    if (event.target.closest('[data-fa-open-gateway]')) { close(); window.__companyApiOpen?.('claude', undefined, { mode: 'gateway' }); return; }
     const check = event.target.closest('[data-fa-custom-check]');
     if (check) { void checkCustom(check.closest('[data-fa-row]')); return; }
     const reset = event.target.closest('[data-fa-reset]');
@@ -231,7 +237,8 @@
         b.title = '选择这个功能使用的 Agent 与模型'; head.append(b);
       }
       const f = state?.features.find(f => f.id === id.split(',')[0]);
-      const label = f?.choice ? `⚙ ${state.backends.find(b => b.kind === f.choice.kind)?.label || f.choice.kind}` : '⚙ Agent';
+      const shown = f?.choice ? (f.options || []).find(o => o.value === f.current?.backend)?.label || state.backends.find(b => b.kind === f.choice.kind)?.label || f.choice.kind : '';
+      const label = f?.choice ? `⚙ ${shown}` : '⚙ Agent';
       if (b.textContent !== label) b.textContent = label;
       // 窄处（如会议准备页右上角）按钮文字可能被省略，悬停时看全名。
       const tip = `${label.replace(/^⚙\s*/, '')} · 选择这个功能使用的 Agent 与模型`;
@@ -242,7 +249,7 @@
         if (!f.warning) { hint?.remove(); continue; }
         if (!hint) {
           hint = document.createElement('div'); hint.dataset.faUnavailable = f.id; hint.className = 'fa-inline-warning'; hint.setAttribute('role', 'status');
-          const text = document.createElement('span'); text.textContent = '所选后端或模型不可用，本次沿用默认'; text.title = f.warning; hint.append(text);
+          const text = document.createElement('span'); text.textContent = f.legacy ? '之前选的模型公司里用不了，本次沿用默认，请重选' : '所选后端或模型不可用，本次沿用默认'; text.title = f.warning; hint.append(text);
           const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'fa-reset'; reset.textContent = '恢复默认';
           reset.onclick = async () => {
             const r = await ipcRenderer.invoke('feature-agents:set', { feature: f.id, choice: null });

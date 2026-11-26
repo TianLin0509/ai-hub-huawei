@@ -2,8 +2,9 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const choice = require('../core/feature-agent-choice'), routes = require('../core/codeagent-assistant-route');
-const backends = [{ kind: 'claude', label: 'Claude', available: true, models: [{ id: 'haiku' }] },
-  { kind: 'codex', label: 'Codex', available: true, models: [{ id: 'gpt-6-astra' }] },
+// 公司版：Claude Code / Codex 只当外壳，模型带来源（部门 API key = gateway、公司模型 = company，core/feature-agent-choice.js）。
+const backends = [{ kind: 'claude', label: 'Claude Code', available: true, models: [{ id: 'haiku', source: 'gateway' }] },
+  { kind: 'codex', label: 'Codex', available: true, models: [{ id: 'gpt-6-astra', source: 'company' }] },
   { kind: 'codeagent', label: 'CodeAgent', available: true, models: [{ id: 'glm-test', provider: 'builtin' }, { id: 'glm-alt', provider: 'builtin' }] }];
 function temp(t) { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'feature-agent-r13-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return dir; }
 test('所有功能未设置时返回原 kind 和同一个 opts，不改变旧助理供应商', t => {
@@ -19,7 +20,7 @@ test('各功能独立持久化选择，重新读取仍有效，恢复默认保�
   const dir = temp(t);
   routes.setPreference(dir, 'personal', { model: 'legacy', provider: 'builtin' });
   for (const f of choice.FEATURES) {
-    const selected = f.kinds.includes('codex') ? { kind: 'codex', model: 'gpt-6-astra' } : { kind: 'codeagent', model: 'glm-test' };
+    const selected = f.kinds.includes('codex') ? { kind: 'codex', model: 'gpt-6-astra', source: 'company' } : { kind: 'codeagent', model: 'glm-test' };
     choice.set(dir, f.id, selected, { backends });
     assert.deepEqual(choice.resolve(dir, f.id, { backends }).selected, selected);
   }
@@ -30,8 +31,8 @@ test('各功能独立持久化选择，重新读取仍有效，恢复默认保�
 });
 test('后端卸载、模型撤回、模型不可用均按原选项回退并保留恢复入口', t => {
   const dir = temp(t), opts = { model: 'legacy' };
-  choice.set(dir, 'help', { kind: 'claude', model: 'haiku' }, { backends });
-  for (const broken of [[], [{ ...backends[0], available: false }], [{ ...backends[0], models: [] }], [{ ...backends[0], models: [{ id: 'haiku', unavailable: true }] }]]) {
+  choice.set(dir, 'help', { kind: 'claude', model: 'haiku', source: 'gateway' }, { backends });
+  for (const broken of [[], [{ ...backends[0], available: false }], [{ ...backends[0], models: [] }], [{ ...backends[0], models: [{ id: 'haiku', source: 'gateway', unavailable: true }] }], [{ ...backends[0], models: [{ id: 'haiku', source: 'company' }] }]]) {
     const r = choice.session(dir, 'help', 'codeagent', opts, { backends: broken });
     assert.equal(r.kind, 'codeagent'); assert.equal(r.opts, opts); assert.match(r.warning, /不可用/);
     assert.equal(choice.resolve(dir, 'help', { backends: broken }).choice.model, 'haiku');
@@ -46,7 +47,7 @@ test('CodeAgent 供应商同名消歧保持，换其他后端不携带旧账号�
   routes.setFeaturePreference(dir, 'assistant', { kind: 'claude', model: 'haiku' });
   const opts = { codeagentPoolPick: 'old', codeagentRouteModel: 'old' };
   const other = choice.session(dir, 'assistant', 'codeagent', opts, { backends });
-  assert.equal(other.kind, 'codeagent'); assert.equal(other.opts, opts); assert.match(other.warning, /只读/);
+  assert.equal(other.kind, 'codeagent'); assert.equal(other.opts, opts); assert.match(other.warning, /公司里用不了/);
   assert.equal(choice.stale(dir, 'assistant', r.opts, { backends }), true);
   assert.equal(choice.stale(dir, 'assistant', other.opts, { backends }), false);
 });
@@ -57,12 +58,28 @@ test('无效功能、非法模型、不可用后端不写入配置', t => {
   assert.throws(() => choice.set(dir, 'help', { kind: 'claude', model: 'missing' }, { backends }));
   assert.equal(routes.featurePreference(dir, 'help'), null);
 });
-test('模型目录复用启动中心的 ACP 清单，并包含本机配置的自定义模型', t => {
+test('公司版外壳目录与启动中心同源：只有部门 key 与公司模型，没有 claude-opus / gpt 这类公司用不了的模型', t => {
   const dir = temp(t);
   t.mock.method(require('../core/hub-config'), 'getConfig', () => ({ acp: { providers: { 'deepseek-acp': { entryPath: __filename, model: 'custom-company-model' } } } }));
+  t.mock.method(require('../core/hub-config'), 'readConfigJsonForUpdate', () => ({}));
+  const settings = require('../core/company-api-config').settings;
+  const fake = { backend: 'local', companyModels: [{ id: 'GLM-5.2-WX', label: 'GLM-5.2-WX' }], gatewayModels: [{ id: 'deepseek-v4.1-flash', label: 'deepseek-v4.1-flash', note: '可用' }] };
+  t.mock.method(require('../core/company-api-config'), 'settings', () => ({ claude: fake, codex: fake, 'deepseek-acp': fake }));
   const catalog = choice.catalog(dir, { env: { USERPROFILE: dir, CODEX_HOME: dir, CLAUDE_HUB_HOME_DIR: dir }, findCommand: () => 'fixture' });
-  const dsh = catalog.find(b => b.kind === 'deepseek-acp');
-  assert.equal(dsh.available, true); assert.ok(dsh.models.some(m => m.id === 'custom-company-model'));
+  void settings;
+  for (const kind of ['claude', 'codex', 'deepseek-acp']) {
+    const row = catalog.find(b => b.kind === kind);
+    assert.equal(row.harness, true);
+    assert.ok(row.models.length > 0);
+    for (const m of row.models) { assert.ok(['gateway', 'company'].includes(m.source), kind + ' ' + m.id); assert.doesNotMatch(m.id, /claude-|gpt-|opus|sonnet|haiku/i); }
+    assert.ok(row.models.some(m => m.source === 'gateway' && m.id === 'deepseek-v4.1-flash'));
+  }
+  // 没有部门 key、也没有 CodeAgent：外壳不可用，原因说清要先配置什么。
+  t.mock.method(require('../core/company-api-config'), 'settings', () => ({ claude: { ...fake, gatewayModels: undefined }, codex: { ...fake, gatewayModels: undefined }, 'deepseek-acp': { ...fake, gatewayModels: undefined } }));
+  const none = choice.catalog(dir, { env: { USERPROFILE: dir, CODEX_HOME: dir, CLAUDE_HUB_HOME_DIR: dir }, findCommand: kind => kind === 'codeagent' ? '' : 'fixture' });
+  const claude = none.find(b => b.kind === 'claude');
+  assert.equal(claude.available, false); assert.match(claude.reason, /部门 API key/); assert.equal(claude.setup, 'gateway');
+  assert.equal(claude.models.length, 0);
 });
 test('助理和 PPT 的真实建会话入口分别读取相应功能选型', async t => {
   const { CompanyAssistant } = require('../core/company-assistant/service');

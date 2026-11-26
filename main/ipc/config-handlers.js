@@ -425,7 +425,9 @@ function registerConfigIpc(ipcMain, deps) {
   ipcMain.handle('feature-agents:get', () => featureAgents.state(featureDataDir()));
   ipcMain.handle('feature-agents:set', (_event, request = {}) => {
     try {
-      featureAgents.set(featureDataDir(), request.feature, request.choice || null);
+      // 设置页按下拉的值传 ui（公司版外壳 + 模型来源，core/feature-agent-choice.js choiceFromUi）；分身页等仍可直接传 choice。
+      if (request.ui) featureAgents.setFromUi(featureDataDir(), request.feature, request.ui);
+      else featureAgents.set(featureDataDir(), request.feature, request.choice || null);
       deps.sendToRenderer?.('feature-agents:changed', { feature: request.feature });
       // 选上或撤下部门 API key 时，本机反代按新设置起停（main.js isEnabled）。
       void deps.companyProxyService?.syncWithConfig?.()?.catch?.(() => {});

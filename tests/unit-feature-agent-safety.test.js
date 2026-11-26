@@ -14,7 +14,7 @@ test('工具会话不提供未受控的后端，旧选择回默认且保留恢�
     routes.setFeaturePreference(dir, id, { kind, model: '' });
     const opts = { purpose: 'company-assistant', autonomous: true };
     const picked = choices.session(dir, id, 'codeagent', opts, { backends: [{ kind, available: true, models: [] }] });
-    assert.equal(picked.kind, 'codeagent'); assert.equal(picked.opts, opts); assert.match(picked.warning, /只读/);
+    assert.equal(picked.kind, 'codeagent'); assert.equal(picked.opts, opts); assert.match(picked.warning, /只读|公司里用不了/);
   }
 });
 test('创建入口在获得会话和 PTY 之前拒绝带功能标记的不安全后端，手动默认路径不变', () => {

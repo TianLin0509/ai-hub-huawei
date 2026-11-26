@@ -112,7 +112,8 @@ async function main() {
     await click('#company-assistant-page [data-ca="settings"]');
     await click('[data-ca="settings-tab:model"]');
     await wait(`document.querySelectorAll('#fa-assistant-settings [data-fa-row]').length===2`);
-    assert.equal(await c.eval(`Array.from(document.querySelector('#fa-assistant-settings [data-fa-backend]').options).some(o=>['claude','codex','deepseek-acp'].includes(o.value))`), false);
+    // 公司版（2026-11-26）：Codex / DSH 在会话功能里灰显不可选；Claude Code 只走部门 key（没存 key 时也灰显）。
+    assert.equal(await c.eval(`Array.from(document.querySelector('#fa-assistant-settings [data-fa-backend]').options).some(o=>['claude','codex','deepseek-acp'].includes(o.value) && !o.disabled)`), false);
     assert.equal(await c.eval(`!!document.querySelector('.fa-legacy-override')`), false);
     await select('#fa-assistant-settings [data-fa-row="assistant"] [data-fa-backend]', 'codeagent');
     await wait(`document.querySelector('.fa-legacy-override')?.textContent.includes('下方供应商默认设置暂不生效')`);
