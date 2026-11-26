@@ -778,5 +778,6 @@
   "部分功能降级 ⓘ": "Some features degraded ⓘ",
   "本轮执行失败（没有拿到具体原因）": "Turn failed (no specific reason was reported)",
   "正在切换到终端方式…": "Switching to terminal mode…",
-  "CodeAgent 轻享服务暂不可用，正在改用终端方式继续": "CodeAgent Lite is unavailable; switching to terminal mode"
+  "CodeAgent 轻享服务暂不可用，正在改用终端方式继续": "CodeAgent Lite is unavailable; switching to terminal mode",
+  "员工助手": "Employee Assistant"
 }

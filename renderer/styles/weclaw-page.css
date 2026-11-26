@@ -1,0 +1,41 @@
+/* "Employee assistant" page (Beta, 2026-11-26). One screen, no page scroll. Colours only from --hw-* tokens. */
+.weclaw-page-open #session-sidebar,.weclaw-page-open #toolbar-actions,.weclaw-page-open #toolbar-crumb,.weclaw-page-open #btn-expand-sidebar{visibility:hidden}
+.weclaw-page{position:fixed;left:0;right:0;top:44px;bottom:0;z-index:880;background:var(--hw-bg);color:var(--hw-text-1);font:13.5px/1.6 var(--font-ui,"Microsoft YaHei",system-ui,sans-serif)}
+.weclaw-page[hidden]{display:none}
+.weclaw-page *{box-sizing:border-box}
+#btn-weclaw{position:relative}
+.wcx-root{display:flex;flex-direction:column;height:100%;overflow:hidden;--b:var(--hw-brand);--bh:var(--hw-brand-hover);--bs:var(--hw-brand-soft);--t2:var(--hw-text-2);--t3:var(--hw-text-3);--ln:var(--hw-line);--g:color-mix(in srgb,var(--hw-green) 70%,var(--hw-text-1));--gs:var(--hw-green-soft);--w:color-mix(in srgb,var(--hw-amber) 70%,var(--hw-text-1));--ws:var(--hw-amber-soft);--r:color-mix(in srgb,var(--hw-red) 80%,var(--hw-text-1));--rs:var(--hw-red-soft);--sf:var(--hw-surface);--sf2:var(--hw-surface-2);--sf3:var(--hw-surface-3);--bd:color-mix(in srgb,var(--hw-line-strong) 55%,var(--hw-surface))}
+.wcx-head{flex:none;display:flex;align-items:center;gap:12px;padding:9px 18px;background:var(--sf);border-bottom:1px solid var(--ln)}
+.wcx-head h1{display:flex;align-items:center;gap:7px;margin:0;font-size:18px;line-height:1.3;white-space:nowrap}
+.wcx-head p{flex:1;margin:0;font-size:12.5px;color:var(--t2)}
+.wcx-beta{padding:0 6px;border-radius:5px;background:var(--bs);color:var(--b);font:600 12px/18px "Segoe UI",sans-serif}
+.wcx-ch{padding:0 10px;border-radius:999px;background:var(--sf3);color:var(--t2);font-size:12.5px;line-height:22px;white-space:nowrap}
+.wcx-ch.g{background:var(--gs);color:var(--g)}.wcx-ch.b{background:var(--bs);color:var(--b)}
+.wcx-body{flex:1;min-height:0;overflow:hidden;display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:16px;padding:16px 18px;align-items:start}
+.wcx-steps{display:grid;gap:10px;min-width:0}
+.wcx-step{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:14px;align-items:center;background:var(--sf);border:1px solid var(--ln);border-radius:12px;padding:12px 16px}
+.wcx-step.b{border-color:color-mix(in srgb,var(--b) 45%,var(--ln));box-shadow:0 0 0 3px color-mix(in srgb,var(--b) 10%,transparent)}
+.wcx-n{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:700 13px/1 "Segoe UI",sans-serif;background:var(--sf3);color:var(--t2)}
+.wcx-n.g{background:var(--gs);color:var(--g)}.wcx-n.b{background:var(--b);color:var(--hw-text-on)}.wcx-n.w{background:var(--ws);color:var(--w)}.wcx-n.r{background:var(--rs);color:var(--r)}
+.wcx-st{display:grid;gap:2px;min-width:0}
+.wcx-st b{font-size:14px}
+.wcx-st span{font-size:12.5px;color:var(--t2)}
+.wcx-sa{display:flex;gap:8px;align-items:center}
+.wcx-card{background:var(--sf);border:1px solid var(--ln);border-radius:12px;padding:14px 16px;min-width:0;display:grid;gap:12px}
+.wcx-card h2{margin:0;font-size:14px}
+.wcx-dd{border:1px solid var(--ln);border-radius:10px;padding:6px;display:grid;gap:1px;background:var(--sf);box-shadow:0 6px 18px color-mix(in srgb,var(--hw-text-1) 7%,transparent)}
+.wcx-g{font-size:11.5px;color:var(--t3);padding:6px 10px 2px}
+.wcx-i{font-size:13px;padding:6px 10px;border-radius:7px}
+.wcx-i.on{background:var(--bs);color:var(--b);font-weight:600}
+.wcx-i.off{color:var(--t3)}
+.wcx-i.x{color:var(--t2)}
+.wcx-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+.wcx-pool{display:inline-flex;align-items:center;gap:6px;color:var(--t2);font-size:12.5px;cursor:pointer}
+.wcx-btn{padding:6px 16px;border:1px solid var(--bd);border-radius:8px;background:var(--sf);color:var(--hw-text-1);font:inherit;font-size:13px;line-height:1.5;white-space:nowrap;cursor:pointer}
+.wcx-btn:hover{background:var(--sf2)}.wcx-btn.p{background:var(--b);border-color:var(--b);color:var(--hw-text-on)}.wcx-btn.p:hover{background:var(--bh)}
+.wcx-btn.d{color:var(--r);border-color:color-mix(in srgb,var(--hw-red) 30%,var(--hw-surface))}.wcx-btn.d:hover{background:var(--rs)}
+.wcx-btn.s{padding:2px 10px;font-size:12px}.wcx-btn:disabled{opacity:.5;cursor:default}
+.wcx-btn:focus-visible{outline:2px solid var(--b);outline-offset:1px}
+.wcx-err{padding:8px 12px;border-radius:8px;background:var(--rs);color:var(--r);font-size:12.5px}
+.wcx-note{margin:0;color:var(--t2);font-size:12.5px}
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-navigation > #btn-weclaw > .btn-label{font-size:10.5px;letter-spacing:-.4px;text-overflow:clip}

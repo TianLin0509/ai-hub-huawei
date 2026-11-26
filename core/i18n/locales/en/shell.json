@@ -477,5 +477,8 @@
   "不播放": "Do not play",
   "现在播放一次": "Play once now",
   "更换动画…": "Change animation…",
-  "默认每天第一次启动时播放，修改后立即保存。现在播放一次只重播当前动画，不改变启动频率；点击画面或按 Esc 可跳过。更换动画可选其他款式。": "By default, the animation plays on the first launch each day. Changes are saved immediately. Play once now replays the current animation without changing the startup frequency; click or press Esc to skip. Use Change animation to choose another style."
+  "默认每天第一次启动时播放，修改后立即保存。现在播放一次只重播当前动画，不改变启动频率；点击画面或按 Esc 可跳过。更换动画可选其他款式。": "By default, the animation plays on the first launch each day. Changes are saved immediately. Play once now replays the current animation without changing the startup frequency; click or press Esc to skip. Use Change animation to choose another style.",
+  "员工助手 Beta · 让员工助手用 HUB-H 的公司模型": "Employee Assistant Beta · let Employee Assistant use HUB-H company models",
+  "员工助手 Beta": "Employee Assistant Beta",
+  "员工助手": "Employee Assistant"
 }

@@ -2837,7 +2837,9 @@ const companyProxyService = new (require('./main/company-proxy-service').Company
   isEnabled: () => (getHubConfig().companyCli === true && (usesGatewayRoute() || (!require('./core/lan-pool').read(getHubDataDir()).client?.enabled
     && (getHubConfig().companyProxyEnabled === true || require('./core/lan-pool').read(getHubDataDir()).host?.enabled === true))))
     || require('./core/assistant-gateway-route').inUse(getHubDataDir())
-    || require('./core/feature-agent-choice').harnessInUse(getHubDataDir()),
+    || require('./core/feature-agent-choice').harnessInUse(getHubDataDir())
+    // 员工助手接了 HUB-H 公司模型（core/weclaw-link.js）：代理要常驻，员工助手随时会来调。
+    || (getHubConfig().companyCli === true && require('./core/weclaw-link').readState(getHubDataDir()).enabled),
   // 换号、退回个人号、反代起不来：用会话提示条讲给用户听（renderer.js 的 session-notice）。
   // 换号/退回个人号是常驻提示条，用户手动关（只在每类第一次时弹，见 company-proxy-service）。
   // 自动处理好的只进日志，个人账号登录读不出来显式标 blocking（分类见 company-proxy-service 的 noticeKindFor）。
@@ -3478,6 +3480,24 @@ try {
   }
   require('./main/ipc/avatar-handlers').registerAvatarIpc(ipcMain, () => avatarService, { dialog: require('electron').dialog, getWindow: () => mainWindow });
 } catch (error) { console.error('[avatar] 分身未启动：', error.message); }
+// 员工助手 Beta（2026-11-26）：一键把 HUB-H 公司模型接进员工助手（WeClaw Desktop），端口变了自动重写配置。只在公司版、Windows 上有。
+let weclawLinkService = null;
+try {
+  if (getHubConfig().companyCli === true && process.platform === 'win32') {
+    const companyModelProxy = require('./core/company-model-proxy');
+    weclawLinkService = new (require('./main/weclaw-link-service').WeclawLinkService)({
+      dataDir: getHubDataDir(), proxy: companyProxyService,
+      readEndpoint: () => companyModelProxy.readEndpoint(getHubDataDir()),
+      listModels: () => companyModelProxy.companyModels(getHubDataDir()),
+      onChanged: () => sendToRenderer('weclaw:changed', {}),
+      openPath: file => require('electron').shell.openPath(file),
+      openExternal: url => require('electron').shell.openExternal(url),
+    });
+    weclawLinkService.start();
+    app.on('will-quit', () => weclawLinkService?.stop());
+  }
+  require('./main/ipc/weclaw-link-handlers').registerWeclawLinkIpc(ipcMain, () => weclawLinkService);
+} catch (error) { console.error('[weclaw-link] 员工助手接入未启动：', error.message); }
 // 公司版「帖子」（原「论坛」，2026-10-18；2026-11-12 加公司发文）：每天同步公司发文、稼先社区、心声社区并附 AI 摘要，数据只留在本机 Hub 数据目录。
 // 只在公司版启用（core/company-forum/gate.js）。取数用 Hub 自己的隐藏浏览器窗口（main/company-forum-browser.js）。
 let companyForumService = null, companyForumBrowser = null, companyForumEdge = null;

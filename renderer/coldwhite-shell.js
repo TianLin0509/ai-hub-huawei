@@ -22,11 +22,11 @@ function installColdwhiteShell(doc = globalThis.document) {
   app.append(footer);
   require('./status-footer-layout').installStatusFooterLayout(doc);
   installHwShell(doc);
-  const panelIds = ['team-page', 'avatar-page', 'cloud-page', 'hub-workspace', 'rules-panel', 'writing-panel', 'account-page', 'codeagent-accounts-page', 'xresearch-panel', 'study-panel', 'progress-panel'];
+  const panelIds = ['team-page', 'avatar-page', 'weclaw-page', 'cloud-page', 'hub-workspace', 'rules-panel', 'writing-panel', 'account-page', 'codeagent-accounts-page', 'xresearch-panel', 'study-panel', 'progress-panel'];
   const watched = new Set();
   const navigation = ['btn-home','btn-rules','btn-assistant','btn-company-assistant','btn-company-meeting','btn-company-ppt',
     'btn-company-rooms',
-    'btn-company-forum','btn-company-attendance','btn-company-w3','btn-profile','btn-community','btn-research','btn-study','btn-progress','btn-wireless','btn-rail-memo','btn-rail-capabilities','btn-cloud','btn-team','btn-avatar','btn-rail-accounts','btn-writing'];
+    'btn-company-forum','btn-company-attendance','btn-company-w3','btn-profile','btn-community','btn-research','btn-study','btn-progress','btn-wireless','btn-rail-memo','btn-rail-capabilities','btn-cloud','btn-team','btn-avatar','btn-weclaw','btn-rail-accounts','btn-writing'];
   let scheduled = false;
   const sync = () => {
     scheduled = false;
@@ -44,6 +44,8 @@ function installColdwhiteShell(doc = globalThis.document) {
       current = 'btn-team';
     } else if (isVisible('avatar-page')) {
       current = 'btn-avatar';
+    } else if (isVisible('weclaw-page')) {
+      current = 'btn-weclaw';
     } else if (isVisible('cloud-page')) {
       current = 'btn-cloud';
     } else if (isVisible('hub-workspace')) {
