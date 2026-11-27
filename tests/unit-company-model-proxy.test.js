@@ -1000,6 +1000,11 @@ test('Codex replay with thinking: from the store, or from the echoed summary aft
   // The client kept a reasoning item but its thinking is gone: refused, not silently dropped.
   const lost = input.map(i => i.type === 'reasoning' ? { ...i, summary: [] } : i);
   assert.throws(() => fresh.convertRequest(codexBody(lost)), e => e.status === 422 && /could not be replayed/.test(e.message));
+  // 断流重发：上一次回答只走到思考就断了，Codex 把这段半截思考放在结尾带回来——丢掉它照常发，不再 422
+  const half = [...input, { type: 'function_call_output', call_id: 'c0', output: 'y' }].slice(0, -1).concat(items.filter(i => i.type === 'reasoning'));
+  converted = fresh.convertRequest(codexBody(half));
+  assertChatHistory(converted.messages);
+  assert.equal(converted.messages.at(-1).role, 'tool', '半截思考被丢掉，历史停在上一次工具输出');
 });
 
 test('mock DeepSeek-style upstream without thinking: Codex completes two rounds with a valid chat history', { timeout: 60000 }, async () => {

@@ -38,9 +38,9 @@
     "sources": []
   },
   "releaseNotes": [
-    "DSH 走 API 网关时单步输出上限放到 32768（GLM 想得多不再被截断后悄悄停下），Codex 走网关遇中途断流自动重发 2 次"
+    "Codex 走网关断流重发时不再被反代拒收（422），半截思考丢掉让模型重想"
   ],
-  "version": "5.6.138",
+  "version": "5.6.139",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

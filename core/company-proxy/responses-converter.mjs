@@ -72,7 +72,7 @@ export function convertResponsesRequest(body, { mapReasoning, mapText, resolveRe
       const target = openTurn();
       (target.tool_calls ||= []).push({ id: item.call_id, type: 'function', function: { name: wireName(item.name, item.namespace), arguments: args } });
     } else if (item.type === 'function_call_output' || item.type === 'custom_tool_call_output') {
-      turn = null;
+      turn = null; reasoning = ''; // 没挂上任何回答的半截思考（断流或被打断留下的）不串到下一轮
       messages.push({ role: 'tool', tool_call_id: item.call_id, content: text(item.output) });
     } else if (!item.type || item.type === 'message') {
       if (!['system', 'developer', 'user', 'assistant'].includes(item.role)) throw error('Unsupported message role');
@@ -81,11 +81,13 @@ export function convertResponsesRequest(body, { mapReasoning, mapText, resolveRe
         target.content = text(item.content);
         continue;
       }
-      turn = null;
+      turn = null; reasoning = '';
       messages.push({ role: item.role === 'developer' ? 'system' : item.role, content: text(item.content) });
     } else throw error(`Unsupported input item: ${item.type}`);
   }
-  if (reasoning) throw error('Unassociated reasoning item');
+  // 结尾只剩一段思考、后面没有回答也没有工具调用：是上一次回答中途断流留下的半截（Codex 断流重发会把它带回来，
+  // 11-28 黄区夜测 Codex·GLM 走网关重发 4 次都因此被拒 422）。这段思考没挂在任何工具调用上，丢掉让模型重新想即可。
+  if (reasoning) reasoning = '';
   const result = { model: body.model, messages, stream: body.stream === true };
   if (body.tools) result.tools = toolEntries(body.tools).map(({ tool, namespace, wireName }) => {
     const description = namespace ? `[Namespace ${namespace}, tool ${tool.name}] ${tool.description || ''}` : tool.description;
