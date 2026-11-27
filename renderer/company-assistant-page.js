@@ -740,7 +740,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   let phoneTimer = null, phoneData = null;
 
   // 「手机」页（2026-10-18）：在手机 WeLink 的专用群里和助理对话。群由用户自己在手机上建，这里只选群、开关和看往来。
-  const KIND_TAG = { other: '别人发的', stale: '过期没执行', throttled: '太快没处理', unsupported: '不是文字', failed: '没发出去', ack: '回执', done: '会话答完', stuck: '会话卡住', welcome: '接通', test: '测试', error: '没答上', info: '提示' };
+  const KIND_TAG = { queued: '等私聊恢复再发', other: '别人发的', stale: '过期没执行', throttled: '太快没处理', unsupported: '不是文字', failed: '没发出去', ack: '回执', done: '会话答完', stuck: '会话卡住', welcome: '接通', test: '测试', error: '没答上', info: '提示' };
   function phoneLive() {
     const p = phoneData.phone, st = p.settings;
     // 群消息轮询间隔见 core/company-assistant/phone.js 的 POLL_MS（6 秒）。
@@ -757,6 +757,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   function botLine(p, st, bot) {
     if (!bot.hasCred) return '<span class="ca-chip">还没绑定</span><span class="ca-note">在下面点「绑定到 WeLink」，扫一次码就好</span>';
     if (!st.enabled) return '<span class="ca-chip">没开启</span>';
+    // 私聊助理离线超过 2 分钟、配过专用群：临时改用专用群收（core/company-assistant/phone.js channel）。
+    if (p.channel === 'group-fallback') return `<span class="ca-chip warn">私聊助理离线</span><span class="ca-note">已临时改用专用群，每 60 秒查一次；私聊助理恢复后自动切回${bot.lastError ? `（${esc(bot.lastError)}）` : ''}</span>`;
     if (bot.phase !== 'ready') return bot.lastError ? `<span class="ca-chip warn">出错</span><span class="ca-note">${esc(bot.lastError)}</span>` : '<span class="ca-chip run">正在连接 WeLink…</span>';
     if (p.lastError) return `<span class="ca-chip warn">出错</span><span class="ca-note">${esc(p.lastError)}</span>`;
     return `<span class="ca-chip ok">已接通</span><span class="ca-note">${bot.talked ? `手机 WeLink 私聊「${esc(bot.name || '助手')}」就是和助理说话${p.pending ? ` · 正在答 ${p.pending} 条` : ''}` : `去 WeLink 找到「${esc(bot.name || '助手')}」，私聊它一句就接通，之后的提醒也发到那里`}</span>`;
@@ -804,7 +806,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       <fieldset class="col"><legend>开关与推送</legend>
         <label><input type="checkbox" data-f="phone-enabled"${st.enabled ? ' checked' : ''}>开启手机对话</label>
         <label><input type="checkbox" data-f="phone-pushWatched"${st.pushWatched ? ' checked' : ''}>助理派出的、让它盯着的会话答完或卡住时，推到手机</label>
-        <label><input type="checkbox" data-f="phone-pushStuck"${st.pushStuck ? ' checked' : ''}>其他会话卡住等你时也推到手机（电脑前 5 分钟内有人操作就不推）</label></fieldset>
+        <label><input type="checkbox" data-f="phone-pushStuck"${st.pushStuck ? ' checked' : ''}>其他会话卡住等你时也推到手机（电脑前 5 分钟内有人操作就不推）</label>
+        <label title="不勾：先说结论、300 字以内（默认）。勾上：先说结论，再把理由和细节讲完整。手机上可发 /help 看命令"><input type="checkbox" data-f="phone-fullAnswer"${st.style === 'full' ? ' checked' : ''}>手机上要完整回答（默认简洁）</label></fieldset>
       <div class="ca-row end"><button type="button" class="ca-btn" data-x="phone-test"${(viaBot ? bot.talked : st.groupId) ? '' : ' disabled'}>发一条测试消息</button><button type="button" class="ca-btn primary" data-x="phone-save">保存</button></div>
       <details class="ca-bot-box"${botOpen ? ' open' : ''}><summary class="ca-note">WeLink 私聊助理（beta，可选，不用建群）</summary><div data-slot="phone-bot">${botBlock()}</div></details>`;
   }
@@ -875,7 +878,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       if (on('enabled') && !viaBot && !g.groupId) { showMessage?.('请先填群 ID'); return; }
       e.target.disabled = true; settingsError.textContent = '';
       try {
-        const r = await call('phone-settings', { ...g, ...(viaBot ? { transport: 'bot' } : {}), enabled: on('enabled'), pushWatched: on('pushWatched'), pushStuck: on('pushStuck'), extraIds: extraIdsInput.value });
+        const r = await call('phone-settings', { ...g, ...(viaBot ? { transport: 'bot' } : {}), enabled: on('enabled'), pushWatched: on('pushWatched'), pushStuck: on('pushStuck'), style: on('fullAnswer') ? 'full' : 'brief', extraIds: extraIdsInput.value });
         if (!r.ok) { showMessage?.('没有接通：' + r.error); e.target.disabled = false; return; }
         showMessage?.(r.welcome ? '已接通：欢迎消息已发到手机群' : '手机设置已保存');
         await mountPhoneTab(panel);

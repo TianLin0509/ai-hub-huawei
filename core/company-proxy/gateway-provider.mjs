@@ -26,6 +26,10 @@ const gatewayErrors = hubModule('../api-gateway-errors.js');
 const { firstTokenTimeoutMs } = hubModule('../api-gateway-healthcheck.js');
 
 const STRIP_FIELDS = new Set(['thinking', 'reasoning_effort']); // 公司上游专用的思考开关；网关的推理模型默认就思考
+// Claude 请求原样直通网关 /v1/messages（server.mjs 给请求体打这个标记；只对网关目录里声明支持 anthropic 接口的模型）。
+// 2026-11-27 黄区实测 glm-5.3-flash：同一时段同 5 个真实任务，直通比转 chat 快约 25%，提示缓存命中 98%（chat 接口命中 0），
+// 计费输入 token 中位从 10.4 万降到 4.3 万；新 key 所在分组的 chat 接口每轮要等约 52 秒才出第一块，直通边想边推不再卡。
+export const NATIVE_MESSAGES = Symbol('gateway-native-messages');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 // 所有 system 合并成一条放最前面（R49，11-26 反馈「网关原话：System message must be at the beginning.」）。
@@ -126,8 +130,10 @@ export function createGatewayProvider({ baseURL, apiKey, fetchImpl = globalThis.
   if (typeof baseURL !== 'string' || !/^https?:\/\//.test(baseURL)) throw new Error('gateway baseURL is required');
   if (typeof apiKey !== 'string' || !apiKey) throw new Error('gateway apiKey is required');
   if (typeof ownError !== 'function') throw new Error('ownError is required');
-  const url = baseURL.replace(/\/+$/, '') + '/chat/completions';
+  const base = baseURL.replace(/\/+$/, '');
   const headers = { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json', accept: 'text/event-stream' };
+  const chatTarget = { url: base + '/chat/completions', headers };
+  const messagesTarget = { url: base + '/messages', headers: { ...headers, 'anthropic-version': '2023-06-01' } };
   // 最近真实请求的首字时间（按模型，指数平均）：比体检那一刻更贴近当下的排队情况。
   const live = new Map();
   const observe = (model, ms) => { const prev = live.get(model); live.set(model, prev ? Math.round(prev * 0.7 + ms * 0.3) : ms); };
@@ -135,7 +141,7 @@ export function createGatewayProvider({ baseURL, apiKey, fetchImpl = globalThis.
 
   // 一次请求：首包超时由 headerTimer 控制，「首包」指正文的第一块数据——网关可能先回响应头、排队时正文才卡住
   // （11-19 换模型审查发现）。读到第一块就清掉计时，之后由客户端自己的超时管；还没给下游输出任何东西，重试才不会重复。
-  async function attempt(serialized, signal, waitMs, model) {
+  async function attempt(serialized, signal, waitMs, model, { url, headers }) {
     const controller = new AbortController();
     const relay = () => controller.abort(signal.reason);
     signal?.addEventListener('abort', relay, { once: true });
@@ -165,7 +171,9 @@ export function createGatewayProvider({ baseURL, apiKey, fetchImpl = globalThis.
     // track=false：后台请求（Claude Code 起标题等，server.mjs 按「Claude 请求不带工具」判断）——不计入排队提示，也不补「想太久」那句。
     async complete(body, { signal, sessionTag = 'default', track = true } = {}) {
       const requestedModel = body.model;
-      const serialized = JSON.stringify(gatewayBody(body, { noThinking: noThinking.includes(requestedModel) }));
+      const native = body[NATIVE_MESSAGES] === true;
+      const target = native ? messagesTarget : chatTarget;
+      const serialized = JSON.stringify(native ? body : gatewayBody(body, { noThinking: noThinking.includes(requestedModel) }));
       const started = Date.now();
       const waitMs = timeoutFor(requestedModel);
       const request = {}; // 同一会话可能同时有几个请求（Claude Code 主回答 + 后台起标题），按请求记排队，不按会话
@@ -175,7 +183,7 @@ export function createGatewayProvider({ baseURL, apiKey, fetchImpl = globalThis.
         let result;
         for (let n = 1; n <= 1 + retries; n++) {
           if (n > 1) { log(`gateway retry ${n - 1} after ${result.failed} (${Date.now() - started}ms)`); wait({ request, sessionTag, waiting: true, since: started, attempt: n }); }
-          result = await attempt(serialized, signal, waitMs, requestedModel);
+          result = await attempt(serialized, signal, waitMs, requestedModel, target);
           if (result.response) break;
         }
         if (!result.response) {
@@ -191,6 +199,9 @@ export function createGatewayProvider({ baseURL, apiKey, fetchImpl = globalThis.
           return ownError(e.status, e.message, e.status === 429 ? { 'retry-after': response.headers.get('retry-after') || '30' } : {});
         }
         if (!response.body) return response;
+        // 直通：网关回的就是 Anthropic 流，原样交回（模型名、思考块 Claude Code 自己认）。
+        // 回包类型照网关原样：不是 SSE（例如 200 的 HTML 拦截页）时交给 transport.mjs 报「上游没给流」。
+        if (native) return new Response(response.body, { status: response.status, headers: { 'content-type': response.headers.get('content-type') || 'application/octet-stream' } });
         return new Response(normalizeStream(response.body, requestedModel, { thinkHint: track }), { status: response.status, headers: { 'content-type': 'text/event-stream; charset=utf-8' } });
       } finally { wait({ request, sessionTag, waiting: false, since: started }); }
     },

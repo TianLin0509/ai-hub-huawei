@@ -531,5 +531,6 @@
   "{0} 个已完成": "{0} finished",
   "{0} 个已中断": "{0} interrupted",
   "{0} 个子任务已中断（CLI 退出时没跑完，需要的话让它重新派）": "{0} subtasks interrupted (unfinished when the CLI exited; ask it to dispatch them again if needed)",
-  "最近一步：{0}": "Latest step: {0}"
+  "最近一步：{0}": "Latest step: {0}",
+  "已连上 WeLink 个人助手：手机可以直接找它，不会被闲置休眠": "Connected to your WeLink personal assistant: your phone can reach this session, and it will not be suspended when idle"
 }

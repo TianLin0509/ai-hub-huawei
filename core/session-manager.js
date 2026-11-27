@@ -1604,6 +1604,8 @@ class SessionManager extends EventEmitter {
 
   // Callbacks
   onData = (sessionId, data) => {};
+  onInput = null;
+  welinkLinkedLookup = null;
   onSessionClosed = (sessionId) => {};
   onSessionSuspended = (sessionId) => {};
 
@@ -4418,6 +4420,7 @@ try {
       const inputAt = Date.now();
       s.lastInputAt = inputAt;
       if (this._interceptBareCodexHostLaunch(sessionId, s, data)) return;
+      if (this.onInput) { try { this.onInput(sessionId, data); } catch { /* 观察失败不影响输入 */ } }
       this._lastWrite = { sessionId, data, target: 'pty', ts: inputAt };
       s.pty.write(data);
     }
@@ -5132,7 +5135,9 @@ try {
       ...require('./session-model-pin').modelPinFields(info),
       // 千问 / GLM 走终端时没有 runtimeBackend，卡片提示（如 Token Plan 改道说明）也要随更新送到界面。
       ...(isAcpKind(info.kind) ? {cliRuntime:info.cliRuntime||null,nativeActionError:info.nativeActionError || null} : {}),
-      ...(isCodeAgentKind(info.kind) ? { codeagentRunMode: info.codeagentRunMode === 'serve' ? 'serve' : 'pty' } : {}),
+      ...(isCodeAgentKind(info.kind) ? { codeagentRunMode: info.codeagentRunMode === 'serve' ? 'serve' : 'pty',
+        // 用户手动 /welink 连上了 WeLink 个人助手：卡片显示小标、免闲置休眠。显式给 false，断开后 renderer 合并才会清掉。
+        welinkLinked: !!(this.welinkLinkedLookup && this.welinkLinkedLookup(info.id)) } : {}),
       ...(info.codeagentLiteFeature === true ? { codeagentLiteFeature: true } : {}),
       ...(require('./card-run-mode').supportsCardKind(info.kind) ? { cardRunMode: info.cardRunMode === 'card' ? 'card' : 'pty', cardTerminal: info.cardTerminal === true } : {}),
       ...(isAcpKind(info.kind) || info.codeagentRunMode === 'serve' ? {acpSid:info.acpSid,acpProfileId:info.acpProfileId,

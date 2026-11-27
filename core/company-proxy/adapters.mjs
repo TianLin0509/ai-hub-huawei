@@ -79,20 +79,24 @@ export function createClaudeAdapter({defaultModel,resolve=null,maxTokensCap=3276
 }
 // Collect the converted Anthropic SSE into one non-streaming Message JSON.
 export async function collectAnthropicMessage(response){
-  const text=await response.text();const content=[];let message=null,stopReason=null,usage={input_tokens:0,output_tokens:0};
+  // 也收网关原生 /v1/messages 直通的流（gateway-provider NATIVE_MESSAGES）：可能 \r\n 分帧、末尾带 [DONE]、流内 error 帧；
+  // 用量 input/缓存在 message_start、output 在 message_delta，两处合并（11-27 Antigravity 审查 P1）。
+  const text=(await response.text()).replace(/\r\n/g,'\n');const content=[];let message=null,stopReason=null,usage={input_tokens:0,output_tokens:0};
   const partial=new Map();
   for(const frame of text.split(/\n\n/)){
     const line=frame.split('\n').find(x=>x.startsWith('data:'));if(!line)continue;
-    const e=JSON.parse(line.slice(5).trim());
-    if(e.type==='message_start')message=e.message;
+    const payload=line.slice(5).trim();if(!payload||payload==='[DONE]')continue;
+    const e=JSON.parse(payload);
+    if(e.type==='error')throw refused(String(e.error?.message||'Upstream stream error').slice(0,300),502);
+    if(e.type==='message_start'){message=e.message;usage={...usage,...(e.message?.usage||{})};}
     else if(e.type==='content_block_start'){content[e.index]={...e.content_block};if(e.content_block.type==='tool_use')partial.set(e.index,'');}
     else if(e.type==='content_block_delta'){
       const b=content[e.index];
       if(e.delta.type==='text_delta')b.text+=e.delta.text;
       else if(e.delta.type==='thinking_delta')b.thinking+=e.delta.thinking;
-      else if(e.delta.type==='signature_delta')b.signature=e.delta.signature;
+      else if(e.delta.type==='signature_delta')b.signature=(b.signature||'')+e.delta.signature;
       else if(e.delta.type==='input_json_delta')partial.set(e.index,partial.get(e.index)+e.delta.partial_json);
-    }else if(e.type==='message_delta'){stopReason=e.delta.stop_reason;usage=e.usage||usage;}
+    }else if(e.type==='message_delta'){stopReason=e.delta.stop_reason;usage={...usage,...(e.usage||{})};}
   }
   for(const [index,json] of partial){let input={};if(json&&json.trim()){try{input=JSON.parse(json);}catch{input={};}}content[index].input=input;}
   if(!message)throw refused('Upstream produced no message',502);

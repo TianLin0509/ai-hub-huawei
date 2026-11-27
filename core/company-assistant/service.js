@@ -296,6 +296,8 @@ class CompanyAssistant {
       if ('enabled' in q) np.enabled = !!q.enabled;
       if ('groupId' in q) { np.groupId = String(q.groupId || '').trim().slice(0, 80); np.groupName = String(q.groupName || '').trim().slice(0, 60); }
       for (const k of ['pushWatched', 'pushStuck']) if (k in q) np[k] = !!q[k];
+      // 回答风格：只有选了「完整」才记；选回简洁就删掉这个字段，和从没改过时一模一样。
+      if ('style' in q) { if (q.style === 'full') np.style = 'full'; else delete np.style; }
       // 接通方式：选了私聊助理才记 'bot'；改回专用群就删掉这个字段，设置内容和从没用过私聊助理时一模一样。
       if (q.transport === 'bot') { np.transport = 'bot'; if (Number.isFinite(q.since)) np.since = q.since; }
       else if (q.transport === 'group') delete np.transport;
@@ -732,6 +734,7 @@ class CompanyAssistant {
     const p = { ...before, ...patch };
     // 校验先于欢迎消息，防止非法账号保存失败但已经向群里发消息。
     if ('extraIds' in patch) p.extraIds = validateExtraIds(patch.extraIds);
+    if ('style' in patch) p.style = patch.style === 'full' ? 'full' : 'brief';
     p.groupId = String(p.groupId || '').trim();
     // 专属助手：不用群，不发欢迎语（助手只能回到用户私聊过的对话）；切换方式时连上或断开网关。
     if (this.phone.viaBot(p)) {
@@ -1614,7 +1617,7 @@ class CompanyAssistant {
     const feature = entry === 'ppt' && ['pptMake', 'pptImgtext'].includes(featureAgent) ? { featureAgent } : {};
     const item = { id: randomUUID(), q, state: 'queued', askedAt: this.now(), ...feature, ...(via === 'phone' || via === 'pet' ? { via } : {}), ...(entry === 'ppt' ? { entry } : {}), ...(teamOwner ? { teamOwner } : {}), ...(taskTitle ? { taskTitle } : {}) };
     this.saveChat([...this.chat(), item]);
-    const notes = via === 'phone' ? PHONE_NOTE : '';
+    const notes = via === 'phone' ? (this.phone?.askNote?.() || PHONE_NOTE) : '';
     this.enqueue({ type: 'chat', chatId: item.id, ...feature, prompt: notes ? notes + '\n\n' + q : q, ...(via === 'phone' ? { via } : {}), ...(entry === 'ppt' ? { entry } : {}), ...(teamOwner ? { teamOwner } : {}) });
     if (entry === 'ppt') this.startPptCollector();
     this.changed();
@@ -1908,7 +1911,9 @@ class CompanyAssistant {
   recentHistory(job) {
     if (job.type !== 'chat' || job.teamOwner) return '';
     const now = this.now(), four = Date.parse(D.dayKey(now) + 'T04:00:00+08:00'), boundary = now >= four ? four : four - 86400000;
-    const done = this.chat().filter(c => c.id !== job.chatId && c.state === 'done' && c.entry !== 'ppt' && (c.via || '') === (job.via || '') && Number(c.answeredAt) >= boundary);
+    // 手机上发过 /new：那之前的问答不再带（phone.js command）。
+    const resetAt = job.via === 'phone' ? Number(this.phone?.state?.().resetAt) || 0 : 0;
+    const done = this.chat().filter(c => c.id !== job.chatId && c.state === 'done' && c.entry !== 'ppt' && (c.via || '') === (job.via || '') && Number(c.answeredAt) >= boundary && Number(c.askedAt) > resetAt);
     const last = done[done.length - 1];
     if (!last || now - last.answeredAt > HISTORY_IDLE_MS) return '';
     const picked = done.slice(-2).filter(c => last.answeredAt - c.answeredAt <= HISTORY_IDLE_MS * 2);

@@ -25,7 +25,7 @@ import { readPoolAccessToken } from './pool-token.mjs';
 import { createAccountRouter, PERSONAL } from './account-router.mjs';
 import { resolveUpstreamProfile, loadSigner, ProfileError, zoneFromLetter } from './upstream-profile.mjs';
 import { KIND, createClaudeAdapter, createCodexAdapter, createDshAdapter, collectAnthropicMessage } from './adapters.mjs';
-import { createGatewayProvider } from './gateway-provider.mjs';
+import { createGatewayProvider, NATIVE_MESSAGES } from './gateway-provider.mjs';
 import { completeWithRetry } from './upstream-retry.mjs';
 // 公司模型目录（和 CodeAgent 同一个目录接口，按账号拉）：CommonJS，Hub 主进程也用同一份解析与匹配规则。
 const modelCatalog = createRequire(import.meta.url)('./model-catalog.cjs');
@@ -71,7 +71,9 @@ export function gatewayFromEnv(env = process.env) {
   const group = /^[A-Za-z0-9_-]{1,32}$/.test(String(env.AI_HUB_API_GATEWAY_GROUP || '')) ? String(env.AI_HUB_API_GATEWAY_GROUP) : '';
   // 用户「对这个模型关闭思考」的模型（逗号分隔）：反代给它们的请求注入 enable_thinking=false。
   const noThinking = String(env.AI_HUB_API_GATEWAY_NO_THINK || '').split(',').map(x => x.trim()).filter(x => /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(x));
-  return { baseURL, apiKey, models, defaultModel, headerTimeoutMs, firstTokenMs, group, noThinking };
+  // 网关目录里声明支持 anthropic 接口的模型（Hub 从目录算好给）：Claude 会话对它们原样直通 /v1/messages（gateway-provider.mjs NATIVE_MESSAGES）。
+  const nativeMessages = String(env.AI_HUB_API_GATEWAY_NATIVE || '').split(',').map(x => x.trim()).filter(x => /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(x));
+  return { baseURL, apiKey, models, defaultModel, headerTimeoutMs, firstTokenMs, group, noThinking, nativeMessages };
 }
 // 网关会话的模型名：网关表里有就原样用；别的名字（Claude Code 后台的 haiku 名、旧的公司模型名）落到默认模型。
 export function gatewayModel(gateway, name) {
@@ -272,7 +274,7 @@ export async function completeNonStreamingMessage({ complete, adapter, converted
   if (!upstreamResponse.ok) return { passthrough: upstreamResponse };
   deadline.touch();
   const live = touchOnEachChunk(upstreamResponse, deadline.touch);
-  return { message: await collectAnthropicMessage(await adapter.convertResponse(live, { signal: deadline.signal, request: original })) };
+  return { message: await collectAnthropicMessage(await adapter.convertResponse(live, { signal: deadline.signal, request: original, upstreamRequest: converted })) };
 }
 
 const uuidFrom = value => {
@@ -500,7 +502,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
           const response = await gatewayProvider.complete(body, { signal, sessionTag, track });
           const firstMs = Date.now() - started;
           if (response.ok) { stats.ok++; stats.gateway.ok++; stats.gateway.lastFirstMs = firstMs; } else { stats.failed++; stats.gateway.failed++; stats.lastError = `gateway HTTP ${response.status}`; }
-          log(`${kind} ${body.model} -> gateway HTTP ${response.status} in ${firstMs}ms`);
+          log(`${kind} ${body.model} -> gateway${body[NATIVE_MESSAGES] ? ' messages' : ''} HTTP ${response.status} in ${firstMs}ms`);
           if (!response.ok || !response.body) return response;
           handed = true;
           return releaseOnEnd(response, timing => {
@@ -550,13 +552,36 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   const common = { maxTokensCap: opts.maxTokensCap, defaultModel: modelCatalog.defaultModel(catalog.models).id,
     resolve: name => als.getStore()?.gateway && gatewayConfig ? gatewayModel(gatewayConfig, name) : resolveCompanyModel(name) };
   const claude = createClaudeAdapter(common), codex = createCodexAdapter(common), dsh = createDshAdapter(common);
+  // Claude 会话 + 网关目录声明支持 anthropic 的模型：请求体只改模型名和输出上限，原样直通网关 /v1/messages，回包也原样交回。
+  const claudeRoute = adapter => ({
+    convertRequest(body) {
+      if (!als.getStore()?.gateway || !gatewayConfig) return adapter.convertRequest(body);
+      const model = gatewayModel(gatewayConfig, body.model);
+      if (!gatewayConfig.nativeMessages.includes(model)) return adapter.convertRequest(body);
+      const out = { ...body, model, stream: true };
+      if (!Number.isSafeInteger(out.max_tokens) || out.max_tokens <= 0 || out.max_tokens > opts.maxTokensCap) out.max_tokens = opts.maxTokensCap;
+      // 用户在能力表对这个模型「关闭思考」：直通也照办；思考预算要小于输出上限（截过上限后可能不再成立，网关会拒收）。
+      // 关思考用「小预算」写法：11-27 黄区实测 glm-5.3-flash 的 /v1/messages 对 disabled、不传、chat_template_kwargs 都照样思考（12/12），
+      // 只有 enabled + budget_tokens 1024 不出思考（3/3，首答快约一半）；网关以后改语义也只是少量思考，不会报错。
+      // 协议要求思考预算 ≥1024 且小于输出上限：上限不超过 1024 的小请求（后台起标题等）不带思考参数。
+      if (out.max_tokens <= 1024) delete out.thinking;
+      else if (gatewayConfig.noThinking.includes(model)) out.thinking = { type: 'enabled', budget_tokens: 1024 };
+      else if (out.thinking && Number(out.thinking.budget_tokens) >= out.max_tokens) out.thinking = { ...out.thinking, budget_tokens: Math.max(1024, Math.floor(out.max_tokens / 2)) };
+      Object.defineProperty(out, KIND, { value: 'claude', enumerable: false });
+      Object.defineProperty(out, NATIVE_MESSAGES, { value: true, enumerable: false });
+      return out;
+    },
+    convertResponse(response, options) { return options?.upstreamRequest?.[NATIVE_MESSAGES] ? response : adapter.convertResponse(response, options); },
+  });
+  let claudeGateway = null; // 等 logged 定义后赋值（流式、非流式两个入口共用）
   const logged = (name, adapter) => ({ ...adapter, convertRequest(body) {
     try { return adapter.convertRequest(body); }
     catch (error) { const msg = String(error?.message || 'conversion failed').slice(0, 160); log(`${name} request rejected before upstream: ${msg}`); stats.failed++; stats.lastError = `${name}: ${msg}`; throw error; }
   } });
+  claudeGateway = claudeRoute(logged('claude', claude));
   const proxy = createProxy({ provider: gated, accessKey: key, timeoutMs: opts.timeoutMs, maxBodyBytes: 64 * 1024 * 1024,
     onEvent: e => { if (e.type !== 'request_finished') log(`proxy event ${e.type}`); else if (e.detail) log(`upstream HTTP ${e.status} reason: ${e.detail}`); },
-    protocolAdapters: { '/v1/messages': logged('claude', claude), '/v1/responses': logged('codex', codex), '/v1/chat/completions': logged('dsh', dsh) },
+    protocolAdapters: { '/v1/messages': claudeGateway, '/v1/responses': logged('codex', codex), '/v1/chat/completions': logged('dsh', dsh) },
     // DSH 走公司模型：出字前的失败反代已经重试过，交回时用 DSH 不会再重试的状态码（transport.mjs clientStatus）。
     // 网关会话不动：网关有自己的首包等待和重试，DSH 网关路线的客户端重试是 0 次。
     noClientRetry: pathname => pathname === '/v1/chat/completions' && !als.getStore()?.gateway });
@@ -599,6 +624,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
           AI_HUB_API_GATEWAY_MODELS: Array.isArray(b.models) ? b.models.join(',') : '', AI_HUB_API_GATEWAY_MODEL: b.model,
           AI_HUB_API_GATEWAY_FIRST_MS: b.firstTokenMs && typeof b.firstTokenMs === 'object' ? JSON.stringify(b.firstTokenMs) : '', AI_HUB_API_GATEWAY_GROUP: b.group || '',
           AI_HUB_API_GATEWAY_NO_THINK: Array.isArray(b.noThinking) ? b.noThinking.join(',') : '',
+          AI_HUB_API_GATEWAY_NATIVE: Array.isArray(b.nativeMessages) ? b.nativeMessages.join(',') : '',
           AI_HUB_API_GATEWAY_HEADER_TIMEOUT_MS: gatewayTimeoutEnv }) : null, 'updated by Hub');
         return json(res, 200, { ok: true, gateway: status().gateway });
       }
@@ -631,8 +657,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
           try {
             body.stream = true;
             const original = { ...body };
-            const converted = logged('claude', claude).convertRequest(body);
-            const result = await completeNonStreamingMessage({ complete: (b, o) => gated.complete(b, o), adapter: claude, converted, original, deadline });
+            const converted = claudeGateway.convertRequest(body);
+            const result = await completeNonStreamingMessage({ complete: (b, o) => gated.complete(b, o), adapter: claudeGateway, converted, original, deadline });
             if (result.passthrough) { const up = result.passthrough; res.writeHead(up.status, { 'content-type': up.headers.get('content-type') || 'application/json' }); res.end(Buffer.from(await up.arrayBuffer())); return; }
             return json(res, 200, result.message);
           } catch (error) {

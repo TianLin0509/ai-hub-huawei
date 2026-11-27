@@ -2118,7 +2118,35 @@ const terminalOutputBatcher = new TerminalOutputBatcher({
 
 sessionManager.onFocusChanged = (sessionId) => { if (sessionId) terminalOutputBatcher.flush(sessionId); };
 
+// 这个会话就免于闲置休眠（含内存压力档、低开销软上限），卡片显示「WeLink」小标；断开、退出、休眠即清除。
+const welinkLinkDetector = require('./core/welink-native/link-detector').createWelinkLinkDetector({
+  dataDir: getHubDataDir(),
+  // CodeAgent 整屏重绘：输出停下后（至少隔 2 秒）把会话终端输出的最后 64 KB 回放成当前这一屏再判断（只在内存里用，不落盘）。
+  readScreen: sessionId => {
+    const s = sessionManager.sessions?.get?.(sessionId);
+    const text = sessionManager.getSessionBuffer(sessionId);
+    if (!s || text == null) return null;
+    return require('./core/welink-native/screen').renderScreenLines({ text, cols: Number(s.pty?.cols) || 120, rows: Number(s.pty?.rows) || 30 });
+  },
+  isEligible: sessionId => {
+    const s = sessionManager.sessions?.get?.(sessionId);
+    return !!s && isCodeAgentKind(s.info?.kind) && s.info?.codeagentRunMode !== 'serve';
+  },
+  onChange: ({ sessionId, linked, reason }) => {
+    console.log(`[welink-native] ${String(sessionId).slice(0, 8)} ${linked ? 'linked' : 'unlinked'} (${reason})`);
+    const s = sessionManager.sessions?.get?.(sessionId);
+    // 只推界面、不落盘：这是运行态，重启后以新进程的屏幕为准。
+    if (s && s.info) sendToRenderer('session-updated', { session: sessionManager._toPublic(s.info) });
+    try { global.__welinkNative?.onLinkChanged?.({ sessionId, linked, reason }); } catch {}
+  },
+});
+global.__welinkLinkDetector = welinkLinkDetector;
+sessionManager.welinkLinkedLookup = sessionId => welinkLinkDetector.isLinked(sessionId);
+sessionManager.onInput = (sessionId, data) => welinkLinkDetector.noteInput(sessionId, data);
+sessionManager.on('session-exited', event => welinkLinkDetector.noteExit(event && event.sessionId, 'exit'));
+
 sessionManager.onData = (sessionId, data, seq) => {
+  welinkLinkDetector.noteOutput(sessionId, data);
   // 未聚焦的群聊成员**降频转发，不再丢弃**。旧实现直接 return，让 xterm 在未聚焦
   // 期间收不到任何数据，切过去只能靠回灌一段截断的 ANSI 流重建画面 —— 对 alt-screen
   // TUI 来说基本只剩最后一屏，用户表现为"滚不上去 / 渲染卡住"。
@@ -2169,6 +2197,7 @@ sessionManager.onSessionClosed = (sessionId, meetingId, exitInfo) => {
 };
 
 sessionManager.onSessionSuspended = (sessionId, meetingId, session, exitInfo) => {
+  welinkLinkDetector.noteExit(sessionId, 'suspended');
   sessionModelCreationConfirmation.cancelSession(sessionId);
   require('./core/group-chat-watcher').cancelPendingModelSubmissions(sessionId);
   if (session?.suspendReason !== 'account-switch' || !codexAccountSwitch.isSwitching(sessionId)) codexAccountSwitch.forget(sessionId);
@@ -2640,6 +2669,7 @@ sessionAutoSuspendScheduler = createSessionAutoSuspendScheduler({
     meetingManager,
     studyBridge,
     getCompanyMeetings: () => companyAssistantService && companyAssistantService.meetings,
+    getWelinkLinkedIds: () => welinkLinkDetector.linkedIds(),
   }),
   // 休眠记录同时写进日志文件（2026-10-16）：以前只打在控制台，公司那边查日志以为 Hub 没有自动休眠。
   logger: (() => {
@@ -3258,6 +3288,7 @@ lowOverheadController = require('./main/low-overhead-controller.js').createLowOv
   getProtectedSessionIds: () => collectProtectedSessionIds({
     agentLeagueBridge, groupChatDispatcher, loopEngine: global.__loopEngine, meetingManager, studyBridge,
     getCompanyMeetings: () => companyAssistantService && companyAssistantService.meetings,
+    getWelinkLinkedIds: () => welinkLinkDetector.linkedIds(),
   }),
   // 组队负责人与成员由组队流程自己休眠和唤醒，软上限不碰。
   isExemptSession: sessionId => !!(global.__teamService?.teamOfMember?.(sessionId) || global.__teamService?.teamOfLead?.(sessionId)),
@@ -3435,6 +3466,12 @@ try {
     // start 失败（例如磁盘满）不能连带让下面的 IPC 注册落空，否则助理、会议、会议室、PPT 页全部不可用。
     if (optionalFeatures.get('assistant')) { try { companyAssistantService.start(); } catch (error) { console.error('[company-assistant] 启动出错，继续注册接口：', error && error.message); } }
     const bridgeMcpPlan = sessionManager.extraMcpProvider;
+    // WeLink 私聊助理：系统睡眠唤醒、锁屏解锁时立即重连（睡过觉的长连接多半已断，不等 5 分钟收包超时）。没绑定或没开时 wake 什么都不做。
+    // powerMonitor 要在 app ready 之后才能用；挂监听出错也不能影响后面的助理接口注册。
+    app.whenReady().then(() => {
+      try { for (const event of ['resume', 'unlock-screen']) powerMonitor.on(event, () => { try { companyAssistantService?.bot?.wake?.(event); } catch (error) { console.warn('[welink-bot] wake:', error && error.message); } }); }
+      catch (error) { console.warn('[welink-bot] powerMonitor 监听没挂上：', error && error.message); }
+    }).catch(() => {});
     sessionManager.setExtraMcpProvider(request => companyAssistantService.sessionPlan(request)
       || companyAssistantService.tools.petSessionPlan(request, bridgeMcpPlan ? bridgeMcpPlan(request) : null));
     require('./main/ipc/company-assistant-handlers').registerCompanyAssistantIpc(ipcMain, companyAssistantService);

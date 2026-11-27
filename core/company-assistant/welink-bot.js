@@ -19,6 +19,12 @@ const { createHmac, randomUUID, createHash } = require('node:crypto');
 
 const CHANNEL = 'opencode';
 const RX_IDLE_MS = 5 * 60000, HEARTBEAT_MS = 30000, CONNECT_TIMEOUT_MS = 10000, POLL_MS = 2000, MAX_ROUNDS = 3;
+// 断线根治（2026-11-27 同事反馈「静置几小时自动断开」）：重连不设永久上限，退避 5 秒起翻倍、封顶 5 分钟；
+// 看门狗每 30 秒看一次——非就绪卡住超过 2 分钟、或既没连接也没排着重连，就立即重连；
+// 系统睡眠唤醒、锁屏解锁、网络恢复时立即重连（已就绪时解锁、网络恢复只先探一次心跳，15 秒没回音再重连）。
+const BACKOFF_MIN_MS = 5000, BACKOFF_MAX_MS = 5 * 60000, WATCHDOG_MS = 30000, STUCK_MS = 2 * 60000, PROBE_MS = 15000;
+// 唤醒时的「在途窗口」：发起连接后这么久之内不重复打断（连接超时 10 秒 + 余量）；同一助手被别处占用后等 1 分钟再抢。
+const IN_FLIGHT_MS = CONNECT_TIMEOUT_MS + 5000, DUPLICATE_HOLD_MS = 60000;
 
 function apiHost(domain) { return domain ? `api.inner.welink.${domain}` : ''; }
 function authProtocol(ak, sk, now = Date.now()) {
@@ -27,6 +33,9 @@ function authProtocol(ak, sk, now = Date.now()) {
   const sign = createHmac('sha256', sk).update(`${ak}${ts}${nonce}`).digest('base64');
   return 'auth.' + Buffer.from(JSON.stringify({ ak, ts, nonce, sign })).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
+// 掐断一条连接：能 terminate 就直接掐（半开连接 close() 要等关闭握手超时），否则 close。
+function kill(ws) { try { if (ws && typeof ws.terminate === 'function') ws.terminate(); else ws?.close(); } catch { /* 已断 */ } }
+function defaultIsOnline() { try { const { net } = require('electron'); return typeof net?.isOnline === 'function' ? net.isOnline() : true; } catch { return true; } }
 function macAddress() {
   for (const list of Object.values(os.networkInterfaces())) for (const i of list || []) if (!i.internal && i.mac && i.mac !== '00:00:00:00:00:00') return i.mac;
   return '';
@@ -76,6 +85,45 @@ function parseInbound(m) {
     text: typeof inner.text === 'string' ? inner.text : '',
   };
 }
+// 远端关闭原因、拒绝理由：只认已知的几个标识，其余记 other（有原文但不记）。
+const KNOWN_REASONS = new Set(['duplicate_connection', 'invalid_sign', 'sign_error', 'auth_failed', 'unauthorized', 'expired', 'timestamp_expired', 'kicked', 'server_shutdown', 'idle_timeout']);
+function reasonKind(reason) {
+  const r = String(reason || '').trim();
+  if (!r) return 'none';
+  return KNOWN_REASONS.has(r.toLowerCase()) ? r.toLowerCase() : 'other';
+}
+// 连接错误：只记类别。
+function errorKind(ev) {
+  const code = String(ev?.error?.code || ev?.code || '');
+  if (/^E[A-Z_]{2,30}$/.test(code)) return code.toLowerCase(); // 日志白名单只收小写标识
+  const msg = String(ev?.message || ev?.error?.message || '');
+  if (/certificate|self.signed|tls|ssl/i.test(msg)) return 'tls';
+  if (/timed? ?out/i.test(msg)) return 'timeout';
+  if (/refused/i.test(msg)) return 'refused';
+  if (/getaddrinfo|ENOTFOUND|dns/i.test(msg)) return 'dns';
+  if (/reset|hang ?up/i.test(msg)) return 'reset';
+  const http = /\b([45]\d\d)\b/.exec(msg);
+  if (http) return 'http-' + http[1];
+  return msg ? 'other' : 'none';
+}
+// 日志字段白名单：数字、布尔、null，以及本机自己定的短标识（事件阶段、类别）；其余一律丢掉。
+const LOG_KEYS = new Set(['code', 'reasonKind', 'kind', 'was', 'phase', 'reason', 'type', 'ms', 'delayMs', 'backoffMs', 'uptimeMs', 'rx', 'hbSent', 'hbReplies', 'wsPongs', 'lastRxAgoMs', 'keys']);
+function safeLogDetail(detail) {
+  const out = {};
+  for (const [k, v] of Object.entries(detail || {})) {
+    if (!LOG_KEYS.has(k)) continue;
+    if (v === null || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v))) out[k] = v;
+    else if (typeof v === 'string' && (k === 'keys' ? v.length <= 400 && /^[A-Za-z?:{},]*$/.test(v) : /^[a-z][a-z0-9_-]{0,39}$/.test(v))) out[k] = v;
+  }
+  return out;
+}
+// 帧的「形状」：只取字段名和类型（两层），不取任何值——用来从真机日志里补文件类消息的协议。
+// 字段名也只收纯字母（像 fileUrl、msgType），带数字、符号的记成「?」，免得把值当成键带出来。
+function payloadShape(m) {
+  const name = k => /^[A-Za-z]{1,24}$/.test(k) ? k : '?';
+  const shape = (o, depth) => Object.entries(o || {}).slice(0, 30).map(([k, v]) => name(k) + ':' + (v && typeof v === 'object' && !Array.isArray(v) && depth < 1 ? '{' + shape(v, depth + 1) + '}' : Array.isArray(v) ? 'array' : typeof v)).join(',');
+  return shape(m && typeof m.payload === 'object' ? m.payload : {}, 0).slice(0, 400);
+}
 const fallbackTsid = entry => 'hub-' + createHash('sha1').update(String(entry)).digest('hex').slice(0, 16);
 
 // wss 要认公司内部根证书：Node 自带的证书表里没有，叠加 Windows 系统证书（Node 22+ 有 getCACertificates）。
@@ -103,7 +151,14 @@ class WelinkBot {
     this.phase = 'idle'; this.reg = null; this.regTimer = null; this.gen = 0; this.lastRx = 0;
     this.onChat = null; // PhoneChannel 挂上来：收到私聊文字时调用
     this.onConfirmed = null; // 助理服务挂上来：扫码确认后自动开启手机对话
+    // 连接生命周期日志（<数据目录>/logs/welink-bot.log）：只记事件、关闭码、时长、计数与退避值，不记 AK/SK、不记消息正文。
+    this.logFn = inject.log || (deps.dataDir ? require('../window-keep-rendering').createWindowEventLog(path.join(deps.dataDir, 'logs', 'welink-bot.log'), { logger: {} }) : null);
+    this.isOnline = typeof inject.isOnline === 'function' ? inject.isOnline : defaultIsOnline;
+    this.watchdog = null; this.connectAt = 0; this.conn = null; this.wasOnline = true; this.probe = null; this.holdUntil = 0;
   }
+  // 日志只收白名单形状（审查 2026-11-27）：数字、布尔、本机自己定的短标识；远端给的原文（关闭原因、错误信息、拒绝理由）
+  // 一律先归成固定类别再记，任何其他字符串都丢掉——连接被拒或出错时，远端原文里可能带凭据或消息正文。
+  log(event, detail = {}) { try { this.logFn?.(event, safeLogDetail(detail)); } catch { /* 写日志失败不影响连接 */ } }
   credFile() { return path.join(this.a.dir, 'welink-bot.bin'); }
   state() { return { name: '', createdAt: 0, routes: {}, last: '', lastError: '', readyAt: 0, ...this.a.read('welink-bot.json', {}) }; }
   save(patch) { const s = { ...this.state(), ...patch }; this.a.write('welink-bot.json', s); return s; }
@@ -164,24 +219,82 @@ class WelinkBot {
     if (!this.hasCred()) return;
     this.stopped = false;
     if (!this.ws) this.connect();
+    if (!this.watchdog && !this.manual) { this.watchdog = setInterval(() => this.tick(), WATCHDOG_MS); this.watchdog.unref?.(); }
   }
   close() {
     this.gen += 1; this.stopped = true; this.stopRegister();
     clearTimeout(this.retry); this.retry = null; clearInterval(this.hb); this.hb = null;
+    clearInterval(this.watchdog); this.watchdog = null; clearTimeout(this.probe); this.probe = null;
     const ws = this.ws; this.ws = null; this.phase = 'idle';
+    if (ws) this.log('stop', this.connStats());
     try { ws?.close(); } catch { /* 已断 */ }
+  }
+  // 本次连接的统计（只有计数和时长）：收到几个包、发了几次心跳、服务端回过几次心跳、距上次收包多久。
+  connStats() {
+    const c = this.conn; if (!c) return {};
+    const t = this.now();
+    return { uptimeMs: c.readyAt ? t - c.readyAt : 0, rx: c.rx, hbSent: c.hbSent, hbReplies: c.hbReplies, wsPongs: c.wsPongs || 0, lastRxAgoMs: this.lastRx ? t - this.lastRx : null };
+  }
+  // 强制断开当前连接并立即重连（看门狗、唤醒、收包超时用）。半开连接 close() 要等关闭握手超时，能 terminate 就直接掐断。
+  reconnectNow(reason) {
+    if (this.stopped || !this.hasCred()) return false;
+    this.log('reconnect-now', { reason, phase: this.phase, ...this.connStats() });
+    clearTimeout(this.retry); this.retry = null; clearInterval(this.hb); this.hb = null; clearTimeout(this.probe); this.probe = null;
+    const ws = this.ws; this.ws = null; this.phase = 'idle'; this.backoff = BACKOFF_MIN_MS;
+    kill(ws);
+    this.a.changed();
+    this.connect();
+    return true;
+  }
+  // 系统睡眠唤醒、锁屏解锁、网络恢复（main.js 的 powerMonitor 与看门狗调用）。
+  wake(reason) {
+    if (this.stopped || !this.hasCred()) return;
+    // 刚发起的连接还在握手（睡醒、解锁接连触发时常见）：不打断，等它自己出结果；
+    // 同一助手被别处占用后的 1 分钟等待期内也不抢（唤醒不能打穿这段退避）。
+    const inFlight = this.ws && this.phase !== 'ready' && this.now() - this.connectAt < IN_FLIGHT_MS;
+    if (inFlight || this.now() < this.holdUntil) { this.log('wake-skip', { reason, phase: this.phase }); return; }
+    this.log('wake', { reason, phase: this.phase });
+    // 睡过觉的连接多半已经死了，直接重连；解锁、网络恢复时若还就绪，先发一次心跳探一探，15 秒一个包都没收到再重连。
+    if (reason === 'resume' || this.phase !== 'ready' || !this.ws) { this.reconnectNow(reason); return; }
+    const before = this.lastRx, ws = this.ws;
+    this.sendHeartbeat();
+    clearTimeout(this.probe);
+    if (this.manual) return;
+    this.probe = setTimeout(() => this.probeCheck(before, reason, ws), PROBE_MS);
+    this.probe.unref?.();
+  }
+  // 探针晚到时先核对还是不是同一条连接：期间已重连过就作废，不掐新连接。
+  probeCheck(before, reason, ws = this.ws) {
+    this.probe = null;
+    if (this.stopped || this.ws !== ws || !ws) return;
+    if (this.lastRx === before) this.reconnectNow(reason + '-probe-silent');
+  }
+  // 看门狗（每 30 秒；单测直接调）：卡在连接中 / 注册中超过 2 分钟、或既没连接也没排着重连，就立即重连；顺带看网络是否刚恢复。
+  tick() {
+    if (this.stopped || !this.hasCred() || this.credBroken) return null; // 凭据读不出来时重连也没用，等用户重新绑定
+    let online = true; try { online = this.isOnline() !== false; } catch { /* 拿不到就当在线 */ }
+    const back = online && !this.wasOnline; this.wasOnline = online;
+    if (!online) return 'offline';
+    if (back) { this.wake('network'); return 'network'; }
+    if (this.ws && this.phase !== 'ready' && this.now() - this.connectAt > STUCK_MS) { this.reconnectNow('watchdog-stuck-' + this.phase); return 'stuck'; }
+    if (!this.ws && !this.retry && !this.manual) { this.reconnectNow('watchdog-lost'); return 'lost'; }
+    return null;
   }
   forget() { this.close(); try { fs.unlinkSync(this.credFile()); } catch { /* 没有 */ } this.a.write('welink-bot.json', {}); this.reg = null; this.a.changed(); }
   connect() {
     const c = this.cred();
-    if (!c) { this.save({ lastError: '助手凭据读不出来，请重新创建助手' }); return; }
+    if (!c) { this.credBroken = true; this.save({ lastError: '助手凭据读不出来，请重新创建助手' }); this.log('cred-unreadable'); return; }
+    this.credBroken = false;
     let ws;
     try {
       const WS = this.WS || require('ws');
       ws = new WS(this.gateway(), [authProtocol(c.ak, c.sk, this.now())], tlsOptions());
     } catch (e) { this.save({ lastError: '连不上 WeLink：' + e.message }); this.later(); return; }
-    this.ws = ws; this.phase = 'connecting';
-    const timer = setTimeout(() => { if (this.ws === ws && this.phase !== 'ready') { this.save({ lastError: '连接 WeLink 超时' }); try { ws.close(); } catch { /* */ } } }, CONNECT_TIMEOUT_MS);
+    clearTimeout(this.probe); this.probe = null; // 新连接不继承旧连接的探针
+    this.ws = ws; this.phase = 'connecting'; this.connectAt = this.now();
+    this.conn = { at: this.connectAt, readyAt: 0, rx: 0, hbSent: 0, hbReplies: 0, wsPongs: 0 };
+    this.log('connect', { backoffMs: this.backoff });
+    const timer = setTimeout(() => { if (this.ws === ws && this.phase !== 'ready') { this.save({ lastError: '连接 WeLink 超时' }); this.log('connect-timeout', { phase: this.phase }); kill(ws); } }, CONNECT_TIMEOUT_MS);
     timer.unref?.();
     // 旧连接（已被关掉或替换）晚到的事件一律不理：不会重新就绪、不会触发提问、不会起心跳。
     const live = () => this.ws === ws && !this.stopped;
@@ -189,50 +302,79 @@ class WelinkBot {
       if (!live()) return;
       this.send1({ type: 'register', deviceName: 'ai-hub-assistant', os: process.platform, toolType: CHANNEL, toolVersion: 'ai-hub', sdkVersion: 'ai-hub', macAddress: this.mac() });
       this.phase = 'registering';
+      this.log('open', { ms: this.now() - this.connectAt });
     });
     ws.addEventListener('message', ev => { if (live()) this.onFrame(ev.data); });
-    ws.addEventListener('close', () => {
+    ws.addEventListener('close', ev => {
       clearTimeout(timer);
       if (this.ws !== ws) return;
       clearInterval(this.hb); this.hb = null; this.ws = null;
       const was = this.phase; this.phase = 'idle';
-      if (was === 'ready') this.backoff = 5000;
+      if (was === 'ready') this.backoff = BACKOFF_MIN_MS;
+      this.log('close', { code: Number(ev && ev.code) || 0, reasonKind: reasonKind(ev && ev.reason), was, ...this.connStats() });
       this.a.changed();
       this.later();
     });
-    ws.addEventListener('error', () => { /* 随后会收到 close */ });
+    ws.addEventListener('error', ev => { if (this.ws === ws) this.log('error', { kind: errorKind(ev) }); /* 随后会收到 close */ });
+    // 协议层 pong（ws 库的 ping/pong）：服务端不回应用层心跳时，靠它也能确认连接还活着，免得每 5 分钟误判收包超时重连一次。
+    if (typeof ws.on === 'function') ws.on('pong', () => { if (!live()) return; this.lastRx = this.now(); if (this.conn) { this.conn.wsPongs += 1; if (this.conn.wsPongs === 1) this.log('ws-pong'); } });
   }
   later() {
     if (this.stopped || this.retry || this.manual) return;
-    this.retry = setTimeout(() => { this.retry = null; if (!this.stopped && !this.ws) this.connect(); }, this.backoff);
+    const delay = this.backoff;
+    this.retry = setTimeout(() => { this.retry = null; if (!this.stopped && !this.ws) this.connect(); }, delay);
     this.retry.unref?.();
-    this.backoff = Math.min(this.backoff * 2, 60000);
+    this.backoff = Math.min(this.backoff * 2, BACKOFF_MAX_MS);
+    this.log('retry', { delayMs: delay });
   }
   send1(o) { try { this.ws.send(JSON.stringify(o)); return true; } catch { return false; } }
+  heartbeatTick() {
+    if (!this.ws) return;
+    if (this.now() - this.lastRx > RX_IDLE_MS) {
+      this.save({ lastError: '5 分钟没收到 WeLink 的任何消息，正在重连' });
+      this.reconnectNow('rx-idle');
+      return;
+    }
+    this.sendHeartbeat();
+  }
+  // 应用层心跳 + 协议层 ping 一起发；回没回分别计在 hbReplies、wsPongs（关闭时写进日志，用来判断服务端到底回哪种）。
+  sendHeartbeat() {
+    if (this.send1({ type: 'heartbeat', seq: this.now() }) && this.conn) this.conn.hbSent += 1;
+    try { if (typeof this.ws?.ping === 'function') this.ws.ping(); } catch { /* 不支持就算了 */ }
+  }
   onFrame(raw) {
     let m; try { m = JSON.parse(typeof raw === 'string' ? raw : Buffer.from(raw).toString('utf8')); } catch { return; }
     if (!m || typeof m !== 'object') return;
     this.lastRx = this.now();
+    if (this.conn) this.conn.rx += 1;
     if (m.type === 'register_ok' || m.type === 'ready') {
-      this.phase = 'ready'; this.backoff = 5000; this.save({ readyAt: this.now(), lastError: '' }); this.a.changed();
+      if (this.phase === 'ready') return; // register_ok 和 ready 都来时只就绪一次，不重复起心跳
+      this.phase = 'ready'; this.backoff = BACKOFF_MIN_MS; this.save({ readyAt: this.now(), lastError: '' }); this.a.changed();
+      if (this.conn) this.conn.readyAt = this.now();
+      this.log('ready', { type: m.type === 'ready' ? 'ready' : 'register_ok', ms: this.now() - this.connectAt });
       clearInterval(this.hb);
-      // 半开连接（网断了却没收到关闭）：5 分钟一个包都没收到就主动断开重连。
-      this.hb = setInterval(() => {
-        if (this.now() - this.lastRx > RX_IDLE_MS) { this.save({ lastError: '5 分钟没收到 WeLink 的任何消息，正在重连' }); try { this.ws?.close(); } catch { /* */ } return; }
-        this.send1({ type: 'heartbeat', seq: this.now() });
-      }, HEARTBEAT_MS);
+      // 半开连接（网断了却没收到关闭）：5 分钟一个包都没收到就主动断开重连（heartbeatTick）。
+      this.hb = setInterval(() => this.heartbeatTick(), HEARTBEAT_MS);
       this.hb.unref?.();
       return;
     }
     if (m.type === 'register_rejected') {
+      this.log('register-rejected', { reasonKind: reasonKind(m.reason) });
       // 同一个助手同时只能连一处（公司真机实测 reason=duplicate_connection，关闭码 4409）：另一台电脑或另一个 Hub 正连着，
       // 那边断开后这边自动接上，每分钟试一次。其他原因（身份作废等）才需要重新创建。
-      if (m.reason === 'duplicate_connection') { this.save({ lastError: '这个助手正在另一处连着（另一台电脑或另一个 Hub），那边断开后自动接上' }); this.backoff = 60000; }
-      else { this.save({ lastError: `WeLink 拒绝了这个助手身份（${String(m.reason || '未说明原因').slice(0, 40)}），请重新创建助手` }); this.stopped = true; }
-      try { this.ws?.close(); } catch { /* */ }
+      if (m.reason === 'duplicate_connection') { this.save({ lastError: '这个助手正在另一处连着（另一台电脑或另一个 Hub），那边断开后自动接上' }); this.backoff = 60000; this.holdUntil = this.now() + DUPLICATE_HOLD_MS; }
+      else {
+        this.save({ lastError: `WeLink 拒绝了这个助手身份（${String(m.reason || '未说明原因').slice(0, 40)}），请重新创建助手` });
+        // 身份作废：停下，看门狗和探针一并收掉（不再空转）。
+        this.stopped = true; clearInterval(this.watchdog); this.watchdog = null; clearTimeout(this.probe); this.probe = null;
+      }
+      kill(this.ws);
       return;
     }
-    if (m.type === 'heartbeat') return;
+    if (m.type === 'heartbeat' || m.type === 'heartbeat_ack' || m.type === 'pong') {
+      if (this.conn) { this.conn.hbReplies += 1; if (this.conn.hbReplies === 1) this.log('heartbeat-reply', { type: m.type === 'pong' ? 'pong' : m.type === 'heartbeat_ack' ? 'heartbeat_ack' : 'heartbeat' }); }
+      return;
+    }
     const r = parseInbound(m);
     // 每个对话记下网关给的会话编号：回复和之后的主动提醒都靠它投递，重启后也要能用，所以落盘。
     const st = this.state(), prev = st.routes[r.entry] || {};
@@ -247,7 +389,10 @@ class WelinkBot {
     if (r.action === 'query_slash_commands') { this.send1({ type: 'slash_commands_result', toolSessionId: route.tsid, commands: [] }); return; }
     if (r.action !== 'chat') return;
     if (r.kind === 'group') { this.reply(r.entry, '在群里我先不接话，请直接私聊我。'); return; }
-    void Promise.resolve(this.onChat?.({ text: r.text, sender: r.sender, entry: r.entry, messageId: r.messageId })).catch(e => console.warn('[welink-bot] chat', e.message));
+    // 文件、图片等非文字消息：网关下行帧里文件字段的格式还没拿到实测样本，先只记字段名（不记内容）用来补协议，并回一行提示。
+    const nonText = !r.text.trim();
+    if (nonText) this.log('non-text-chat', { keys: payloadShape(m) });
+    void Promise.resolve(this.onChat?.({ text: r.text, sender: r.sender, entry: r.entry, messageId: r.messageId, ...(nonText ? { nonText: true } : {}) })).catch(e => console.warn('[welink-bot] chat', e.message));
   }
   // 发到某个对话；不传 entry 就发到最近一次私聊（主动提醒用）。
   // entry 也可以直接传当时记下的路由（{tsid, wsid}）：同一私聊里网关换了会话编号时，回答仍回到提问那一轮。
@@ -275,4 +420,4 @@ function qrImage(text) {
   return qr.createDataURL(5, 4);
 }
 
-module.exports = { WelinkBot, qrImage, parseInbound, authProtocol, apiHost, CHANNEL };
+module.exports = { WelinkBot, qrImage, parseInbound, authProtocol, apiHost, CHANNEL, safeLogDetail, reasonKind, errorKind, BACKOFF_MIN_MS, BACKOFF_MAX_MS, STUCK_MS, RX_IDLE_MS };

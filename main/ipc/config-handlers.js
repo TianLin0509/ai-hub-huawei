@@ -648,7 +648,13 @@ function registerConfigIpc(ipcMain, deps) {
     });
     // 打开设置时刷新网关公开目录（不用 key、不耗额度，约 0.1 秒）；拿不到保留上一版。
     ipcMain.handle('api-gateway:catalog', async () => {
-      try { const r = await gateway.refreshCatalog(gatewayDir()); return { ok: r.ok, stale: r.stale, code: r.code, ...gatewayPayload() }; }
+      try {
+        const before = gateway.nativeMessages(gatewayDir()).join(',');
+        const r = await gateway.refreshCatalog(gatewayDir());
+        // 目录新声明了 anthropic 接口的模型（直通名单变了）：热更新给反代，不等下次重启。
+        if (r.ok && companyProxyService && gateway.read(gatewayDir()).keySet && gateway.nativeMessages(gatewayDir()).join(',') !== before) await companyProxyService.applyGatewayChange().catch(() => {});
+        return { ok: r.ok, stale: r.stale, code: r.code, ...gatewayPayload() };
+      }
       catch (error) { return { ok: false, error: error.message, ...gatewayPayload() }; }
     });
     ipcMain.handle('api-gateway:healthcheck', () => startHealthcheck());

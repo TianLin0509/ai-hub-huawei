@@ -1,0 +1,53 @@
+
+  ≡ opentui: D:\welink-native-lab\work │ D:\welink-native-lab\work                      12 mcp · 26 hooks │ ? help       Overview      Messages   ⚙
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀   ────────────────────────────────
+                                                                                                                        ▾ Stats
+ ┃                                                                                                                      Context                   --
+ ┃  /welink                                                                                                             ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ┃  1分钟前                                                                                                             Credit      19,573.5 (97.9%)
+ ┃                                                                                                                      ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                                                                                                                        Runtime             00:00:00
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                     »
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+   连接WeLink                                                                                                   ✕
+   Connect to Welink                                                                                                    ──────────────────────────
+                                                                                                                        SESSION ***
+   ❯ Scan QR code to create a new bot automatically (recommended)                                                               ***
+     Enter existing App ID and App Secret ***                                                                      VERSION         1.2615.02.05
+   ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                                                              Update detected
+   Navigate ↑↓ | Select 1/2 | Confirm enter | Back esc
+
+
+

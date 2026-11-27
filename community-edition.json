@@ -38,9 +38,13 @@
     "sources": []
   },
   "releaseNotes": [
-    "新增：opencode 终端编码 Agent 作为会话后端（启动中心可选；一键安装从公司内源下载；可接公司模型与 API 网关）"
+    "部门 API 网关：Claude Code 会话使用 glm-5.3-flash 时改走网关原生接口，实测任务耗时少约 26%、计费输入少约 67%（能用上网关缓存）",
+    "部门 API 网关：对 glm-5.3-flash「关闭思考」现在真正生效",
+    "WeLink 私聊助理断线自愈：断了一直重连（最长 5 分钟一试），睡醒、解锁、网络恢复立即重连，断开原因记日志",
+    "手机上可用 /new /model /dir /session /help；手机页可选「完整回答」（默认仍简洁）",
+    "在 CodeAgent 会话里用 /welink 连上 WeLink 个人助手后，该会话不再被闲置休眠"
   ],
-  "version": "5.6.132",
+  "version": "5.6.133",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

@@ -226,13 +226,13 @@ class CompanyProxyService {
     this.proxy().applyNoProxy(env);
     // API 网关（部门 API key）：地址、模型表和解密后的 Key 只经环境变量交给反代进程，不写文件、不进日志。
     for (const name of ['AI_HUB_API_GATEWAY_URL', 'AI_HUB_API_GATEWAY_KEY', 'AI_HUB_API_GATEWAY_MODELS', 'AI_HUB_API_GATEWAY_MODEL',
-      'AI_HUB_API_GATEWAY_FIRST_MS', 'AI_HUB_API_GATEWAY_GROUP', 'AI_HUB_API_GATEWAY_NO_THINK']) delete env[name];
+      'AI_HUB_API_GATEWAY_FIRST_MS', 'AI_HUB_API_GATEWAY_GROUP', 'AI_HUB_API_GATEWAY_NO_THINK', 'AI_HUB_API_GATEWAY_NATIVE']) delete env[name];
     const g = this.gatewaySettings();
     // 首字时间（一键体检测的）与分组：反代据此定各模型的首包等待上限、把「分组下没有渠道」讲成人话。
     if (g) Object.assign(env, { AI_HUB_API_GATEWAY_URL: g.baseURL, AI_HUB_API_GATEWAY_KEY: g.apiKey,
       AI_HUB_API_GATEWAY_MODELS: g.models.join(','), AI_HUB_API_GATEWAY_MODEL: g.model,
       AI_HUB_API_GATEWAY_FIRST_MS: JSON.stringify(g.firstTokenMs || {}), AI_HUB_API_GATEWAY_GROUP: g.group || '',
-      AI_HUB_API_GATEWAY_NO_THINK: (g.noThinking || []).join(',') });
+      AI_HUB_API_GATEWAY_NO_THINK: (g.noThinking || []).join(','), AI_HUB_API_GATEWAY_NATIVE: (g.nativeMessages || []).join(',') });
     const args = [...systemCaArgs(), serverScript(), '--data-dir', this.dataDir, '--port', String(endpoint.port || 0), '--parent-pid', String(process.pid)];
     if (this.mock) args.push('--mock-upstream');
     this.setState('starting', '公司模型反代正在启动…');
@@ -364,7 +364,8 @@ class CompanyProxyService {
       const view = gateway.read(this.dataDir);
       const apiKey = view.keySet ? gateway.decryptKey(this.dataDir, this.safeStorage) : '';
       return apiKey ? { baseURL: view.baseURL, apiKey, models: gateway.allModels(this.dataDir), model: view.model,
-        firstTokenMs: gateway.firstTokenMs(this.dataDir), group: view.group || '', noThinking: view.noThinking || [] } : null;
+        firstTokenMs: gateway.firstTokenMs(this.dataDir), group: view.group || '', noThinking: view.noThinking || [],
+        nativeMessages: gateway.nativeMessages(this.dataDir) } : null;
     } catch (error) { this.logger.warn?.('[company-proxy] API gateway config unreadable: ' + error.message); return null; }
   }
 

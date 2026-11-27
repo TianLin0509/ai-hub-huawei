@@ -136,6 +136,13 @@ function contextOf(dataDir, id) {
   const catalog = catalogStore().cached(dataDir, read(dataDir).baseURL);
   return catalog ? catalogStore().contextOf(catalog, id) : catalogStore().DEFAULT_CONTEXT;
 }
+// 目录里声明支持 anthropic 接口（supported_endpoint_types 含 anthropic）的模型：本机代理对 Claude 会话原样直通 /v1/messages，
+// 能用上网关的提示缓存（2026-11-27 黄区实测 glm-5.3-flash 直通命中 98%，转 chat 命中 0）。目录拿不到就空表，照旧转 chat。
+function nativeMessages(dataDir) {
+  const catalog = catalogStore().cached(dataDir, read(dataDir).baseURL);
+  const anthropic = new Set((catalog?.models || []).filter(m => (m.endpoints || []).some(e => /^anthropic$/i.test(e))).map(m => m.id));
+  return allModels(dataDir).filter(id => anthropic.has(id));
+}
 function firstTokenMs(dataDir) {
   const results = healthStore().read(dataDir)?.results || {};
   return Object.fromEntries(Object.entries(results).filter(([, r]) => r?.ok && Number(r.firstMs) > 0).map(([id, r]) => [id, Number(r.firstMs)]));
@@ -292,4 +299,4 @@ function clear(dataDir) {
 
 module.exports = { DEFAULT_BASE_URL, PREFERRED_MODEL, file, read, configured, decryptKey, resolveModel, modelChoices,
   normalizeBaseUrl, normalizeKey, explainHttp, probe, usage, save, setModel, setThinking, clear, allModels, addCustomModel, removeCustomModel,
-  contextOf, firstTokenMs, chatOnly, catalogSummary, refreshCatalog, healthcheck, healthView };
+  contextOf, nativeMessages, firstTokenMs, chatOnly, catalogSummary, refreshCatalog, healthcheck, healthView };

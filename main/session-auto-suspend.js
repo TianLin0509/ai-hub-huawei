@@ -35,8 +35,14 @@ function rankMemoryPressureCandidates(items, perTick) {
     .slice(0, Math.max(0, perTick));
 }
 
-function collectProtectedSessionIds({ agentLeagueBridge, groupChatDispatcher, loopEngine, meetingManager, studyBridge, getCompanyMeetings } = {}) {
+function collectProtectedSessionIds({ agentLeagueBridge, groupChatDispatcher, loopEngine, meetingManager, studyBridge, getCompanyMeetings, getWelinkLinkedIds } = {}) {
   const protectedIds = new Set();
+
+  // 连接随终端进程生死，休眠一收走，手机那头就离线了——这是「静置几小时就断开」的直接原因。
+  try {
+    const ids = typeof getWelinkLinkedIds === 'function' ? getWelinkLinkedIds() : null;
+    if (ids && typeof ids[Symbol.iterator] === 'function') for (const sessionId of ids) if (sessionId) protectedIds.add(String(sessionId));
+  } catch {}
 
   // 公司助理「会议」：录制中或有在途理解/问答的会议会话（core/company-assistant/meeting.js protectedSessionIds）。
   // 助理会话在内存紧张时排最先休眠，不保护的话会议开到一半理解会话被收走，纪要停住。

@@ -1250,10 +1250,11 @@ sessionListEl.addEventListener('keydown', event => {
     const bridge = bridgeBadge(s.id);
     // 进展卡状态点 / 待拍板标签（2026-10-27，renderer/progress-view.js）：没有进展卡的会话不显示。悬停标题能看到白话现状。
     const progress = typeof window !== 'undefined' && typeof window.__progressBadgeFor === 'function' ? window.__progressBadgeFor(s.id) : null;
+    const welinkHtml = s.welinkLinked === true && !isDormant ? '<span class="wl-linked-badge" title="已连上 WeLink 个人助手：手机可以直接找它，不会被闲置休眠">WeLink</span>' : '';
     const bridgeHtml = bridge && bridge.role === 'restart' ? `<span class="bt-badge" data-state="${escapeHtml(bridge.state)}" data-role="${escapeHtml(bridge.role || '')}" title="${escapeHtml(bridge.sub)}">${escapeHtml(bridge.chip)}</span>` : '';
     div.innerHTML = _sessionKindHtml(s.kind, modelTxt, isDormant && !isResumePending && !issue ? 'dorm' : dotCls, dormantStateTip || runtimeTruthSummary(runtimeTruth), require('../core/codeagent-models').iconModelId(s), '', logoAccount, logoOverride)
       // 悬停标题显示全名（2026-10-24 用户：会话栏宽度有限，长名字被省略号截断）。
-      + '<span class="sl-title" title="' + escapeHtml(displayTitle + (route ? '\n' + route.text : '') + (progress ? '\n' + progress.tip : '')) + '">' + _warningHtml(anyWarning) + (progress ? progress.html : '') + bridgeHtml + escapeHtml(displayTitle) + '</span>'
+      + '<span class="sl-title" title="' + escapeHtml(displayTitle + (route ? '\n' + route.text : '') + (progress ? '\n' + progress.tip : '')) + '">' + _warningHtml(anyWarning) + (progress ? progress.html : '') + bridgeHtml + welinkHtml + escapeHtml(displayTitle) + '</span>'
       + timeHtml(s, showUnread ? Math.max(1, unreadCount) : 0);
     const teamTag = typeof window !== 'undefined' ? window.__teamUi?.rowTagHtml(s.id, sessionMap, getMeetings()) : '';
     if (teamTag) {

@@ -10844,6 +10844,7 @@ ipcRenderer.on('session-updated', (_e, { session }) => {
   if (claudeAccountChanged) schedulePersist();
 
   if (session.mcpProfile) local.mcpProfile = session.mcpProfile;
+  if (Object.hasOwn(session, 'welinkLinked')) local.welinkLinked = session.welinkLinked === true;
   if (session.permissionMode) local.permissionMode = session.permissionMode;
   if (typeof session.fastMode === 'boolean') local.fastMode = session.fastMode;
   if (session.codexSpeedTier) local.codexSpeedTier = session.codexSpeedTier;
