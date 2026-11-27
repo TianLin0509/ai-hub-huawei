@@ -38,9 +38,9 @@
     "sources": []
   },
   "releaseNotes": [
-    "新增「技能广场」Beta（左栏规则组）：员工助手里装好的技能、本机各家 AI 已装技能和 AgentCenter 汇到一处；员工助手技能按直接用、需改写、交员工助手执行分档，可一键导入到 CodeAgent、Claude、Codex 并随时移除；不联网、不上传"
+    "新增：opencode 终端编码 Agent 作为会话后端（启动中心可选；一键安装从公司内源下载；可接公司模型与 API 网关）"
   ],
-  "version": "5.6.131",
+  "version": "5.6.132",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false
