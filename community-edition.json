@@ -38,10 +38,9 @@
     "sources": []
   },
   "releaseNotes": [
-    "社区（Beta）改为三个子页：广场、我的团队、排行榜；广场里桌宠只带公开名片，不谈具体工作内容",
-    "新增「我的团队」：同在公司内网的同事按 IP 组队，团队内可发公告、互相提问、让桌宠代为分享文件夹（用法随文件一起送达），内容加密、双方完全可见，成员 IP 可随时修改"
+    "DSH 走 API 网关时单步输出上限放到 32768（GLM 想得多不再被截断后悄悄停下），Codex 走网关遇中途断流自动重发 2 次"
   ],
-  "version": "5.6.137",
+  "version": "5.6.138",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

@@ -225,7 +225,9 @@ function ensureCodexHome(dataDir, { model, projectDir, gateway = false }) {
     'requires_openai_auth = false',
     'supports_websockets = false',
     'request_max_retries = 0',
-    'stream_max_retries = 0',
+    // 网关偶尔在回答中途断流（11-28 黄区夜测 Codex·GLM 20 轮里 4 轮因此失败）；已经出字后反代没法重试，交给 Codex 自己重发这一步。
+    // 公司上游仍是 0：断流后反代会换号重试，Codex 再叠一层只会拉长等待。
+    `stream_max_retries = ${gateway ? 2 : 0}`,
     'stream_idle_timeout_ms = 600000',
     '',
     `[projects.${tomlString(projectKey)}]`,
@@ -279,7 +281,9 @@ function dshRoute({ dataDir, sessionId, model, account, gateway = false, midStre
     // 思考档位 low / medium / high 都给 DSH 选（反代照传给公司上游，2026-11-27 黄区实测上游接受 low）；默认仍是 high。
     providerConfig: { api: 'openai-completions', baseURL: origin(endpoint) + '/v1', apiKeyEnv: KEY_ENV,
       retryPolicy: { mode: 'normal', maxRetries: !gateway && midStreamRetry ? 2 : 0 }, reasoning: 'high',
-      models: ids.map(id => ({ id, contextWindow: contextOf(id), maxTokens: 16384, reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
+      // 单步输出上限：网关的 GLM 想得多，16384 常常想到一半就被截断，DSH 把它当成「本轮完成」直接停下（11-28 黄区夜测 12 轮失败里 9 轮）。
+      // 网关路线放到反代的全局上限 32768（Claude Code 走网关一直发 32000，网关接受）；公司上游实测 16384 够用，不动。
+      models: ids.map(id => ({ id, contextWindow: contextOf(id), maxTokens: gateway ? 32768 : 16384, reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
         compat: { supportsDeveloperRole: false, thinkingFormat: 'deepseek', supportsStore: false, maxTokensField: 'max_tokens' } })) },
     disabledPatches: DSH_DISABLED.map(id => ({ id, disabled: true })),
   };

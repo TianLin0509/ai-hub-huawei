@@ -119,6 +119,13 @@ test('会话环境：Claude 会话的 key 带 __gw、模型照网关表；Codex 
   assert.equal(dsh.model, 'qwen3.8-27b');
   assert.match(dsh.key, /__gw$/);
   assert.deepEqual(dsh.providerConfig.models.map(m => m.id), MODELS);
+  // 11-28 夜测：网关 GLM 常在 16384 处被截断、中途断流后 Codex 不重试——网关路线放宽，公司上游不动
+  assert.ok(dsh.providerConfig.models.every(m => m.maxTokens === 32768), '网关路线 DSH 单步输出上限 32768');
+  assert.match(fs.readFileSync(path.join(codexEnv.CODEX_HOME, 'config.toml'), 'utf8'), /stream_max_retries = 2/);
+  const companyCodex = {};
+  proxy.applyCodexEnv(companyCodex, { dataDir: dir, sessionId: 'sess-5', model: '', projectDir: dir });
+  assert.match(fs.readFileSync(path.join(companyCodex.CODEX_HOME, 'config.toml'), 'utf8'), /stream_max_retries = 0/);
+  assert.ok(proxy.dshRoute({ dataDir: dir, sessionId: 'sess-6', model: '' }).providerConfig.models.every(m => m.maxTokens === 16384));
 });
 
 test('验证 key 时网关先回响应头、正文卡住：在超时内结束并提示连不上，不会一直「正在验证」', async () => {
