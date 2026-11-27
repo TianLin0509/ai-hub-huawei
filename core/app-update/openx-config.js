@@ -9,6 +9,9 @@ module.exports = {
   enabledInEdition: true,
   api: 'https://openx.huawei.com/openxApi/project/version/release/query/',
   projectId: 7938,
+  // R55（2026-11-27）：版本索引发布的 id。内源的版本列表接口改为要求登录后，客户端用 by_id（匿名可读）读这个发布的描述来代替列表，
+  // 格式见 openx-source.js parseIndex，由发版流水线每次发布后更新。0 = 还没建，列表要求登录时如实提示、不兜底。
+  indexReleaseId: 12787,   // 2026-11-28 在内源建好的 hub-index 发布
   // 附件只接受这个站点同域名及其子域名的 https 地址。
   fileSite: 'https://openx.huawei.com/',
   // 内源上本产品的项目页（给用户的手动下载入口）。

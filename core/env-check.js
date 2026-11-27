@@ -431,7 +431,9 @@ function probeList(ctx) {
       if (!ok.length) {
         const why = require('./app-update/openx-source').userReason(bad[0] && bad[0].reason, { file: '版本清单' });
         return entry('app-update', TITLE, 'app-update', STATUS.bad, detail('读不到公司内源上的版本清单'), {
-          cause: why, steps: ['确认电脑连着公司网络（公司内网或 VPN）', '稍后点「重新检测」'], fixes: [{ label: '打开检查更新', act: 'open-update' }, RECHECK], raw: failText,
+          // 审查 P2-6：内源要求登录时不是网络问题，步骤改为手动下载 + 反馈，不再让用户查网络、重测。
+          cause: why, steps: /要求登录|未认证/.test(String(bad[0] && bad[0].reason)) ? ['在浏览器里打开内源项目页，手动下载安装包', '点「一键反馈」告诉维护人']
+            : ['确认电脑连着公司网络（公司内网或 VPN）', '稍后点「重新检测」'], fixes: [{ label: '打开检查更新', act: 'open-update' }, RECHECK], raw: failText,
         });
       }
       const head = `公司内源连得上${latest ? ' · 最新 v' + latest : ''}`;

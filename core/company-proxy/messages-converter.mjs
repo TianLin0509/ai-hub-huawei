@@ -37,7 +37,11 @@ export function convertMessagesRequest(body,{mapThinking,mapOutputConfig}={}){
  return out;
 }
 const stopReason=r=>{if(r==='tool_calls')return 'tool_use';if(r==='stop')return 'end_turn';if(r==='length')return 'max_tokens';throw fail(`Unsupported upstream finish reason: ${r}`,502);};
-const usage=u=>({input_tokens:u?.prompt_tokens??0,output_tokens:u?.completion_tokens??0});
+// 上游 chat 用量里的缓存命中（prompt_tokens_details.cached_tokens）按 Anthropic 口径拆开：input_tokens 只算没命中的部分，
+// 命中的放 cache_read_input_tokens。两者相加仍是上下文总量，自动压缩判断不变；不拆的话 Claude Code 永远显示缓存 0、按全价估花费
+// （2026-11-27 黄区实测公司上游同前缀第二次命中 11648/11710，Claude 入口回报里没有缓存字段）。
+const usage=u=>{const total=u?.prompt_tokens??0;const cached=Math.min(total,Math.max(0,Number(u?.prompt_tokens_details?.cached_tokens)||0));
+  return cached?{input_tokens:total-cached,cache_read_input_tokens:cached,output_tokens:u?.completion_tokens??0}:{input_tokens:total,output_tokens:u?.completion_tokens??0};};
 function reportUsage(callback,value){if(!callback)return;const warn=()=>process.stderr.write('Local proxy usage observer failed\n');try{Promise.resolve(callback(value)).catch(warn);}catch{warn();}}
 export function convertChatJson(body){
  const c=body.choices?.[0];if(!c?.message)throw fail('Missing upstream message',502);

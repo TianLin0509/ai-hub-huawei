@@ -73,6 +73,11 @@ test('Hub 侧清单现读反代存的目录；没有目录时是内置的两个'
     const codex = proxy.codexCatalog(proxy.companyModelIds(dataDir), undefined, proxy.companyModels(dataDir));
     assert.equal(codex.models.length, 3);
     assert.equal(codex.models[0].context_window, 128000, '上下文不超过以前的 128000');
+    // 2026-11-27：Codex 会话实际用 cap: Infinity，按目录输入上限放开（不再提前压缩、改写历史）
+    const open = proxy.codexCatalog(proxy.companyModelIds(dataDir), undefined, proxy.companyModels(dataDir), { cap: Infinity });
+    const ds = proxy.companyModels(dataDir).find(m => m.id === 'deepseek-v4.1-flash-1017');
+    assert.equal(open.models[1].context_window, ds.input > 0 ? ds.input : 128000);
+    assert.ok(open.models[1].context_window > 128000, '目录里 DeepSeek 输入上限大于 128000');
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 

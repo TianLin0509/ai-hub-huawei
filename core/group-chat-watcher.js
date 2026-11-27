@@ -20,6 +20,8 @@ const { isClaudeFamily, isCodexCliKind, isCodeAgentKind } = require('./ai-kinds.
 // work start through its PreInvocation hook, like Claude/Codex.
 const isAntigravityKind = kind => /^gemini(?:-resume)?$/.test(String(kind || ''));
 const { stripAnsi } = require('./ansi-utils.js');
+// 选择菜单的按键提示底栏（与 core/choice-menu-screen.js 默认规则同一套），用于发消息前的快速预筛。
+const MENU_FOOTER_RE = new RegExp(require('./choice-menu-screen.js').DEFAULT_RULES.footer, 'i');
 const {
   RUNTIME_RUNNING,
   advanceRunningAnimationCandidate,
@@ -397,8 +399,12 @@ function terminalTailLines(buffer, max = 5) {
 // skip(lines)：命中就不算拒发菜单，交给后面的专用处理（CodeAgent 的 bypass 警告框由 codeagent-input-guard 自动选 Yes）。
 async function visibleChoiceMenu(sessionManager, sid, { makeScreen, skip } = {}) {
   const buffer = String(sessionManager.getSessionBuffer?.(sid) || '');
-  // 快速排除：最近输出里没有「光标符号 + 编号选项」就不可能有菜单，不必回放。
-  if (!/[❯›▶►→]\s*\d{1,2}[.)]\s/.test(stripAnsi(buffer.slice(-8000)))) return null;
+  // 快速排除：最近输出里没有「光标符号 + 编号选项」，也没有「光标符号 + 按键提示底栏」（无编号的方向键菜单，
+  // 如 CodeAgent 授权框，2026-11-27 审查）就不可能有菜单，不必回放。
+  // Windows ConPTY 用光标右移（ESC[nC）代替空格：先还原成空格再匹配，否则「❯ Allow once」会被拼成「❯Allowonce」漏判。
+  const recent = require('./group-chat-cli-ready-detector.js').terminalText(buffer.slice(-8000));
+  if (!/[❯›▶►→]\s*\d{1,2}[.)]\s/.test(recent)
+    && !(/[❯›▶►→]\s*\S/.test(recent) && MENU_FOOTER_RE.test(recent))) return null;
   let screen = null;
   try {
     screen = (makeScreen || require('./claude-trust-dialog.js').createTrustScreen)();

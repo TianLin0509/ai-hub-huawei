@@ -16,7 +16,10 @@ const DEFAULT_RULES = Object.freeze({
   // 高亮选项行首的光标符号
   cursor: '❯›▶►→',
   // 菜单底部的按键提示（正则源码，不区分大小写）
-  footer: 'Enter to (?:select|confirm|submit|choose)|Esc to (?:cancel|exit|go back)|↑\\s*/\\s*↓|arrow keys|to navigate|按\\s*(?:Enter|回车)|回车(?:确认|选择)',
+  // 公司 CodeAgent（opentui 界面）的底栏是「Navigate ↑ ↓ | Select enter | Back esc」（模型菜单实录 tests/fixtures/codeagent-model-picker-scroll.txt），
+  // 2026-11-27 起一并认（11-24 群里反馈 CodeAgent 弹的选项在卡片里点不了）。空闲输入框里的「↑↓ 历史」不在其中。
+  footer: 'Enter to (?:select|confirm|submit|choose)|Esc to (?:cancel|exit|go back)|↑\\s*/\\s*↓|arrow keys|to navigate|按\\s*(?:Enter|回车)|回车(?:确认|选择)'
+    + '|Navigate\\s*↑\\s*↓|\\bSelect\\s+enter\\b|↑\\s*↓\\s*(?:to\\s+)?(?:select|navigate|move|选择)|\\benter\\s+(?:to\\s+)?(?:confirm|select)\\b',
   // 工具权限确认（不是提问）：题目或选项像这样就归为 permission（正则源码，不区分大小写）。
   // 依据替身真实样本（tests/fixtures/choice-menu/claude-code-2.1-permission-bash.json，Claude Code 2.1.303）：题目「Do you want to proceed?」，
   // 选项「Yes / Yes, and always allow access to … / Yes, and switch to auto mode … / No」；旧版是「Yes, and don't ask again / No, and tell Claude …」。
@@ -27,6 +30,8 @@ const DEFAULT_RULES = Object.freeze({
 });
 const RULES_FILE = 'choice-menu-rules.json';
 
+// 输入框行（去掉边框后）：行首 0–3 格的提示符，后面要么为空，要么隔一个空格接占位符或草稿。
+const INPUT_ROW = /^\s{0,3}[❯›>](?:\s*$|\s+\S)/;
 const BORDER = /^[\s─━═╭╮╰╯┌┐└┘╴╶·.\-_=]*$/;
 const stripBox = line => String(line || '').replace(/^\s*[│┃|]\s?/, '').replace(/\s?[│┃|]\s*$/, '').replace(/\s+$/, '');
 const escapeClass = s => String(s).replace(/[\\\]^-]/g, '\\$&');
@@ -35,6 +40,7 @@ function compile(rules) {
   const cursor = String(rules.cursor || DEFAULT_RULES.cursor);
   return {
     option: new RegExp(`^\\s*([${escapeClass(cursor)}])?\\s*(\\d{1,2})[.)]\\s+(\\S.*)$`),
+    cursorRow: new RegExp(`^(\\s*)(?:([${escapeClass(cursor)}])(\\s+))?(\\S.*)$`),
     footer: new RegExp(rules.footer || DEFAULT_RULES.footer, 'i'),
     permission: new RegExp(rules.permission || DEFAULT_RULES.permission, 'i'),
     bottomRows: Math.max(4, Math.min(60, Number(rules.bottomRows) || DEFAULT_RULES.bottomRows)),
@@ -86,11 +92,16 @@ function detectChoiceMenu(rows, rules = DEFAULT_RULES) {
     for (let n = k + 1; n < parsed.length && parsed[n].key === g.length + 1; n++) g.push(parsed[n]);
     if (g.length >= c.minOptions) group = g;
   }
+  // 没有编号的方向键菜单（只有光标符号标出当前项）：必须有按键提示底栏才认，见 cursorList
+  const numbered = !!group;
+  if (!group) group = cursorList(lines, start, end, c);
   if (!group) return null;
   if (group.filter(o => o.selected).length !== 1) return null;
   const first = group[0].i, last = group[group.length - 1].i;
-  // 菜单下面不能再有输入框（空闲时靠左的「❯ 」提示行）。远离左边的孤立光标符号是回放宽度和终端不一致时的残影，不算
-  for (let i = last + 1; i < end; i++) if (/^\s{0,3}[❯>]\s*$/.test(lines[i])) return null;
+  // 菜单下面不能再有输入框：空闲时靠左的「❯ 」空提示行，或带占位符/草稿的输入行（「> Anything I can assist you with?」）——
+  // 那是上一道已答菜单没清掉的旧画面（2026-11-27 审查：旧菜单留在输入框上方时发消息被判「菜单未关」永久拒发）。
+  // 远离左边的孤立光标符号是回放宽度和终端不一致时的残影，不算
+  for (let i = last + 1; i < end; i++) if (INPUT_ROW.test(lines[i])) return null;
   const footerLine = lines.slice(last + 1, end).find(l => c.footer.test(l)) || '';
   // 题目：选项上方最近的几行里，优先取以问号结尾的那行
   let question = '', fallback = '';
@@ -107,7 +118,48 @@ function detectChoiceMenu(rows, rules = DEFAULT_RULES) {
   // 权限确认和提问分开：AskUserQuestion 的选项末尾总有「Type something」一类自由输入项，权限确认没有
   const freeText = group.some(o => /^(?:Type something|Chat about this|Other)\b/i.test(o.label));
   const kind = !freeText && (c.permission.test(q) || group.some(o => c.permission.test(o.label))) ? 'permission' : 'question';
-  return { kind, question: q, options: group.map(o => ({ key: String(o.key), label: o.label.slice(0, 120), selected: o.selected })), footer: footerLine.trim() };
+  return { kind, question: q, numbered, options: group.map(o => ({ key: String(o.key), label: o.label.slice(0, 120), selected: o.selected })), footer: footerLine.trim() };
+}
+
+// 无编号的方向键菜单，例如
+//    Allow this command?
+//  ❯ Allow once
+//    Allow always
+//    Reject
+//
+//  Navigate ↑ ↓ | Select enter | Back esc
+// 认法：屏幕最下方有按键提示底栏；底栏上方紧挨着的一段文字里恰好一行以光标符号开头，
+// 与光标行文字左对齐的相邻行是其余选项（缩进更深的是选项说明，缩进更浅的是题目，到此为止）。
+// 选项自上而下补编号 1、2、3；卡片点选仍是「从光标行按上/下移过去再回车」，编号不会发给 CLI。
+function cursorList(lines, start, end, c) {
+  let f = -1;
+  for (let i = end - 1; i >= start; i--) if (c.footer.test(lines[i])) { f = i; break; }
+  if (f < 0) return null;
+  let bottom = f - 1;
+  while (bottom >= start && (!lines[bottom].trim() || BORDER.test(lines[bottom].trim()))) bottom -= 1;
+  let top = bottom;
+  while (top - 1 >= start && lines[top - 1].trim() && !BORDER.test(lines[top - 1].trim())) top -= 1;
+  if (bottom < top) return null;
+  const rows = [];
+  for (let i = top; i <= bottom; i++) {
+    const m = c.cursorRow.exec(lines[i]);
+    if (!m) return null;
+    rows.push({ i, selected: !!m[2], col: m[1].length + (m[2] ? m[2].length + m[3].length : 0), text: m[4] });
+  }
+  const cursors = rows.filter(r => r.selected);
+  if (cursors.length !== 1) return null;
+  const at = rows.indexOf(cursors[0]), col = cursors[0].col;
+  // 其余选项与光标行的文字同一列起头（TUI 把未选中项补齐对齐），差一列都不算
+  const same = r => r.selected || r.col === col;
+  const deeper = r => !r.selected && r.col > col;
+  let lo = at, hi = at;
+  while (lo - 1 >= 0 && (same(rows[lo - 1]) || deeper(rows[lo - 1]))) lo -= 1;
+  while (hi + 1 < rows.length && (same(rows[hi + 1]) || deeper(rows[hi + 1]))) hi += 1;
+  let options = rows.slice(lo, hi + 1).filter(same);
+  // 与选项同一缩进的题目行（光标上方、以问号结尾）不算选项
+  while (options.length && !options[0].selected && /[?？]\s*$/.test(options[0].text)) options = options.slice(1);
+  if (options.length < c.minOptions || options.length > 9) return null;
+  return options.map((r, k) => ({ i: r.i, key: k + 1, label: r.text.replace(/\s{2,}.*$/, '').trim(), selected: r.selected }));
 }
 
 module.exports = { DEFAULT_RULES, RULES_FILE, loadRules, detectChoiceMenu };

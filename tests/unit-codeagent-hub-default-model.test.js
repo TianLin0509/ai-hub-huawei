@@ -76,7 +76,8 @@ test('session-manager：没明确选模型的新会话先用 Hub 默认；明确
   assert.match(block, /!HUB_DEFAULT_SKIP_PURPOSES\.includes\(opts\.purpose\)/);
   assert.match(block, /freshLaunch/);
   // 自动会话仍先取 Hub 默认；成功记录只给同名目标消歧，显式设置可改模型。
-  assert.match(source, /const defaultTarget = hubDefaultTarget \|\| \(codeagentPool/);
+  // R53b：分身指定的模型排在 Hub 默认之后、账号默认之前。
+  assert.match(source, /const defaultTarget = hubDefaultTarget \|\| (?:\(opts\.purpose === 'avatar-agent' \? codeAgentRouteModel\(opts\) : ''\) \|\| )?\(codeagentPool/);
   assert.match(source, /const target = assistantRoute\?\.model \|\| defaultTarget/);
 });
 

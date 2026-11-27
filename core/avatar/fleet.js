@@ -114,7 +114,8 @@ class FleetService {
       retryAfterAt: this.activeFailure?.code === 'welink_rate_limit' ? this.now() + (this.activeFailure.retryAfterMs || 0) : this.readBackoffUntil || 0,
       retryReason: this.readError || '' };
   }
-  preflight(owner, backends) {
+  // only：试答、纠错重答只核这一个分身，别的分身选了不可用的模型不连带拦它（R53b）。
+  preflight(owner, backends, { only = '' } = {}) {
     const auth = this.assistant()?.auth?.status?.(), login = this.login(), gw = backends.rows.find(row => row.gateway);
     let agent;
     if (gw?.configured && !gw.selected) agent = { ok: false, source: 'gateway', label: gw.reason || '所选网关模型不可用，请重新选择', configured: true, selected: false };
@@ -125,7 +126,7 @@ class FleetService {
       agent = { ok: true, source: 'claude', label: `Claude Code · ${labels[s.source] || s.source}${s.model ? ' · ' + s.model : ''}`, configured: !!backends.featureChoice.choice, selected: true };
     } else {
       const choice = backends.featureChoice;
-      const enabled = owner ? this.fleet(owner).avatars.filter(av => av.enabled) : [];
+      const enabled = owner ? this.fleet(owner).avatars.filter(av => (only ? av.id === only : av.enabled)) : [];
       const unusable = enabled.find(av => {
         if (choice?.selected) return false;
         const rows = backends.rows.filter(row => !row.gateway && row.id !== 'auto' && row.usable && (av.backend?.account === 'auto' || !av.backend?.account || row.id === av.backend.account));
@@ -137,7 +138,7 @@ class FleetService {
         : choice?.choice && !choice.selected ? choice.warning || '所选模型或供应商不可用'
           : unusable ? `分身「${unusable.name}」的账号或模型不可用`
             : usable ? `${choice?.selected?.kind === 'codeagent-lite' ? 'CodeAgent-Lite' : usable.label} · ${choice?.selected?.model || usable.defaultModel || '账号默认模型'}（配置已确认，运行结果待核验）` : '尚未找到可用的模型账号';
-      agent = { ok, source: usable ? 'codeagent' : 'none', label, configured: !!choice?.choice, selected: ok };
+      agent = { ok, source: usable ? 'codeagent' : 'none', label, configured: !!choice?.choice, selected: ok, ...(unusable ? { avatarId: unusable.id } : {}) };
     }
     let snap = this.snapshot();
     if ((!snap?.conversations?.length || snap.login?.uid && snap.login.uid !== owner) && this.targetSnapshot?.login.uid === owner) snap = this.targetSnapshot;
@@ -744,7 +745,7 @@ class FleetService {
     let redraftFailure, redraftResult;
     if (opts.redraft !== false) {
       try {
-        const agent = this.preflight(owner, this.backends()).agent;
+        const agent = this.preflight(owner, this.backends(), { only: id }).agent;
         if (!agent.ok) throw new Error(agent.label || '模型账号未就绪');
         const { av, fleet } = this.find(owner, id);
         if (!av.enabled || fleet.paused) throw new Error('分身已暂停，纠错卡已保存，恢复后可重新起草');
@@ -995,7 +996,7 @@ class FleetService {
       const code = fleet.paused ? 'paused' : !av.enabled ? 'off' : !login.ok ? 'waiting' : st.lastError ? 'error' : 'on';
       return { ...av, state: { code, text: { paused: '已暂停', off: '已暂停', waiting: '等 WeLink 登录', error: '遇到问题', on: this.running.has(av.id) || working ? '处理中' : '运行中' }[code], error: st.lastError || '', providerRepair: st.providerRepair || null, failure: st.failure || null }, pending: open.length, working,
         stats: { read: stats.read || 0, model: stats.model || 0, ready: stats.ready || 0, remind: stats.remind || 0, sent: stats.sent || 0 }, memoryLines: st.memoryLines || 0, examples: exampleCount(path.join(this.home(owner, av.id), 'work', 'examples.md')),
-        session: { id: st.session?.id || '', alive: this.sessions.alive(st.session?.id), questions: st.session?.questions || 0 }, log: st.log.slice(0, 80),
+        session: { id: st.session?.id || '', alive: this.sessions.alive(st.session?.id), questions: st.session?.questions || 0, pickMiss: this.sessions.pickMiss(st.session?.id) }, log: st.log.slice(0, 80),
         owners: Object.fromEntries((av.targets || []).map(t => [t.id, F.ownerOf(fleet.avatars, av, t)])) };
     });
     const inProgress = [...this.jobs.values()].flat(), queued = [];

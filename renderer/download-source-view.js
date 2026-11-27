@@ -8,7 +8,7 @@ const CSS = `
 .dl-src .dl-src-tag { display: inline-flex; align-items: center; padding: 0 7px; border-radius: 999px; font-weight: 600; font-size: 11.5px;
   border: 1px solid rgba(var(--rgb-info), .45); color: var(--link, #2a64d6); background: rgba(var(--rgb-info), .08); white-space: nowrap; }
 .dl-src[data-status="ok"] .dl-src-tag, .dl-src[data-status="internal"] .dl-src-tag { border-color: rgba(var(--rgb-success), .5); color: var(--status-success, #23774a); background: rgba(var(--rgb-success), .1); }
-.dl-src[data-status="missing"] .dl-src-tag, .dl-src[data-status="partial"] .dl-src-tag, .dl-src[data-status="down"] .dl-src-tag { border-color: rgba(var(--rgb-warning), .45); color: var(--status-warning, #a24d10); background: rgba(var(--rgb-warning), .08); }
+.dl-src[data-status="missing"] .dl-src-tag, .dl-src[data-status="partial"] .dl-src-tag, .dl-src[data-status="down"] .dl-src-tag, .dl-src[data-status="auth"] .dl-src-tag { border-color: rgba(var(--rgb-warning), .45); color: var(--status-warning, #a24d10); background: rgba(var(--rgb-warning), .08); }
 .dl-src .dl-src-text { overflow-wrap: anywhere; }
 .dl-src[data-status="nolist"] .dl-src-tag { border-color: rgba(var(--rgb-warning), .45); color: var(--status-warning, #a24d10); background: rgba(var(--rgb-warning), .08); }
 .dl-src .dl-src-act { border: 0; background: none; padding: 0 2px; font: inherit; font-size: 12px; color: var(--link, #2a64d6); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
@@ -23,9 +23,9 @@ function ensureCss(doc = typeof document === 'undefined' ? null : document) {
   const style = doc.createElement('style'); style.textContent = CSS; doc.head.appendChild(style); cssDone = true;
 }
 
-const TAG = { ok: '内源 · 可用', partial: '内源 · 部分', missing: '内源 · 缺包', down: '内源 · 连不上', nolist: '清单 · 读不到', checking: '内源 · 检查中', off: '内源 · 未生效', internal: '内源 · 公司官方' };
+const TAG = { ok: '内源 · 可用', partial: '内源 · 部分', missing: '内源 · 缺包', down: '内源 · 连不上', auth: '内源 · 需登录', nolist: '清单 · 读不到', checking: '内源 · 检查中', off: '内源 · 未生效', internal: '内源 · 公司官方' };
 
-const TROUBLE = new Set(['down', 'nolist', 'missing', 'partial']);
+const TROUBLE = new Set(['down', 'auth', 'nolist', 'missing', 'partial']);
 
 // status：source-status.js 的 view()；没有时显示「检查中」。point 写进 data 属性，方便验收脚本逐个核对。
 function html(status, point = '', label = '') {

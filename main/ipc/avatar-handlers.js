@@ -5,18 +5,36 @@ const path = require('node:path');
 // 后端选项：自动、个人账号、号池账号，和启动中心、组队用同一份账号与模型清单。
 function listAvatarBackends({ dataDir, sessionManager, env = process.env }) {
   const team = require('../team/codeagent-accounts').listTeamAccounts({ dataDir, sessionManager, env });
+  const choice = require('../../core/feature-agent-choice'), routes = require('../../core/codeagent-assistant-route');
+  const personalDir = require('../../core/codeagent-config').resolveCodeAgentConfig(env).configDir;
+  // 模型卡和会话下拉、设置页同一份清单（带供应商，R53 第 4 件）：以前个人账号只列默认模型一个，号池只列模型名。
+  // models 仍是模型名列表（预检、自动挑号按名字比）；options 是带供应商的选项，页面按它画。
+  // The model card lists the same provider-aware options as the session dropdown; `models` stays a plain id list.
+  const optionsOf = account => {
+    try {
+      return routes.modelOptions(dataDir, account, account === 'personal' ? personalDir : null).filter(o => !o.unavailable)
+        .map(o => ({ id: o.id, label: o.label || o.id, ...(o.provider ? { provider: o.provider, providerLabel: o.providerLabel || o.provider, menuLabel: o.menuLabel || o.id } : {}) }));
+    } catch { return []; }
+  };
+  const idsOf = (options, fallback = []) => options.length ? [...new Set(options.map(o => o.id))] : fallback;
   const rows = [{ id: 'auto', label: '自动选择', usable: true, models: [], pool: false }];
+  const models = optionsOf('personal');
   try {
-    const personalDir = require('../../core/codeagent-config').resolveCodeAgentConfig(env).configDir;
     const me = require('../../core/codeagent-model-route').personalAccount({ dataDir, personalDir });
-    if (me) rows.push({ id: 'personal', label: '个人账号', usable: true, models: me.defaultModel ? [me.defaultModel] : [], defaultModel: me.defaultModel || '', pool: false });
+    // 个人账号列全且都可选：分身会话开起来后在 /model 菜单里按会话选中，不改这个号的默认模型（R53b，撤掉方案 B 的置灰）。
+    // 没探测过模型目录时按号自己读出的模型清单兜底，不只剩默认模型一个（老用户存过的非默认模型不被预检误判）。
+    // Every personal model stays selectable; avatar sessions pick it per session via /model without changing the account default.
+    if (me) rows.push({ id: 'personal', label: '个人账号', usable: true, models: idsOf(models, me.models?.length ? me.models : (me.defaultModel ? [me.defaultModel] : [])), options: models, defaultModel: me.defaultModel || '', pool: false });
   } catch { /* 个人账号没登录时不列 */ }
-  for (const r of team.rows.filter(row => !row.personal)) rows.push({ id: r.id, label: r.label, usable: r.usable, reason: r.unavailableReason, models: r.models || [], defaultModel: r.defaultModel || '', activeSessions: r.activeSessions || 0, pool: true });
+  for (const r of team.rows.filter(row => !row.personal)) {
+    const options = optionsOf(r.id);
+    rows.push({ id: r.id, label: r.label, usable: r.usable, reason: r.unavailableReason, models: idsOf(options, r.models || []), options, defaultModel: r.defaultModel || '', activeSessions: r.activeSessions || 0, pool: true });
+  }
   const gateway = gatewayRow(dataDir);
   if (gateway) rows.push(gateway);
   const codeagentAvailable = !!require('../../core/community-setup').findCommand('codeagent', env);
   // 和后台会话同一份完整目录判定（11-27：没有可用 CodeAgent 时的自动默认可能是 Claude Code · 自有接口 / 公司模型，不只部门 key）。
-  const featureChoice = require('../../core/feature-agent-choice').resolve(dataDir, 'avatar', { env });
+  const featureChoice = choice.resolve(dataDir, 'avatar', { env });
   return { rows, codeagentAvailable, featureChoice };
 }
 

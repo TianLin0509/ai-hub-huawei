@@ -44,7 +44,7 @@ function requestBody(body,modelMap,experimentalNativeThinking,experimentalCodexC
     check(experimentalNativeThinking&&thinkingModel(body.model)&&modelMap.get(body.model)===body.model,'L1_THINKING_MODEL_UNVERIFIED',422);
     check(own(body,'thinking')&&own(body,'reasoning_effort'),'L1_THINKING_PAIR_REQUIRED',422);
     fields(body.thinking,['type'],'L1_THINKING_INVALID');
-    check(own(body.thinking,'type')&&body.thinking.type==='enabled'&&body.reasoning_effort==='high','L1_THINKING_INVALID',422);
+    check(own(body.thinking,'type')&&body.thinking.type==='enabled'&&['low','medium','high'].includes(body.reasoning_effort),'L1_THINKING_INVALID',422);
   }
   check(body.stream===true,'L1_STREAM_REQUIRED',422);
   check(Array.isArray(body.messages)&&body.messages.length>0,'L1_MESSAGES_INVALID',422);

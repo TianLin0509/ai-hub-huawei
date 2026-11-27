@@ -512,6 +512,7 @@ function codeAgentRouteModel(opts) {
   const id = opts.codeagentRouteModel.trim();
   return require('./codeagent-models').isSafeModelId(id) ? id : '';
 }
+function routeModelIsAccountDefault() { return false; }
 // CodeAgent 会话第一轮回答前的「预计模型」（只作显示名）：恢复的会话 → 上一轮回答里的实际模型；
 // 号池号 → 这次同步配置定下的模型；个人账号 → 纠正后的默认模型（core/codeagent-model-route.js personalModels）。
 // single：自动会话选型用，探测过的清单只有一个模型时就是它（见 codeagent-pool.js strictDefaultModel 的例外）。
@@ -1788,8 +1789,12 @@ class SessionManager extends EventEmitter {
       const routeModel = codeAgentRouteModel(opts);
       const personal = require('./codeagent-model-route').personalAccount({ dataDir: getHubDataDir(), personalDir: codeagentConfig.configDir });
       if (!personal) throw new Error('个人账号没有有效的登录，未启动会话');
-      if (!personal.models.some(m => m.toLowerCase() === routeModel.toLowerCase())) throw new Error(`个人账号没有 ${routeModel} 的权限，未启动会话`);
-      if (String(personal.defaultModel).toLowerCase() !== routeModel.toLowerCase()) {
+      const configured = () => !routeModelIsAccountDefault(opts) && require('./codeagent-models').settingsProviderModels(codeagentConfig.configDir).some(row => row.id.toLowerCase() === routeModel.toLowerCase());
+      if (!personal.models.some(m => m.toLowerCase() === routeModel.toLowerCase()) && !configured()) throw new Error(`个人账号没有 ${routeModel} 的权限，未启动会话`);
+      // 只有 routeModelIsAccountDefault 的会话要求默认模型就是指定模型；分身只核登录与权限，开起来后在 /model 菜单里按会话选中，
+      // 菜单选型结束会把号的 settings.json 还原（main/ipc/session-handlers.js），不改号的默认模型（R53b）。
+      // Only account-default routed sessions require the default to equal the routed model; avatar sessions pick it per session via /model.
+      if (routeModelIsAccountDefault(opts) && String(personal.defaultModel).toLowerCase() !== routeModel.toLowerCase()) {
         throw new Error(`个人账号此刻的默认模型是 ${personal.defaultModel || '未知'}，不改个人账号的默认模型；${routeModel} 请用号池里有它权限的号`);
       }
     }
@@ -1846,7 +1851,13 @@ class SessionManager extends EventEmitter {
     const routeModel = codeAgentRouteModel(opts);
     // 账号即模型（2026-10-19，开关见 core/codeagent-model-route.js routeSwitchEnabled，默认关）：不切号的默认模型；
     const routeSwitch = require('./codeagent-model-route').routeSwitchEnabled();
-    if (routeModel && !routeSwitch && !opts.codeagentPoolAccount) {
+    if (routeModel && !routeSwitch && !opts.codeagentPoolAccount && !routeModelIsAccountDefault(opts)) {
+      // 分身：不切号的默认模型，只核这个号有它的权限（清单探测过时）；开起来后按会话在 /model 菜单里选中（R53b）。
+      if (account.modelsAuthoritative && (account.models || []).length && !account.models.some(m => m.toLowerCase() === routeModel.toLowerCase())
+        && !require('./codeagent-models').settingsProviderModels(account.dir).some(row => row.id.toLowerCase() === routeModel.toLowerCase())) {
+        throw new Error(`${who(account)} 没有 ${routeModel} 的权限，未启动会话`);
+      }
+    } else if (routeModel && !routeSwitch && !opts.codeagentPoolAccount) {
       // 和号表同一口径：号自己写了、且在清单里的才算默认模型（pool.strictDefaultModel），不按清单猜。
       const current = pool.strictDefaultModel(pool.readSettingsModel(account.dir), account.models, { authoritative: !!account.modelsAuthoritative }).model;
       if (current.toLowerCase() !== routeModel.toLowerCase()) throw new Error(`${who(account)} 的默认模型是 ${current || '未知'}，不是 ${routeModel}；不改号的默认模型，未启动会话`);
@@ -2061,11 +2072,13 @@ class SessionManager extends EventEmitter {
       // 个人账号一律选它纠正后的默认模型：新开时它就是指定模型（上面已核对），恢复时按此刻的默认照常起，不选回当初的模型。
       // 号的权限清单探测过且只有一个模型时就选它，不管 settings.json 写的什么（2026-10-20 公司真机：CodeAgent 启动时把默认模型写回 deepseek）。
       const pool = require('./codeagent-pool');
-      const defaultTarget = hubDefaultTarget || (codeagentPool ? codeAgentRouteModel(opts) || codeagentPool.model
+      const defaultTarget = hubDefaultTarget || (opts.purpose === 'avatar-agent' ? codeAgentRouteModel(opts) : '') || (codeagentPool ? codeAgentRouteModel(opts) || codeagentPool.model
           || pool.strictDefaultModel(pool.readSettingsModel(codeagentPool.account.dir), codeagentPool.account.models, { authoritative: !!codeagentPool.account.modelsAuthoritative }).model || ''
         : codeAgentExpectedModel({}, { configDir: codeagentConfig.configDir, single: true }));
       // 功能选型只换了后端（CodeAgent / CodeAgent-Lite）、没单独指定模型时，照旧继承助理设置里选好的模型与供应商。
+      // 分身模型卡已点名供应商时按它走，不让助理同名模型的供应商盖掉（R53b）。
       const assistantRoute = ['company-assistant', 'avatar-agent'].includes(opts.purpose) && require('./feature-agent-choice').inheritsAssistantChoice(opts.featureAgentChoice)
+        && !(opts.purpose === 'avatar-agent' && opts.codeagentModelProvider)
         ? require('./codeagent-assistant-route').choose(getHubDataDir(), codeagentPool ? codeagentPool.account.id : 'personal', defaultTarget,
           { configDir: codeagentConfig.configDir, explicitModel: codeAgentRouteModel(opts) }) : null;
       if (assistantRoute) opts = { ...opts, ...require('./codeagent-model-choice').routeFields(assistantRoute) };

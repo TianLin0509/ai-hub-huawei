@@ -106,7 +106,10 @@ function resolveCodeAgentPin(opts, { dataDir, configDir, command, pool = null, f
   const settingsSupported = caps.filterArgs(['--settings', 'session.json'], caps.readHelp(command)).args.includes('--settings');
   const policy = unavailablePolicy(require('./hub-config').getConfig().sessionModelUnavailablePolicy);
   let reason = failureReason || (opts.modelConfirmationRequired ? opts.modelUnavailableReason || '原模型已暂停，须由用户明确确认后继续' : '');
-  if (!reason && fixedModel && known.authoritative && !match(fixedModel)) reason = '账号的权威模型清单已不包含它，可能没有使用权限';
+  // settings.json 里自配供应商的模型 CLI 能直接用（会话下拉、分身模型卡都列它）：权威清单里没有也不算没权限。
+  // 只放行固定，不进清单，不当自动替代的候选（2e0d46306：自配模型不进自动挑号）。
+  const configured = () => models.settingsProviderModels(configDir).some(row => row.id.toLowerCase() === String(fixedModel).toLowerCase());
+  if (!reason && fixedModel && known.authoritative && !match(fixedModel) && !configured()) reason = '账号的权威模型清单已不包含它，可能没有使用权限';
   else if (!reason && fixedModel && !settingsSupported) reason = '当前 CLI 版本不支持 --settings，无法固定会话模型';
   let modelChange = null;
   if (reason) {

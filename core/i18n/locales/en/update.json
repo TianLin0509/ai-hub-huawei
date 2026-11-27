@@ -847,5 +847,13 @@
   "用本机登录的 WeLink 账号直接加入 AI HUB-H 用户群": "Join the AI HUB-H user group directly with the WeLink account signed in on this computer",
   "未知原因": "Unknown reason",
   "。维护人会根据附带的说明排查。": ". The maintainer will troubleshoot with the attached summary.",
-  "发完了，去入群": "Sent it, join the group"
+  "发完了，去入群": "Sent it, join the group",
+  "打开内源项目页": "Open the internal mirror project page",
+  "公司内源的版本查询接口现在要求登录，Hub 暂时自动查不到{0}（内源返回「未认证的请求」，不是网络问题，重试也没用）。可以先在浏览器里打开内源项目页手动下载安装；请点「一键反馈」告诉维护人": "The internal mirror's version lookup now requires sign-in, so Hub cannot find {0} automatically for now (the mirror replied \"unauthenticated request\"; this is not a network problem and retrying will not help). You can open the internal mirror project page in your browser and download it manually; please use \"One-click feedback\" to tell the maintainer",
+  "这个包": "this package",
+  "公司内源 · 版本查询接口现在要求登录，暂时自动下不了（不是网络问题）；可先到内源项目页手动下载，并点「一键反馈」告诉维护人": "Internal mirror · version lookup now requires sign-in, so automatic download is unavailable for now (not a network problem). Download manually from the internal mirror project page and use \"One-click feedback\" to tell the maintainer",
+  "内源 · 需登录": "Mirror · sign-in required",
+  "在浏览器里打开内源项目页，手动下载安装包": "Open the internal mirror project page in your browser and download the installer manually",
+  "点「一键反馈」告诉维护人": "Use \"One-click feedback\" to tell the maintainer",
+  "可回退的旧版本": "older versions to roll back to"
 }

@@ -46,6 +46,9 @@ function fixture(kind = 'codeagent') {
     updateFloatingBarState() {}, scheduleSessionListRender() {}, schedulePersist() {},
     PTY_RUNTIME_SUBMIT_PENDING_MS: 1500,
   });
+  const reasons = /^const CODEAGENT_MENU_REASONS = .*$/m.exec(source);
+  assert.ok(reasons, 'CODEAGENT_MENU_REASONS');
+  vm.runInContext(reasons[0].replace(/^const /, 'var '), context);
   for (const name of ['canUsePtyBurstFallback', 'classifySessionRuntimeFrame', 'ptyObservationSidebarSignature', 'applyPtyRuntimeObservation']) {
     const start = source.indexOf('function ' + name + '(');
     const end = source.indexOf('\n}', start) + 2;

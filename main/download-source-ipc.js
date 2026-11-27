@@ -86,7 +86,7 @@ function registerDownloadSourceIpc(ipcMain, { fetchImpl, env = process.env, open
       `AI Hub ${version} · 下载点 ${point} · ${new Date().toLocaleString('zh-CN', { hour12: false })}`,
       `状态：${s.status} · ${s.text || ''}`,
       s.reason ? `原因：${s.reason}` : '',
-      `公司内源：${o.reachability === 'up' ? '连得上' : o.reachability === 'down' ? '连不上' : '还没探测'}${o.listAgeSec != null ? `（${o.listAgeSec} 秒前读到过版本列表）` : ''}`,
+      `公司内源：${o.reachability === 'up' ? '连得上' : o.reachability === 'down' ? (o.down && o.down.auth ? '连得上，但版本查询接口要求登录' : '连不上') : '还没探测'}${o.listAgeSec != null ? `（${o.listAgeSec} 秒前读到过版本列表）` : ''}`,
       o.down ? `内源最近一次失败：${o.down.reason}（${at(o.down.at)}）` : '',
       o.lastReason ? `内源最近一次查找：${o.lastReason}` : '',
       recLine,

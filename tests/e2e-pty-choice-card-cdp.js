@@ -28,7 +28,7 @@ const readLog = file => { try { return fs.readFileSync(file, 'utf8').trim().spli
     hub = await launchIsolatedHub({ entryPath: repo, cwd: repo, dataDir: data, port: await port(), windowMode: 'hidden', label: 'pty choice card', extraEnv: {
       AI_HUB_WORKSPACE_ROOT: work, AI_HUB_CODEAGENT_COMMAND: path.join(__dirname, 'fixtures', 'codeagent-permission-standin', 'codeagent.cmd'),
       AI_HUB_CODEAGENT_CONFIG_DIR: cfg, AI_HUB_CODEAGENT_CONFIG_ENV: 'FAKE_CA_CONFIG_DIR', AI_HUB_CODEAGENT_POOL_SCAN_ROOT: path.join(root, 'scan'),
-      AI_HUB_CODEAGENT_SERVE: '0', FAKE_MENU_DELAY_MS: '15000', FAKE_MENU_GAP_MS: '1500', HUB_SESSION_SEARCH_DISABLE_NATIVE: '1',
+      AI_HUB_CODEAGENT_SERVE: '0', FAKE_MENU_DELAY_MS: '40000', FAKE_MENU_GAP_MS: '1500', HUB_SESSION_SEARCH_DISABLE_NATIVE: '1',
       FAKE_INPUT_LOG: logA,
       CLAUDE_CONFIG_DIR: path.join(root, 'unused-claude'), CODEX_HOME: path.join(root, 'unused-codex'),
       CLAUDE_HUB_ASSISTANT_TIMER: '0', CLAUDE_HUB_FORUM_TIMER: '0',
@@ -54,7 +54,7 @@ const readLog = file => { try { return fs.readFileSync(file, 'utf8').trim().spli
     await c.eval(`applyViewMode('card'), true`);
     await wait(`!!document.querySelector('.floating-input-box')`, 'composer');
     const row = `.card-view-active .pty-choice-inline[data-mode="menu"]:not([hidden])`;
-    await wait(`!!document.querySelector(${j(row)}) && document.querySelectorAll(${j(row + ' .pty-choice-option')}).length === 3`, 'inline menu row', 60000);
+    await wait(`!!document.querySelector(${j(row)}) && document.querySelectorAll(${j(row + ' .pty-choice-option')}).length === 3`, 'inline menu row', 90000);
     result.rowA = await c.eval(`(() => { const el = document.querySelector(${j(row)}); const cs = getComputedStyle(el); const r = el.getBoundingClientRect();
       return { question: el.querySelector('.pty-choice-question').textContent, options: [...el.querySelectorAll('.pty-choice-option')].map(b => b.textContent),
         height: r.height, width: r.width, shadow: cs.boxShadow, fontSize: cs.fontSize, background: cs.backgroundColor, view: currentView,
@@ -101,7 +101,7 @@ const readLog = file => { try { return fs.readFileSync(file, 'utf8').trim().spli
     await c.eval(`selectSession(${qb})`);
     await c.eval(`applyViewMode('card'), true`);
     let sawRow = false;
-    for (const end = Date.now() + 40000; Date.now() < end && readLog(logA).filter(x => x.chosen).length < before + 1; await _waitMs(150)) {
+    for (const end = Date.now() + 90000; Date.now() < end && readLog(logA).filter(x => x.chosen).length < before + 1; await _waitMs(150)) {
       if (await c.eval(`!!document.querySelector(${j(row)})`)) sawRow = true;
     }
     const auto = readLog(logA).filter(x => x.chosen)[before];

@@ -197,7 +197,7 @@ test('安装器只走内源：清单用程序自带快照，包从内源 ocr-<�
   // 内源附件地址按内源配置的站点拼（附件在它的子域名下），测试里不写死内网域名。
   const FILE = new URL('/openx-file/file/2026/11/19/ocr.zip', require('../core/app-update/openx-config').fileSite.replace('://', '://file.')).href;
   const run = async packages => {
-    openxSource._reset();
+    openxSource._reset({ indexId: 0 });   // 测列表路径：显式关掉版本索引（R55）
     const data = fs.mkdtempSync(path.join(os.tmpdir(), 'ppt-ocr-openx-')), A = 'https://a.example/ocr/', calls = [];
     const fetchImpl = async url => {
       calls.push(url);
@@ -223,7 +223,7 @@ test('安装器只走内源：清单用程序自带快照，包从内源 ocr-<�
   const miss = await run([]);
   assert.notEqual(miss.r.phase, 'done'); assert.match(String(miss.r.error), /内源/);
   assert.ok(!miss.calls.some(u => u.startsWith(miss.A)), '内源没有时不回外网');
-  openxSource._reset();
+  openxSource._reset({ indexId: 0 });
 });
 
 test('页面点「先用 OCR 初稿装配」时才发现组件过旧：返回更新态快照而不是报错，更新后续跑这次空差异装配', async () => {

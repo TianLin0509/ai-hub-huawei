@@ -872,7 +872,8 @@ function registerSessionIpc(ipcMain, deps) {
   ipcMain.handle('codeagent:session-models', (_event, payload = {}) => {
     const session = typeof payload.sessionId === 'string' ? sessionManager.getSession(payload.sessionId) : null;
     if (!session) return { options: [], error: 'session-not-found' };
-    const automatic = isAutomaticCodeAgent(session) && !session.modelConfirmationRequired;
+    // 分身启动没选上所选模型（codeagentPickMiss）时放开下拉：用户点「打开后台手动选」过来就是要在这里选（R53b）。
+    const automatic = isAutomaticCodeAgent(session) && !session.modelConfirmationRequired && !session.codeagentPickMiss;
     const list = session.codeagentPoolAccount
       ? codeagentModelList({ account: 'pool', poolAccount: session.codeagentPoolAccount })
       : codeagentModelList({ account: 'personal' });
@@ -1425,7 +1426,7 @@ function registerSessionIpc(ipcMain, deps) {
     const guard = require('../../core/codeagent-default-model-guard');
     // 当场在同一个会话里用 /model 切到清单里的模型再把这一轮重发一次。
     if (isAutomaticCodeAgent(session)
-      && !(reason === 'switch' && (session.codeagentModelPick === true || selection.recovery === true))
+      && !(reason === 'switch' && (session.codeagentModelPick === true || selection.recovery === true || !!session.codeagentPickMiss))
       && reason !== 'launch' && reason !== 'relaunch' && reason !== 'model-config-fix') {
       codeagentModels.appendModelLog(dataDir, { event: 'pick', session: String(sessionId).slice(0, 8), reason, model: modelId, ok: false, error: 'automatic-session' });
       return { ok: false, inputReady: true, message: '自动会话用账号自己的默认模型，不切换模型' };
@@ -1560,11 +1561,12 @@ function registerSessionIpc(ipcMain, deps) {
     }
     if (result.ok) {
       // 真选上了模型：熔断期留下的暂缓线路、启动回退标记都作废（core/codeagent-assistant-route.js matchesSession）。
-      const updated = sessionManager.updateSessionMeta(sessionId, { ...(result.provider ? { codeagentModelProvider: result.provider } : {}), currentModel: { id: picked, displayName: codeagentModels.modelLabel(picked) }, codeagentRequestedModel: undefined, codeagentRouteDeferred: undefined, codeagentPickFallback: undefined, codeagentModelPick: false,
+      const updated = sessionManager.updateSessionMeta(sessionId, { ...(result.provider ? { codeagentModelProvider: result.provider } : {}), currentModel: { id: picked, displayName: codeagentModels.modelLabel(picked) }, codeagentRequestedModel: undefined, codeagentRouteDeferred: undefined, codeagentPickFallback: undefined, codeagentModelPick: false, codeagentPickMiss: null,
         // 用户明确选中过的模型：CLI 自己退出、Hub 原地重拉时据此再选一次（core/session-manager.js 的 relaunch）。
         codeagentUserModel: picked, fixedModel: picked, ...(reason === 'switch' ? { modelConfirmationRequired: false, modelUnavailableReason: '' } : {}), modelPinSource: reason === 'switch' ? 'user' : session.modelPinSource || 'created',
         ...(reason === 'switch' ? { modelChange: null } : {}) });
       if (updated) sendToRenderer('session-updated', { session: updated });
+      if (session.codeagentPickMiss) sendToRenderer('avatar:changed', {});
     }
     return { ...result, model: result.ok ? picked : result.model };
   }
@@ -1618,7 +1620,7 @@ function registerSessionIpc(ipcMain, deps) {
     if (session.fixedModel) {
       const change = { from: previousModel, to: result.model || target, reason: '原模型请求被拒绝，已按可用模型清单修复', at: Date.now() };
       sessionManager.updateSessionMeta(sessionId, { fixedModel: change.to, modelPinSource: 'auto-switch', modelChange: change, codeagentRouteDeferred: undefined,
-        currentModel: { id: change.to, displayName: codeagentModels.modelLabel(change.to) }, codeagentModelPick: false });
+        currentModel: { id: change.to, displayName: codeagentModels.modelLabel(change.to) }, codeagentModelPick: false, codeagentPickMiss: null });
       codeagentModels.appendModelLog(dataDir, { event: 'model-auto-switch', session: sessionId, ...change });
       sendToRenderer('session-notice', { sessionId, level: 'warning', persistent: true, message: pin.modelChangeMessage(change) });
     }
@@ -1692,6 +1694,29 @@ function registerSessionIpc(ipcMain, deps) {
       finally { if (showPhase) sendLaunchPhase(sessionId, { model: 'done' }); }
       const session = sessionManager.getSession(sessionId);
       if (result.loginRequired) return result;
+      // 分身是自动会话，没人盯着：启动时没选上所选模型，记在会话上，分身页「当前会话」卡就地说「选的 X 没选上，现在用的是 Y」
+      // 并给「打开后台手动选」；选上了就清掉（R53 第 4 件）。
+      // Avatar sessions are unattended: remember a launch pick miss so the avatar page can say so and offer the backstage.
+      if (session && session.purpose === 'avatar-agent' && !codeagentPicker.isFirstMenuModel(modelId)) {
+        let missed = !result.ok || !!result.fallback;
+        let using = '';
+        if (missed) {
+          try {
+            const dataDir = require('../../core/data-dir').getHubDataDir();
+            using = require('../../core/codeagent-pool').readSettingsModel(require('../../core/codeagent-default-model-guard').sessionConfigDir(session, { dataDir })) || '';
+          } catch { using = ''; }
+          // 回退后 CodeAgent 当前模型本来就是它：实际按所选模型作答，不算没选上。点名了供应商时同名不算数（另一组的同名模型），照报没选上。
+          if (result.ok && using && !session.codeagentModelProvider && using.toLowerCase() === String(modelId).toLowerCase()) missed = false;
+        }
+        const providerLabel = session.codeagentModelProvider ? session.codeagentModelProviderLabel || session.codeagentModelProvider : '';
+        try {
+          sessionManager.updateSessionMeta(sessionId, { codeagentPickMiss: missed ? { want: providerLabel ? `${modelId} · ${providerLabel}` : modelId, model: modelId,
+            ...(session.codeagentModelProvider ? { provider: session.codeagentModelProvider } : {}), using,
+            pickFailure: result.pickFailure || 'mismatch', message: String(result.message || '').slice(0, 300), at: Date.now() } : null });
+        } catch (error) { console.warn('[codeagent] 记录分身选型结果失败：' + error.message); }
+        // 选型在后台异步跑完（10–45 秒），打开着的分身页要跟着刷新。
+        if (missed || session.codeagentPickMiss) sendToRenderer('avatar:changed', {});
+      }
       if (result.fallback && codeagentPicker.isFirstMenuModel(modelId)) {
         sendToRenderer('session-notice', { sessionId, level: 'warning',
           message: `没能自动选中 CodeAgent 模型菜单里的第一个模型（${result.message || '原因未知'}），这个会话沿用 CodeAgent 当前的模型；需要换的话在终端里 /model 选一次。` });
@@ -1773,9 +1798,11 @@ function registerSessionIpc(ipcMain, deps) {
     }
     const updated = sessionManager.updateSessionMeta(sessionId, { currentModel: { id: chosen, displayName: result.displayName || models.modelLabel(chosen) },
       fixedModel: chosen, codeagentUserModel: chosen, modelPinSource: 'user', modelChange: null, modelConfirmationRequired: false, modelUnavailableReason: '',
-      codeagentModelProvider: result.provider || '', codeagentModelProviderLabel: result.providerLabel || '', codeagentModelMenuLabel: '' });
+      codeagentModelProvider: result.provider || '', codeagentModelProviderLabel: result.providerLabel || '', codeagentModelMenuLabel: '', codeagentPickMiss: null });
     if (updated) sendToRenderer('session-updated', { session: updated });
-    try { require('../../core/codeagent-launch-model').rememberModel(dataDir, (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || 'personal', chosen); }
+    if (session.codeagentPickMiss) sendToRenderer('avatar:changed', {});
+    // 自动会话（分身启动没选上后到后台下拉补选等）的选择只管这个会话，不记成号的「上次」，免得下次手动新建按它改账号默认（R53b 窄复审 P2-3）。
+    try { if (!isAutomaticCodeAgent(session)) require('../../core/codeagent-launch-model').rememberModel(dataDir, (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || 'personal', chosen); }
     catch (error) { console.warn('[codeagent] 记住上次选的模型失败：' + error.message); }
     if (pausedFrom && pausedFrom !== chosen) {
       try { require('../../core/codeagent-model-replacements').recordReplacement(dataDir, pausedFrom, chosen); }
@@ -1841,7 +1868,8 @@ function registerSessionIpc(ipcMain, deps) {
       models.appendModelLog(require('../../core/data-dir').getHubDataDir(), { event: 'switch-settings-only',
         session: sessionId.slice(0, 8), model: modelId, reason: message });
       const updated = sessionManager.updateSessionMeta(sessionId, { currentModel: { id: modelId, displayName: models.modelLabel(modelId) },
-        codeagentRequestedModel: undefined, codeagentModelPick: false, codeagentUserModel: modelId, fixedModel: modelId, modelConfirmationRequired: false, modelUnavailableReason: '', modelPinSource: 'user', modelChange: null });
+        codeagentRequestedModel: undefined, codeagentModelPick: false, codeagentUserModel: modelId, fixedModel: modelId, modelConfirmationRequired: false, modelUnavailableReason: '', modelPinSource: 'user', modelChange: null, codeagentPickMiss: null });
+      if (session.codeagentPickMiss) sendToRenderer('avatar:changed', {});
       if (updated) sendToRenderer('session-updated', { session: updated });
       return { ...failure, ok: true, mode: 'settings-only', confirmed: false, message };
     };
@@ -1869,7 +1897,7 @@ function registerSessionIpc(ipcMain, deps) {
     // 菜单选中了、设置文件却没能改成新模型：去掉文件里的旧模型，免得下一问又按它发。
     if (!overlayUpdated && result.mode !== 'settings-only') releaseCodeAgentLaunchModel(sessionId, `菜单已选 ${chosen}，换不成 CodeAgent 自己的写法`);
     // 记住这个号上次手动切到的模型，下次新建会话默认用它（core/codeagent-launch-model.js）。
-    try { if (result.mode !== 'settings-only') require('../../core/codeagent-launch-model').rememberModel(require('../../core/data-dir').getHubDataDir(), (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || 'personal', chosen); }
+    try { if (result.mode !== 'settings-only' && !isAutomaticCodeAgent(session)) require('../../core/codeagent-launch-model').rememberModel(require('../../core/data-dir').getHubDataDir(), (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || 'personal', chosen); }
     catch (error) { console.warn('[codeagent] 记住上次选的模型失败：' + error.message); }
     models.expectModelSwitch(sessionId, chosen, { settingsOnly: result.mode === 'settings-only' });
     if (pausedFrom) {

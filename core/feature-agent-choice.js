@@ -197,7 +197,7 @@ function resolve(dataDir, id, options = {}) {
   // 旧版存下的外壳选择（没有模型来源，模型是 claude-opus / gpt 这类公司里用不了的）：不再照跑，提示重选，本次沿用默认。
   if (companyEdition() && HARNESS.includes(choice.kind) && !HARNESS_SOURCES.includes(choice.source)) return { choice, selected: null, legacy: true, warning: legacyWarning(choice) };
   if (!kindAllowed(f, choice.kind)) return { choice, selected: null, warning: '此功能尚不支持该后端的受控只读执行，本次沿用默认。' };
-  const backends = options.backends || catalog(dataDir);
+  const backends = options.backends || catalog(dataDir, options);
   const backend = backends.find(b => b.kind === choice.kind && b.available);
   const hit = backend?.models.find(m => !m.unavailable && (choice.source ? sameModel(m, choice) : m.id === choice.model) && (!choice.codeagentModelProvider || (m.provider || m.codeagentModelProvider) === choice.codeagentModelProvider));
   if (!backend || ((choice.model || choice.source) && !hit && !customCodeAgent(f, choice))) return { choice, selected: null, warning: '所选后端或模型当前不可用，本次沿用默认。' };
@@ -245,7 +245,7 @@ function set(dataDir, id, choice, options) {
     const custom = customCodeAgent(f, choice) || customCodeAgent(f, { ...choice, custom: !!previous?.custom && previous.kind === choice.kind && previous.model === choice.model && !choice.codeagentModelProvider });
     const normalized = { kind: choice.kind, model: choice.model || '', ...(harness ? { source: choice.source, ...(choice.source === 'api' ? { profileId: choice.profileId } : {}) } : {}),
       ...require('./codeagent-model-choice').routeFields(choice), ...(custom ? { custom: true } : {}) };
-    const backends = options?.backends || catalog(dataDir);
+    const backends = options?.backends || catalog(dataDir, options);
     const b = backends.find(b => b.kind === normalized.kind && b.available);
     if (normalized.kind === GATEWAY && !b) throw new Error(backends.find(r => r.kind === GATEWAY)?.reason || '部门 API key 暂时用不了');
     if (harness && !b) throw new Error(backends.find(r => r.kind === normalized.kind)?.reason || '所选外壳暂时用不了');
@@ -281,6 +281,11 @@ function session(dataDir, id, kind, opts, options) {
   const codeagentFamily = selected.kind === 'codeagent' || selected.kind === LITE;
   // 不把 CodeAgent 专用账号、模型字段带进其他后端。
   if (!codeagentFamily) for (const k of Object.keys(out)) if (/^codeagent/i.test(k)) delete out[k];
+  // 功能选型指定了模型时，调用方（如分身页模型卡）带进来的供应商不能挂到这个模型上：换成功能选型自己的（没有就不带）。
+  if (selected.model && codeagentFamily) {
+    for (const k of ['codeagentModelProvider', 'codeagentModelProviderLabel', 'codeagentModelMenuLabel']) delete out[k];
+    Object.assign(out, require('./codeagent-model-choice').routeFields(selected));
+  }
   if (selected.model) { out.model = selected.model; out.fixedModel = selected.model; if (codeagentFamily) out.codeagentRouteModel = selected.model; }
   if (selected.kind === LITE) {
     // 底层仍建 codeagent 会话；显式放行共享 serve（core/codeagent-run-mode.js），serve 不支持思考强度。
@@ -374,7 +379,7 @@ function choiceFromUi(dataDir, id, { backend = '', model = '' } = {}, options = 
     return stored({ kind: backend, ...parsed });
   }
   if (model && sup.store === GATEWAY) return { kind: GATEWAY, model: String(model) };
-  const backends = options.backends || catalog(dataDir);
+  const backends = options.backends || catalog(dataDir, options);
   const row = backends.find(b => b.kind === backend);
   const usable = (row?.models || []).filter(m => !m.unavailable && sup.sources.includes(m.source));
   const preferred = usable.find(m => m.source === row?.defaultSource && m.id === row?.defaultModel && (m.source !== 'api' || m.profileId === row?.defaultProfileId)) || usable[0];
@@ -382,11 +387,11 @@ function choiceFromUi(dataDir, id, { backend = '', model = '' } = {}, options = 
   return stored({ kind: backend, source: preferred.source, model: preferred.id, ...(preferred.profileId ? { profileId: preferred.profileId } : {}) });
 }
 function setFromUi(dataDir, id, values, options = {}) {
-  const backends = options.backends || catalog(dataDir);
+  const backends = options.backends || catalog(dataDir, options);
   return set(dataDir, id, choiceFromUi(dataDir, id, values, { ...options, backends }), { ...options, backends });
 }
 function state(dataDir, options) {
-  const backends = options?.backends || catalog(dataDir);
+  const backends = options?.backends || catalog(dataDir, options);
   const config = require('./hub-config').getConfig();
   let cliModel = '';
   try { cliModel = JSON.parse(require('node:fs').readFileSync(require('node:path').join(require('./codeagent-config').resolveCodeAgentConfig().configDir, 'settings.json'), 'utf8')).model || ''; } catch { /* CLI 自选 */ }
@@ -456,7 +461,7 @@ function applyPreset(dataDir, preset, options = {}) {
   const targets = FEATURES.filter(f => f.kinds.includes(LITE));
   let backends = null;
   if (preset === 'codeagent-lite') {
-    backends = options.backends || catalog(dataDir);
+    backends = options.backends || catalog(dataDir, options);
     const lite = backends.find(b => b.kind === LITE);
     if (!lite?.available) throw new Error('本机 CodeAgent-Lite 暂不可用（未检测到可用的 CodeAgent），未做任何修改');
   }

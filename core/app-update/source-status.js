@@ -4,6 +4,7 @@
 //   partial  多文件组件里内源只有一部分，缺的暂时下不了
 //   missing  内源上没有这个包
 //   down     连不上内源（多半不在公司网络）；把真实原因写在行里
+//   auth     内源连得上，但版本查询接口要求登录（R55，2026-11-27 起匿名列表回「未认证的请求」）；不是网络问题
 //   nolist   组件清单读不到，和内源通不通无关
 //   checking 正在查（第一次最多等约 3 秒）
 //   off      内源不生效（测试开关 AI_HUB_OPENX=0）
@@ -29,6 +30,7 @@ function view(status, extra = {}) {
     partial: `公司内源 · 只有 ${extra.hit || 0}/${extra.total || 0} 个文件，缺的暂时下不了（可能还在同步，请稍后再试）`,
     missing: '公司内源 · 暂缺这个包（可能还在同步，请稍后再试）',
     down: `公司内源 · 连不上${reason}。${openxSource.NETWORK_HINT}`,
+    auth: '公司内源 · 版本查询接口现在要求登录，暂时自动下不了（不是网络问题）；可先到内源项目页手动下载，并点「一键反馈」告诉维护人',
     nolist: `组件清单读不到${reason}`,
     checking: '公司内源 · 正在检查…',
     off: '公司内源 · 未生效（测试开关 AI_HUB_OPENX=0）',
@@ -58,16 +60,17 @@ async function check(spec = {}, { fetchImpl, env = process.env, timeoutMs, now =
   if (!fresh && hitCache && now() - hitCache.at < CACHE_MS) return hitCache.value;
   // r60：用户点「重测」时清掉「5 分钟内不再试」的标记，真的再连一次。
   if (fresh) openxSource.clearDown();
-  if (openxSource.reachability({ now }) === 'down') { const d = openxSource.diagnostics({ now }).down; return view('down', { env, reason: d && d.reason ? d.reason : openxSource.lastReason() }); }
-  let hit = 0, down = false, reason = '';
+  if (openxSource.reachability({ now }) === 'down') { const d = openxSource.diagnostics({ now }).down; return view(d && d.auth ? 'auth' : 'down', { env, reason: d && d.reason ? d.reason : openxSource.lastReason() }); }
+  let hit = 0, down = false, auth = false, reason = '';
   for (const item of items) {
     const found = await openxSource.find({ file: item.file, version: item.version, release: item.release, strict: !!spec.strict, fetchImpl, env, timeoutMs, now });
     if (found) { hit += 1; continue; }
     reason = openxSource.lastReason();
+    if (/要求登录/.test(reason)) { auth = true; break; }
     if (/连不上/.test(reason)) { down = true; break; }
   }
   const total = items.length;
-  const value = down ? view('down', { env, reason })
+  const value = auth ? view('auth', { env, reason }) : down ? view('down', { env, reason })
     : hit === total ? view('ok', { env, total, hit })
       : hit > 0 ? view('partial', { env, total, hit, reason })
         : view('missing', { env, total, hit: 0, reason });

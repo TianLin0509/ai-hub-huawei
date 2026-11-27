@@ -659,5 +659,13 @@
   "默认：部门 API key（未检测到 CodeAgent）": "Default: department API key (CodeAgent not detected)",
   "选「Claude Code · 部门 API key」的功能由本机 Claude Code 当外壳、经 Hub 的本机反代连部门网关作答，不经 CodeAgent；key 用设置里「API 网关」已保存的那把（Windows 账户加密，不落明文），会话只挂该功能自己的工具。没有可用的 CodeAgent（没装或没有模型权限）、又保存过部门 key 时，8 项互动功能和 PPT 库地图没选过就默认用它，选过的照旧。模型表来自网关；表里没有但网关能用的模型可以手填，先试跑一句测通再用。报错会写清原因并给出重填 key / 换模型按钮。": "Features set to \"Claude Code · department API key\" use the local Claude Code as a shell and answer through Hub's local proxy to the department gateway, not through CodeAgent; the key is the one saved under Settings → API gateway (encrypted with your Windows account, never stored in plain text), and each session only gets that feature's own tools. When no usable CodeAgent is found (not installed or no model permission) and a department key is saved, the 8 interactive features and the PPT library map use it by default unless you picked something else; your own choices stay as they are. The model list comes from the gateway; models the gateway serves but does not list can be typed in after a one-line test run. Errors state the reason and offer re-enter key / switch model buttons.",
   "部门统一发的 key，走公司 API 网关，按部门计费，模型由网关提供": "Department-issued key routed through the company API gateway; billed to your department, models provided by the gateway",
-  "自己填 URL、模型名和 key，任何兼容 OpenAI 或 Anthropic 的接口都可以": "Enter your own URL, model name and key; any OpenAI- or Anthropic-compatible endpoint works"
+  "自己填 URL、模型名和 key，任何兼容 OpenAI 或 Anthropic 的接口都可以": "Enter your own URL, model name and key; any OpenAI- or Anthropic-compatible endpoint works",
+  "选的 {0} 没选上，现在用的是 {1}。": "Couldn't select {0}; now using {1}.",
+  "CodeAgent 当前的模型": "CodeAgent's current model",
+  "当前生效的是「设置 → 功能使用的 Agent → 分身」选的 {0}（所有分身共用），这里的模型选择暂不生效。": "In effect: {0} chosen under Settings → Agent for features → Avatar (shared by all avatars); the model picked here doesn't apply for now.",
+  "当前生效的是「设置 → 功能使用的 Agent → 分身」：{0}（所有分身共用），这里的账号和模型选择暂不生效。": "In effect: Settings → Agent for features → Avatar: {0} (shared by all avatars); the account and model picked here don't apply for now.",
+  "没检测到可用 CodeAgent，自动用 {0}（所有分身共用），这里的账号和模型选择暂不生效。": "No usable CodeAgent detected, so {0} is used automatically (shared by all avatars); the account and model picked here don't apply for now.",
+  "去改那一项": "Change that setting",
+  "模型不可用": "Model unavailable",
+  "公司模型（CodeAgent 账号）": "Company models (CodeAgent account)"
 }

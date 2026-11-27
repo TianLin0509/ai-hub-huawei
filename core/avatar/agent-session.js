@@ -89,13 +89,41 @@ function backendOptions(backend = {}, pickAccount = () => '') {
   if (account === 'auto') account = pickAccount(model) || 'personal';
   if (account !== 'personal') Object.assign(out, { codeagentAccount: 'pool', codeagentPoolPick: account });
   if (model) out.codeagentRouteModel = model;
+  // 模型卡选了供应商（菜单分组）时一起带上，启动选型按这一组去菜单里找（R53 第 4 件）。
+  if (model && backend.provider) Object.assign(out, require('../codeagent-model-choice').routeFields(backend));
   if (backend.effort) out.effort = backend.effort;
   return out;
+}
+
+// 启动没选上之后，用户在后台终端里手动 /model 选上了：下一轮回答的实际模型就是所选的模型，提示该撤了（R53b）。
+// 点名了供应商时回答里看不出组别，只在实际模型和回退时用的模型不同时才认（同名另一组认不出，照旧留着提示）。
+// A launch pick miss is resolved once an answer comes back from the wanted model (provider misses need it to differ from the fallback).
+function pickMissResolved(session, actualModel) {
+  const miss = session?.codeagentPickMiss, actual = String(actualModel || '').trim().toLowerCase();
+  if (!miss || typeof miss !== 'object' || !actual) return false;
+  if (String(miss.model || miss.want || '').toLowerCase() !== actual) return false;
+  return !miss.provider || String(miss.using || '').toLowerCase() !== actual;
+}
+
+// 按一轮回答判断提示能不能撤：回答里的模型名、观察后改写的会话模型名，再把后端名（maas-glm-5-3-*）对回号的模型清单
+// 再认一次——观察只在会话模型变了时才改写，回退后手动 /model 选回所选模型的多数路径都拿不到它（R53b 复审 2 P2-1）。
+// Judge one answer: its raw model id, the observed session model, then the backend id resolved back to the account catalog.
+function pickMissResolvedByAnswer(session, actualModel, { observedModel = '', resolveSwitch = null } = {}) {
+  if (!session?.codeagentPickMiss) return false;
+  if (pickMissResolved(session, actualModel) || pickMissResolved(session, observedModel)) return true;
+  let resolved = '';
+  try { resolved = actualModel && typeof resolveSwitch === 'function' ? resolveSwitch(actualModel) || '' : ''; } catch { resolved = ''; }
+  return pickMissResolved(session, resolved);
 }
 
 class AgentSessions {
   constructor(deps) { this.d = deps; this.now = deps.now || (() => Date.now()); this.pollMs = deps.pollMs || 1000; this.starting = new Map(); }
   alive(id) { const s = id ? this.d.getSession(id) : null; return !!s && s.status !== 'dormant' && s.status !== 'closed'; }
+  // 启动时没选上所选模型（主进程记在会话上，main/ipc/session-handlers.js codeagentPickMiss）：只报还活着的会话（R53 第 4 件）。
+  pickMiss(id) {
+    const miss = this.alive(id) ? this.d.getSession(id)?.codeagentPickMiss : null;
+    return miss && typeof miss === 'object' && miss.want ? { want: String(miss.want), using: String(miss.using || ''), pickFailure: String(miss.pickFailure || ''), at: Number(miss.at) || 0 } : null;
+  }
   // 返回是否已关掉。关不掉（会话还在）时 ensure 不另开新会话，免得旧会话和它的插件进程树一直挂着、越积越多（2026-11-19）。
   async close(id) {
     if (!id) return true;
@@ -106,17 +134,28 @@ class AgentSessions {
   async ensure(av, session, cwd) {
     const meta = session?.id && this.d.getSession(session.id);
     const routes = require('../codeagent-assistant-route');
-    const route = meta && this.d.dataDir ? routes.choose(this.d.dataDir, meta.codeagentPoolAccount || 'personal', routes.deferredModel(meta) || meta.currentModel?.id || meta.fixedModel || '',
-      { configDir: meta.codeagentConfigDir, explicitModel: av.backend?.model || '' }) : null;
-    const sameRoute = !require('../feature-agent-choice').stale(this.d.dataDir, 'avatar', meta) && (!require('../feature-agent-choice').inheritsAssistantChoice(meta?.featureAgentChoice) || routes.matchesSession(meta, route, { dataDir: this.d.dataDir }));
+    // 模型卡点名了供应商时直接按它核对线路，不经助理设置的同名模型改写（R53b）。只在模型卡真生效（会话继承助理线路、
+    // 设置页没覆盖）时才这样核：设置页覆盖时模型卡存的旧选择不生效，拿它比会话实际模型会每问都重开。
+    const inherits = require('../feature-agent-choice').inheritsAssistantChoice(meta?.featureAgentChoice);
+    const explicit = inherits && av.backend?.model && av.backend?.provider ? { model: String(av.backend.model), codeagentModelProvider: String(av.backend.provider) } : null;
+    const route = explicit || (meta && this.d.dataDir ? routes.choose(this.d.dataDir, meta.codeagentPoolAccount || 'personal', routes.deferredModel(meta) || meta.currentModel?.id || meta.fixedModel || '',
+      { configDir: meta.codeagentConfigDir, explicitModel: av.backend?.model || '' }) : null);
+    const sameRoute = !require('../feature-agent-choice').stale(this.d.dataDir, 'avatar', meta) && (!inherits || routes.matchesSession(meta, route, { dataDir: this.d.dataDir }));
     if (session?.id && this.alive(session.id) && sameRoute && (session.rulesVersion || 0) === (av.rulesVersion || 0) && (session.questions || 0) < MAX_QUESTIONS) return session;
     if (this.starting.has(av.id)) return this.starting.get(av.id);
     const work = (async () => {
       if (session?.id && !(await this.close(session.id))) throw new Error('上一个分身会话还没关掉，下一轮再试');
       const id = randomUUID();
       const addDirs = (av.sources || []).map(s => (s.type === 'dir' ? s.path : require('node:path').dirname(s.path)));
+      // 设置页「功能使用的 Agent → 分身」选了具体模型时它生效：自动挑号按它挑，不按模型卡存的旧模型（R53b）。
+      let override = '';
+      try {
+        const sel = (av.backend?.account || 'auto') === 'auto' && this.d.dataDir ? require('../feature-agent-choice').resolve(this.d.dataDir, 'avatar').selected : null;
+        if (sel?.model && /^codeagent/.test(sel.kind || '')) override = sel.model;
+      } catch { override = ''; }
+      const pickAccount = this.d.pickAccount ? model => this.d.pickAccount(override || model) : undefined;
       const picked = require('../feature-agent-choice').session(this.d.dataDir, 'avatar', 'codeagent', { id, cwd, title: `分身 · ${av.name}`, purpose: PURPOSE, autonomous: true, noInheritCursor: true, openInBackground: true,
-        ...(addDirs.length ? { addDirs: [...new Set(addDirs)] } : {}), ...backendOptions(av.backend, this.d.pickAccount) });
+        ...(addDirs.length ? { addDirs: [...new Set(addDirs)] } : {}), ...backendOptions(av.backend, pickAccount) });
       const created = await this.d.createSession(picked.kind, picked.opts);
       if (created?.ok === false) throw new Error(created.message || created.error || '分身会话没有启动');
       return { id, questions: 0, startedAt: this.now(), lastAt: this.now(), rulesVersion: av.rulesVersion || 0 };
@@ -168,4 +207,4 @@ class AgentSessions {
   }
 }
 
-module.exports = { AgentSessions, backendOptions, normalizeFailure, PURPOSE, MAX_QUESTIONS, IDLE_MS };
+module.exports = { AgentSessions, backendOptions, normalizeFailure, pickMissResolved, pickMissResolvedByAnswer, PURPOSE, MAX_QUESTIONS, IDLE_MS };

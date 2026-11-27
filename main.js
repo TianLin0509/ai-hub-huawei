@@ -988,6 +988,15 @@ async function observeCodeAgentModel(hubSessionId, ev, transcriptPath, source = 
       });
     };
     const observed = session && modelId ? codeAgentModels.observeModel(session, modelId, { at: modelAt, resolveSwitch, followActual: true }) : null;
+    // 分身启动没选上、用户到后台终端里手动 /model 选上了：回答的实际模型就是所选的，撤掉分身页的提示（R53b）。
+    try {
+      // 回答里报的是后端名（maas-glm-5-3-*）时，按观察到的会话模型名、再按对回号清单的模型名认（复审 2 P2-1）。
+      if (session?.codeagentPickMiss && require('./core/avatar/agent-session').pickMissResolvedByAnswer(session, modelId,
+        { observedModel: observed?.fields?.currentModel?.id || '', resolveSwitch })) {
+        sessionManager.updateSessionMeta(hubSessionId, { codeagentPickMiss: null });
+        sendToRenderer('avatar:changed', {});
+      }
+    } catch (error) { console.warn('[codeagent-model] 撤分身选型提示失败：' + error.message); }
     try {
       if (source === 'turn-complete' && !session.purpose && !session.autonomous && !observed?.mismatch
         && !require('./core/company-assistant/turn-api-error').lastApiError(file)) {

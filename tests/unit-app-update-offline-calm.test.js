@@ -12,7 +12,8 @@ const { createAppUpdateController } = require('../main/app-update-controller');
 
 const ENV = { AI_HUB_OPENX: '1' };
 const realFetchManifest = openx.fetchManifest;
-test.beforeEach(() => openx._reset());
+// 本文件测的是列表路径：显式关掉版本索引（R55 起配置里有索引 id，默认先读索引）。
+test.beforeEach(() => openx._reset({ indexId: 0 }));
 test.afterEach(() => { openx.fetchManifest = realFetchManifest; });
 
 function netError(message, code) { const e = new TypeError(message); if (code) e.cause = { code }; return e; }
@@ -20,7 +21,7 @@ function netError(message, code) { const e = new TypeError(message); if (code) e
 test('不在公司网络快判：域名解析不到、连接被关 / 被拒都在瞬间返回 offline，不等满预算', async () => {
   for (const err of [netError('net::ERR_CONNECTION_CLOSED'), netError('fetch failed', 'ENOTFOUND'), netError('net::ERR_NAME_NOT_RESOLVED'),
     netError('net::ERR_PROXY_CONNECTION_FAILED'), netError('fetch failed', 'ECONNREFUSED')]) {
-    openx._reset();
+    openx._reset({ indexId: 0 });
     const started = Date.now();
     const r = await openx.fetchManifest({ fetchImpl: async () => { throw err; }, validate: x => x, env: ENV, currentVersion: '5.6.1' });
     assert.equal(r.ok, false);
@@ -43,7 +44,7 @@ test('内源慢：到预算返回 slow；手动检查最多给 20 秒，后台�
   assert.equal(openx.MANIFEST_BUDGET_MS, 8000);
   assert.match(openx.slowText(20), /20 秒内没查完.*重试/);
   // 网络栈自己报超时（Chromium net::ERR_TIMED_OUT）也算慢，不标连不上
-  openx._reset();
+  openx._reset({ indexId: 0 });
   const t = await openx.fetchManifest({ fetchImpl: async () => { throw netError('net::ERR_TIMED_OUT'); }, validate: x => x, env: ENV, currentVersion: '5.6.1' });
   assert.equal(t.slow, true); assert.ok(!t.offline);
   assert.notEqual(openx.reachability(), 'down');
@@ -149,11 +150,11 @@ test('更新窗 offline：灰色一句话 + 旁边一个不高亮的「重试」
 
 test('代理类错误（ERR_PROXY_* / ERR_TUNNEL_* / ECONNREFUSED）：仍按不在公司网络，提示补「或本机代理没放行公司内网」', async () => {
   for (const err of [netError('net::ERR_PROXY_CONNECTION_FAILED'), netError('net::ERR_TUNNEL_CONNECTION_FAILED'), netError('fetch failed', 'ECONNREFUSED')]) {
-    openx._reset();
+    openx._reset({ indexId: 0 });
     const r = await openx.fetchManifest({ fetchImpl: async () => { throw err; }, validate: x => x, env: ENV, currentVersion: '5.6.1' });
     assert.equal(r.offline, true); assert.equal(r.proxy, true, err.message);
   }
-  openx._reset();
+  openx._reset({ indexId: 0 });
   const r = await openx.fetchManifest({ fetchImpl: async () => { throw netError('net::ERR_CONNECTION_CLOSED'); }, validate: x => x, env: ENV, currentVersion: '5.6.1' });
   assert.equal(r.offline, true); assert.ok(!r.proxy);
   openx.fetchManifest = async () => row({ reason: '内源连不上：net::ERR_PROXY_CONNECTION_FAILED', offline: true, proxy: true });

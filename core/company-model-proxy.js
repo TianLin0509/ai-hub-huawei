@@ -175,8 +175,8 @@ const CODEX_INSTRUCTIONS = `You are a coding agent running in the Codex CLI on t
 - Reply to the user in the language they use (usually Chinese). Be concise and state what you changed and how you verified it.`;
 // Codex 不认识公司模型的名字时会按通用默认值跑；给它一份目录，说明只收文字、不用联网搜索。
 function codexCatalog(ids = companyModelIds(), description = 'Company model via local proxy', known = companyModels(), { cap = 128000 } = {}) {
-  // 上下文按公司目录给的输入上限，不超过以前一直用的 128000（目录里更小的模型按它自己的）。
-  // 网关模型（cap: Infinity）按网关目录的真实值。
+  // 上下文按目录给的输入上限（公司模型与网关模型都一样，2026-11-27 放开原来的 128000 封顶：DeepSeek V4.1 输入上限 344064，
+  // 封在 128K 会让 Codex 提前压缩、改写历史，前缀缓存随之作废；与 DSH 11-25 的做法一致）。读不到输入上限时仍用 128000。
   const windowOf = slug => { const m = known.find(x => x.id === slug); return m && m.input ? Math.min(m.input, cap) : 128000; };
   const entry = slug => ({ slug, display_name: slug, description,
     default_reasoning_level: 'medium', supported_reasoning_levels: [{ effort: 'medium', description: 'Mapped to upstream thinking (high)' }],
@@ -196,7 +196,7 @@ function ensureCodexHome(dataDir, { model, projectDir, gateway = false }) {
   const home = codexHome(dataDir, { gateway });
   fs.mkdirSync(home, { recursive: true });
   const catalog = path.join(home, 'company-model-catalog.json');
-  fs.writeFileSync(catalog, JSON.stringify(gateway ? codexCatalog(gatewayModelIds(dataDir), 'API gateway model via local proxy', gatewayModels(dataDir), { cap: Infinity }) : codexCatalog(companyModelIds(dataDir), undefined, companyModels(dataDir)), null, 2), 'utf8');
+  fs.writeFileSync(catalog, JSON.stringify(gateway ? codexCatalog(gatewayModelIds(dataDir), 'API gateway model via local proxy', gatewayModels(dataDir), { cap: Infinity }) : codexCatalog(companyModelIds(dataDir), undefined, companyModels(dataDir), { cap: Infinity }), null, 2), 'utf8');
   const projectKey = path.resolve(projectDir || require('node:os').homedir());
   require('./codex-managed-config').writeHubManagedCodexConfig(path.join(home, 'config.toml'), [
     'disable_response_storage = true',
@@ -276,9 +276,10 @@ function dshRoute({ dataDir, sessionId, model, account, gateway = false, midStre
     // 只有终端模式（midStreamRetry）打开：它按每次尝试分开显示，失败那次的半截文字会被丢掉；卡片模式的 ACP 桥按
     // 「轮次 + 步骤」给文字编号，重试时编号不变，Hub 卡片会把两次的半截文字拼在一起，所以保持 0 次。
     // 网关路线也是 0 次：网关自己有长首包等待和重试，再叠 DSH 的重试最坏要等十几分钟。
+    // 思考档位 low / medium / high 都给 DSH 选（反代照传给公司上游，2026-11-27 黄区实测上游接受 low）；默认仍是 high。
     providerConfig: { api: 'openai-completions', baseURL: origin(endpoint) + '/v1', apiKeyEnv: KEY_ENV,
       retryPolicy: { mode: 'normal', maxRetries: !gateway && midStreamRetry ? 2 : 0 }, reasoning: 'high',
-      models: ids.map(id => ({ id, contextWindow: contextOf(id), maxTokens: 16384, reasoningEfforts: { high: 'high' },
+      models: ids.map(id => ({ id, contextWindow: contextOf(id), maxTokens: 16384, reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
         compat: { supportsDeveloperRole: false, thinkingFormat: 'deepseek', supportsStore: false, maxTokensField: 'max_tokens' } })) },
     disabledPatches: DSH_DISABLED.map(id => ({ id, disabled: true })),
   };

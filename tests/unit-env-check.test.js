@@ -197,3 +197,13 @@ test('PPT Doctor 识别组件过旧（r54）：PPT 项显示「识别组件需�
   assert.ok(JSON.stringify(missing).includes('ocr-install'));
   assert.equal((await run(null)).status, 'ok');
 });
+
+test('R55 审查 P2-6：内源要求登录时，一键更新的步骤改为手动下载 + 反馈，不再让用户查网络、重测', async () => {
+  const r = await envCheck.runEnvCheck({ platform: 'linux', kindAllowed: () => false, setup: fakeSetup({ node: '/n' }), runVersion: async () => ({ ok: true, version: '22.0.0' }),
+    appUpdate: () => ({ probeSources: async () => ({ sources: [{ id: 'openx-manifest', name: '公司内源', ok: false, reason: '内源要求登录（接口返回 401 未认证的请求）' }] }) }),
+    proxy: () => ({ enabled: false, status: { state: 'stopped' } }) });
+  const item = r.items.find(i => i.id === 'app-update');
+  assert.equal(item.status, 'bad');
+  assert.match(item.cause, /要求登录.*不是网络问题/);
+  assert.deepEqual(item.steps, ['在浏览器里打开内源项目页，手动下载安装包', '点「一键反馈」告诉维护人']);
+});

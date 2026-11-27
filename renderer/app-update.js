@@ -112,6 +112,14 @@
     if (!(state?.latest?.installer?.file || state?.plan?.kind === 'full' || fullPackageUrl())) return null;
     return { url: '', label: state?.portable ? '下载新的免安装包（公司内源）' : '下载完整安装包（公司内源）', point: 'app-installer' };
   }
+  // 内源项目页（R55）：只认内源站点同域的 https 地址（openx-config.js projectPage）。
+  function projectPageUrl() {
+    try {
+      const cfg = require('../core/app-update/openx-config');
+      const u = new URL(String(cfg.projectPage || '')), site = new URL(String(cfg.fileSite || '')).hostname;
+      return u.protocol === 'https:' && (u.hostname === site || u.hostname.endsWith('.' + site)) ? u.href : '';
+    } catch { return ''; }
+  }
   // 主进程只放白名单域名内的 https 地址；这里再确认一次是 https。
   function fullPackageUrl() { const u = String(state?.fullPackage?.url || ''); return u.toLowerCase().startsWith('https://') ? u : ''; }
   // 内源完整包的一行说明（r27）：检查 / 下载失败时显示。
@@ -251,6 +259,13 @@
       // 提示旁放一个不高亮的「重试」（刚连上 VPN 想马上再查时用），底部不再有高亮按钮。
       body += `<div class="au-msg info" data-au-offline style="display:flex;align-items:center;gap:10px"><span style="flex:1">${esc(s.error)}</span><button class="au-btn" data-au="retry">重试</button></div>`;
       foot = '<button class="au-btn" data-au="close">好的</button>';
+    } else if (s.phase === 'error' && s.errorKind === 'auth') {
+      // R55（2026-11-27）：内源连得上，但版本查询接口要求登录——不是网络问题、重试也没用，不标红；
+      // 给「打开内源项目页」（浏览器里已登录 W3 就能手动下载），Hub 会定时再查，接口恢复或读到版本索引后自动好。
+      const manualU = manualDownload();
+      body += `<div class="au-msg warn" data-au-auth>${esc(s.error)}</div>${fullPackageLine()}`;
+      foot = `${manualU ? `<button class="au-btn" data-au="manual">${esc(manualU.label)}</button>` : ''}<button class="au-btn" data-au="close">关闭</button>`
+        + (projectPageUrl() ? '<button class="au-btn primary" data-au="project-page">打开内源项目页</button>' : '');
     } else if (s.phase === 'error' && s.errorKind === 'slow') {
       // R44：在公司网络但内源太慢——一句话说明，「重试」就放在这句话旁边；底部不再重复一个高亮的「重试」。
       const manualS = manualDownload();
@@ -301,6 +316,7 @@
       if (action === 'notes-more' || action === 'notes-less') { notesOpenFor = action === 'notes-more' ? String(state?.latest?.version || '') : ''; render(); return; }
       if (action !== 'manual') manualError = '';
       if (action === 'close') { confirmInfo = null; dialog?.close(); }
+      else if (action === 'project-page') { const u = projectPageUrl(); if (u) shell.openExternal(u); }
       else if (action === 'retry') { await ipcRenderer.invoke('app-update:check'); }
       else if (action === 'download') {
         // 已经动手更新了，设置上的红点就不用再提醒。

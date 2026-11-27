@@ -22,9 +22,18 @@ function drawPrompt(note = '') {
   out(at(8, '❯ '));
   out(at(10, ' ? for shortcuts'));
 }
+// FAKE_MENU_STYLE=codeagent：画成公司 CodeAgent（opentui）的样子——选项不带编号，底栏「Navigate ↑ ↓ | Select enter | Back esc」。
+const opentui = process.env.FAKE_MENU_STYLE === 'codeagent';
 function drawMenu() {
   const m = MENUS[menu];
   out('\x1b[2J');
+  if (opentui) {
+    out(at(2, ' ● ' + m.tool));
+    out(at(4, ' Allow this command?'));
+    ['Allow once', 'Allow always', 'Reject'].forEach((label, i) => out(at(5 + i, (i === cursor ? ' ❯ ' : '   ') + label)));
+    out(at(10, ' Navigate ↑ ↓ | Select enter | Back esc'));
+    return;
+  }
   out(at(2, ' ● ' + m.tool));
   out(at(4, ' Bash command'));
   out(at(5, '   ' + m.detail));

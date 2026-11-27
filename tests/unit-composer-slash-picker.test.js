@@ -178,6 +178,8 @@ test('renderer key handler lets the slash picker consume keys before send', () =
     codeagentSkills: null, slashPicker: { onKeyDown: e => { if (e.key === 'Enter' && e.open) { consumed += 1; return true; } return false; } },
     sendInput: () => { sends += 1; }, inputHistory: null, isNativeAgent: () => false, sessions: new Map(), sessionId: 's',
     focusAfterSend() {}, require: id => require(path.join(__dirname, '..', 'renderer', id)), localStorage: { getItem: () => null },
+    // R52c 起回车先问终端选择菜单要不要（菜单没出现时不拦）；这里只测斜杠选择框的先后顺序。
+    ptyAttention: { forwardKey: () => false }, contenteditableHasText: () => true, inputBox: {},
   });
   const ev = extra => ({ key: 'Enter', shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, preventDefault() {}, ...extra });
   handle(ev({ open: true })); assert.equal(consumed, 1); assert.equal(sends, 0);

@@ -32,7 +32,8 @@ function controller(net, isPublic) {
     // 版本清单用测试注入的本机源（AI_HUB_UPDATE_SOURCES），这里只测内源那一行的探测。
     env: { AI_HUB_OPENX: '1', AI_HUB_UPDATE_SOURCES: JSON.stringify(sources) } });
 }
-test.beforeEach(() => openx._reset());
+// 本文件测的是列表路径：显式关掉版本索引（R55 起配置里有索引 id，默认先读索引）。
+test.beforeEach(() => openx._reset({ indexId: 0 }));
 test.afterEach(() => { openx.EDITION_ON = originalEdition; });
 
 test('成员版（r56）：内源行显示 member-v<版本> 的真实探测结果；只有公开版同名版本时显示没有该版本', async () => {
@@ -46,7 +47,7 @@ test('成员版（r56）：内源行显示 member-v<版本> 的真实探测结�
     assert.deepEqual(net.calls.filter(url => url.includes('by_id')).map(url => url.split('=').pop()), ['3'], '只查 member 版本详情');
     assert.equal((await c.probeSources()).sources[0].ok, true);
   } finally { c.dispose(); }
-  openx._reset();
+  openx._reset({ indexId: 0 });
   net = fakeNet({ releases: [{ id: 2, version: 'v' + version }] });
   c = controller(net, false);
   try {
@@ -54,7 +55,7 @@ test('成员版（r56）：内源行显示 member-v<版本> 的真实探测结�
     assert.equal(net.calls.filter(url => url.includes('by_id')).length, 0, '公开版版本不查');
   } finally { c.dispose(); }
   // 公开版看不到 member-*
-  openx._reset();
+  openx._reset({ indexId: 0 });
   net = fakeNet({ releases: [{ id: 3, version: 'member-v' + version }] });
   c = controller(net, true);
   try { assert.equal(sourceText((await c.check()).internalSource), '没有该版本 v' + version); } finally { c.dispose(); }
@@ -90,7 +91,7 @@ test('公开版：内源连不上显示原因，5 分钟失败缓存避免重复
 
 test('公开版：缺少该版本或其程序附件显示没有该版本，不查询无关组件详情', async () => {
   for (const opts of [{ releases: [{ id: 9, version: 'room-runtime-2.1.0' }] }, { packages: [] }]) {
-    openx._reset();
+    openx._reset({ indexId: 0 });
     const net = fakeNet(opts);
     const c = controller(net, true);
     try {

@@ -42,7 +42,12 @@ function applyPatch(current, patch = {}) {
   if ('authorities' in patch) next.authorities = people(patch.authorities, 20);
   if ('sources' in patch) next.sources = sources(patch.sources);
   if ('prefix' in patch) next.prefix = prefixOf(patch.prefix) || current.prefix;
-  if ('backend' in patch) next.backend = { account: oneLine(patch.backend?.account, 80) || 'auto', model: oneLine(patch.backend?.model, 80), effort: ['low', 'medium', 'high', 'max'].includes(patch.backend?.effort) ? patch.backend.effort : '' };
+  if ('backend' in patch) {
+    const model = oneLine(patch.backend?.model, 80), provider = model ? oneLine(patch.backend?.provider, 150) : '';
+    // 同名模型在不同供应商（菜单分组）是不同线路：模型卡选的是哪一组一起记下（R53 第 4 件）。
+    next.backend = { account: oneLine(patch.backend?.account, 80) || 'auto', model, effort: ['low', 'medium', 'high', 'max'].includes(patch.backend?.effort) ? patch.backend.effort : '',
+      ...(provider ? { provider, providerLabel: oneLine(patch.backend?.providerLabel, 150) || provider, menuLabel: oneLine(patch.backend?.menuLabel, 164) || model } : {}) };
+  }
   if ('hideModel' in patch) next.hideModel = patch.hideModel !== false;
   return next;
 }

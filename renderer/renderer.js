@@ -329,6 +329,8 @@ const CODEX_PROGRAMMATIC_SCROLL_SUPPRESS_MS = 120;
 const AI_PTY_FALLBACK_ARM_MS = 45 * 60 * 1000;
 const AI_PTY_FALLBACK_COOLDOWN_MS = 5 * 1000;
 const PTY_RUNTIME_SUBMIT_PENDING_MS = 15 * 1000;
+// CodeAgent 原生菜单（模型菜单、方向键选择框）：空闲时弹出也算「等你操作」，按 Esc 或选完回到输入框也要能退出等待（2026-11-27 审查）。
+const CODEAGENT_MENU_REASONS = new Set(['codeagent-model-menu', 'codeagent-choice-menu']);
 // Codex briefly exposes its persistent prompt/context footer between commentary
 // and the next tool call. A single such frame is not proof of completion. Hold
 // input-ready for a second current-screen observation before closing a turn.
@@ -5843,6 +5845,11 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   const ptyAttention = require('./pty-attention-controls').createPtyAttentionControls({
     invoke: (channel, payload) => ipcRenderer.invoke(channel, payload),
     getSessionId: () => sessionId,
+    writeTerminal: (sid, data) => {
+      // 只有回车（真正作答）才清「等你操作」；方向键只是移动高亮，清了会让提示条闪掉（2026-11-27 审查）
+      if (data === '\r') clearSessionWaitingState(sid);
+      ipcRenderer.send('terminal-input', { sessionId: sid, data });
+    },
     onOpenTerminal: () => {
       if (pane.openTerminal) pane.openTerminal();
       else if (activeSessionId === sessionId) applyViewMode('pty');
@@ -6269,7 +6276,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
         const exited = result.code === 'cli-exited' && !result.missingCli;
         if (exited) showToast('消息未发送：' + (result.message || 'CLI 已退出'), 'error', { sessionId, resendText: text, terminalTail: Array.isArray(result.terminalTail) ? result.terminalTail : [] });
         // 菜单拒收只显示常驻重发条；其他失败仍保留安装、重启等原有恢复入口。
-        else if (result.missingCli || !isCodeAgentKind(kind) || session._ptyRuntimeReason !== 'codeagent-model-menu' || !bar._resendStrip) showToast('消息未发送：' + (result.message || 'CLI 暂时不能接收输入'), 'error', { sessionId });
+        else if (result.missingCli || !isCodeAgentKind(kind) || !CODEAGENT_MENU_REASONS.has(session._ptyRuntimeReason) || !bar._resendStrip) showToast('消息未发送：' + (result.message || 'CLI 暂时不能接收输入'), 'error', { sessionId });
         bar._resendStrip?.show({ text, reason: result.message || 'CLI 暂时不能接收输入' });
         for (const other of document.querySelectorAll('.floating-input-bar')) {
           if (other.dataset.sessionId === sessionId) clearFloatingInputStuck(other);
@@ -6328,6 +6335,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     if (e.isComposing || e.keyCode === 229) return;
     if (codeagentSkills?.onKeyDown(e)) return;
     if (slashPicker?.onKeyDown(e)) return;
+    // 终端停在选择菜单上（卡片输入框上方有提示条）且输入框为空：↑↓/回车交给终端，不翻历史、不发空消息
+    if (ptyAttention.forwardKey(e, !contenteditableHasText(inputBox))) return;
     const enterKey = require('./composer-enter-key'), enterMode = enterKey.readMode(localStorage);
     if (enterKey.isSendKey(e, enterMode)) {
       e.preventDefault();
@@ -7862,7 +7871,7 @@ function applyPtyRuntimeObservation(session, runtime, observedAt = Date.now()) {
     // fabricate transcript text or unread counts; a delayed authoritative Stop
     // hook/task_complete can still enrich the card afterwards.
     const codeagentMenu = isCodeAgentKind(session.kind)
-      && (runtime.reason === 'codeagent-model-menu' || session._ptyRuntimeReason === 'codeagent-model-menu');
+      && (CODEAGENT_MENU_REASONS.has(runtime.reason) || CODEAGENT_MENU_REASONS.has(session._ptyRuntimeReason));
     if (!wasRunning && !codeagentMenu) return false;
     if (runtime.state === 'idle' && claudeBackgroundKeepsRunning(session._claudeBackgroundTasks)) {
       return false;

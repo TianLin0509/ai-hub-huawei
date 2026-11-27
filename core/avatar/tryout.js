@@ -79,7 +79,7 @@ class Tryouts {
       const knownPrivate = samples.some(s => s.kind === 'dm' && s.question === question);
       if ((opts.kind === 'dm' || selected?.kind === 'dm' || knownPrivate) && opts.explicitPrivateConsent !== true) throw invalid('这是私聊消息，请先明确勾选允许本次试答使用，再开始', 'private_consent_required');
       if (R.sensitiveHit(question)) throw invalid('这道试题涉及敏感内容，请换一道题');
-      const agent = f.preflight(owner, f.backends()).agent;
+      const agent = f.preflight(owner, f.backends(), { only: av.id }).agent;
       if (!agent.ok) throw new Error(agent.label || '模型账号未就绪，请先选择可用账号');
       token = randomUUID(); this.running.set(key, token);
       const current = () => f.current(owner, epoch);

@@ -46,6 +46,12 @@ const WAITING_PATTERNS = [
   /Press Enter to confirm/i,
 ];
 
+// 公司 CodeAgent 选择框底栏（模型菜单实录「Navigate ↑ ↓ | Config ctrl+a | … | Select enter | Back esc」）。
+// 空闲输入框占位里的「↑↓ 历史」不算。
+const CODEAGENT_MENU_FOOTER_RE = /Navigate\s*↑\s*↓|\bSelect\s+enter\b|↑\s*↓\s*(?:to\s+)?(?:select|navigate|选择)/i;
+// CodeAgent 菜单底栏下面若出现这些，说明菜单已经收起、回到了输入框或正在执行：空闲占位、执行中占位、转圈运行行、模式状态栏。
+const CODEAGENT_LIVE_BELOW_MENU_RE = /Anything I can assist you with|补充指令（Enter 排队|[⠀-⣿]\s*Running|Cycle shift\+tab/;
+
 function normalizeLines(lines) {
   if (!Array.isArray(lines)) return [];
   return lines
@@ -131,6 +137,13 @@ function classifyCodeAgent(lines) {
   }
   const waiting = waitingObservation(lines);
   if (waiting) return waiting;
+  // 其他方向键选择框（工具授权、提问等）：底栏是同一套「Navigate ↑ ↓ | Select enter」写法。
+  // 以前只认模型菜单，别的选择框连「等你操作」都不报，卡片上没有任何提示（2026-11-27）。
+  // 底栏下面已经是输入框、运行行或状态栏，说明那是上一道已答菜单留下的旧画面或输出里的字样，不算等你操作（2026-11-27 审查）。
+  const tail = lines.slice(-4);
+  const footerAt = tail.findLastIndex(line => CODEAGENT_MENU_FOOTER_RE.test(line));
+  const menuFooter = footerAt >= 0 && !tail.slice(footerAt + 1).some(line => CODEAGENT_LIVE_BELOW_MENU_RE.test(line)) ? tail[footerAt] : '';
+  if (menuFooter) return observation(RUNTIME_WAITING, 'codeagent-choice-menu', '终端在等你选择：可在输入框按 ↑↓ 和回车，或去后台');
   const liveTail = lines.slice(-16);
   const running = firstMatchingLine(liveTail, /[⠀-⣿]\s*Running/)
     || firstMatchingLine(liveTail, /补充指令（Enter 排队/);

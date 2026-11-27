@@ -12,6 +12,7 @@
 .avx-beta{padding:0 6px;border-radius:5px;background:var(--bs);color:var(--b);font:600 12px/18px "Segoe UI",sans-serif}
 .avx-right{display:flex;align-items:center;gap:8px;margin-left:auto}
 .avx-ch{display:inline-flex;align-items:center;gap:5px;padding:1px 9px;border-radius:999px;background:var(--sf3);color:var(--t2);font-size:12px;line-height:20px;white-space:nowrap}
+button.avx-ch{border:0;cursor:pointer;font:inherit;font-size:12px}
 .avx-ch.b{background:var(--bs);color:var(--b)}.avx-ch.g{background:var(--gs);color:var(--g)}.avx-ch.w{background:var(--ws);color:var(--w)}.avx-ch.r{background:var(--rs);color:var(--r)}
 .avx-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--hw-line-strong)}.avx-dot.g{background:var(--hw-green)}.avx-dot.w{background:var(--hw-amber)}.avx-dot.r{background:var(--hw-red)}
 .avx-btn{padding:5px 12px;border:1px solid var(--bd);border-radius:7px;background:var(--sf);color:var(--hw-text-1);font:inherit;font-size:13px;line-height:1.5;white-space:nowrap;cursor:pointer}

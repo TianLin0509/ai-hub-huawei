@@ -67,6 +67,10 @@ async function getJson(fetchImpl, url, timeoutMs, maxBytes = 64 * 1024) {
       const code = e && e.cause && (e.cause.code || e.cause.message);
       throw new Error(`网络错误 ${code || (e && e.message) || ''}`.trim());
     }
+    if (res && (res.status === 401 || res.status === 403)) {
+      let t = ''; try { t = String(await res.text()); } catch {}
+      throw new Error(/^\s*[{\[]/.test(t) ? `内源要求登录（HTTP ${res.status}）` : `HTTP ${res.status}`);
+    }
     if (!res || !res.ok) throw new Error(`HTTP ${res && res.status}`);
     let text;
     try { text = String(await res.text()); } catch (e) { throw new Error(ac.signal.aborted ? `${timeoutMs / 1000} 秒内没收完内容` : `读内容出错 ${e && e.message}`); }
@@ -94,16 +98,37 @@ function createReceiverAddress({ dataDir, fetchImpl, config = openxConfig(), now
     const norm = v => String(v || '').trim().toLowerCase();
     const isHit = r => r && r.id != null && (norm(r.version) === RELEASE || norm(r.version).startsWith(RELEASE + ' '));
     let hits = [];
-    for (let page = 1; page <= MAX_PAGES && !hits.length; page++) {
+    // R55（索引优先）：配了版本索引就先读索引（by_id 匿名可读、一次全量）；索引读不到或里面没有收件地址版本，再翻列表。
+    const envIndex = require('./app-update/openx-source').indexOverrideFromEnv();   // 写 0 = 显式关掉索引
+    const indexId = envIndex ?? (Number(config.indexReleaseId) || 0);
+    let indexError = '';
+    if (indexId) {
+      try { hits = (await require('./app-update/openx-source').loadIndex({ fetchImpl, api: config.api, timeoutMs: Math.max(timeoutMs, listTimeoutMs), indexId })).filter(isHit); }
+      catch (e) {
+        // 审查 P1-3 ②：离线或超时就按连不上处理，不再向同一个站点翻列表（免得等两遍）。
+        const ox = require('./app-update/openx-source');
+        if (ox.isOfflineError(e) || ox.isTimeoutError(e) || (e && e.name === 'AbortError')) return fallback(false, `内源连不上：${e && e.message ? e.message : e}`);
+        indexError = e && e.message ? e.message : String(e);
+      }
+    }
+    // 索引读到了就以它为准（全量，发版流水线每次发布后更新），里面没有收件地址版本也不再翻列表。
+    for (let page = 1; page <= MAX_PAGES && !hits.length && !(indexId && !indexError); page++) {
       let records;
       try {
         const list = await getJson(fetchImpl, `${config.api}by_project_id?projectId=${config.projectId}&currentPage=${page}&pageSize=${PAGE_SIZE}`,
           Math.max(timeoutMs, listTimeoutMs), 512 * 1024);
+        // R55（2026-11-27）：列表接口要求登录（code 401/403）——如实说要求登录（附上索引为什么没读到）；索引读到了只是没有收件地址版本就不再翻页。
+        if (list && /^(401|403)$/.test(String(list.code)) && page === 1) {
+          if (!indexId) throw new Error(`内源要求登录（接口返回 ${list.code}），也没有配置版本索引`);
+          if (indexError) throw new Error(`内源要求登录（接口返回 ${list.code}），版本索引也没读到：${indexError}`);
+          break;   // 索引读到了但里面没有收件地址版本：按「还没有发布收件地址」处理
+        }
         if (!list || String(list.code) !== '0' || !list.data || !Array.isArray(list.data.records)) throw new Error('版本列表格式不对');
         records = list.data.records;
       } catch (e) {
         // 第一页都取不到才算内源连不上；翻页中途出错按「没找到」处理。
-        if (page === 1) return fallback(false, `内源连不上：${e.message}`);
+        // 要求登录（R55）说明内源是连得上的（人在公司内），只是列表要登录。
+        if (page === 1) return /要求登录/.test(String(e && e.message)) ? fallback(true, e.message) : fallback(false, `内源连不上：${e.message}`);
         break;
       }
       hits = records.filter(isHit);
@@ -113,6 +138,8 @@ function createReceiverAddress({ dataDir, fetchImpl, config = openxConfig(), now
     for (const rec of hits) {
       try {
         const detail = await getJson(fetchImpl, `${config.api}by_id?id=${encodeURIComponent(rec.id)}`, timeoutMs);
+        // 审查 P2-4：by_id 回的版本名不是收件地址版本（索引 id 填错）就跳过。
+        if (detail && detail.data && detail.data.version != null && !isHit({ id: rec.id, version: detail.data.version })) continue;
         const pkgs = detail && detail.data && Array.isArray(detail.data.binaryPackages) ? detail.data.binaryPackages : [];
         const pkg = pkgs.find(p => p && String(p.originalFileName || '').toLowerCase() === FILE && safeFileUrl(p.url, config.fileSite));
         if (!pkg) continue;

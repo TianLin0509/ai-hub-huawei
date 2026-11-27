@@ -36,20 +36,14 @@ const signatureOf = (menu, lines) => {
   return JSON.stringify([menu.kind, menu.question, t ? `${t.tool}(${t.arg})` : '', menu.options.map(o => [o.key, o.label])]);
 };
 
-// 菜单下面已经是有内容的输入框（占位符或草稿），说明菜单是没清掉的旧画面，不当菜单。
-// 空提示符由 choice-menu-screen 自己排除。
-const INPUT_ROW = /^\s*(?:[│┃]\s*)?[❯›>]\s*\S/;
-function inputBelow(menu, lines) {
-  const rows = (lines || []).map(l => String(l || ''));
-  const last = menu.options[menu.options.length - 1];
-  const at = rows.findLastIndex(l => l.includes(`${last.key}. ${last.label}`) || l.includes(`${last.key}) ${last.label}`));
-  if (at < 0) return false;
-  return rows.slice(at + 1).some(l => INPUT_ROW.test(l));
-}
-
+// 菜单下面已经是输入框（空提示符、占位符或草稿）的旧画面由 choice-menu-screen 统一排除，
+// 发消息前的菜单检查（codeagent-input-guard）与卡片读屏用同一条规则。
+// CodeAgent 的模型菜单（含多分组 Built-in / Custom）不当普通选择题：卡片只画得出其中一组，
+// 点选回车还会绕过 codeagent-model-picker 对全局默认模型的保护；仍走「请到后台选择模型」的提示（2026-11-27 审查）。
+const modelDialogVisible = lines => require('./codeagent-model-picker').modelDialogVisible(lines);
 function detect(lines, rules) {
-  const menu = choiceMenu.detectChoiceMenu(lines, rules);
-  return menu && !inputBelow(menu, lines) ? menu : null;
+  if (modelDialogVisible(lines)) return null;
+  return choiceMenu.detectChoiceMenu(lines, rules);
 }
 
 // 从当前高亮项移到 key 那一项再回车；任何一端找不到就不给键。
@@ -136,6 +130,8 @@ function createPtyChoiceMenu(manager, {
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   now = Date.now,
   log = (...args) => console.log('[pty-choice]', ...args),
+  // Hub 后台正在自动选模型（codeagent-model-picker.pickModel）：卡片不读屏、不显示、不按键，免得闪出模型菜单、抢键盘
+  isPicking = sid => require('./codeagent-model-picker').isPicking(sid),
 } = {}) {
   const busy = new Set();
   const infoOf = sid => manager.sessions?.get?.(sid)?.info || null;
@@ -154,15 +150,18 @@ function createPtyChoiceMenu(manager, {
       manager.writeToSession(sid, moves[i]);
     }
     if (moves.length) {
-      let ready = false;
+      // CLI 每按一下就整屏重画，读屏可能正好读到画了一半的帧（光标符号擦掉了、新的还没画上）。
+      // 所以读不到或读到不一样的画面先接着等，到时限为止；只有最后读到同一道题、光标停在目标项上才按回车（2026-11-27 替身实测）。
+      let ready = false, changed = false;
       const deadline = now() + CONFIRM_WAIT_MS;
       while (!ready && now() < deadline) {
         await sleep(KEY_GAP_MS);
         const lines = await screen.lines();
         const menu = detect(lines, rulesValue);
-        if (!menu || signatureOf(menu, lines) !== signature) return { ok: false, reason: 'menu-changed', message: '终端里的问题变了，没有按回车' };
-        ready = menu.options.find(o => o.selected)?.key === String(key);
+        changed = !menu || signatureOf(menu, lines) !== signature;
+        ready = !changed && menu.options.find(o => o.selected)?.key === String(key);
       }
+      if (!ready && changed) return { ok: false, reason: 'menu-changed', message: '终端里的问题变了，没有按回车' };
       if (!ready) return { ok: false, reason: 'cursor-mismatch', message: '光标没移到这一项，没有按回车，请再点一次' };
     }
     manager.writeToSession(sid, '\r');
@@ -184,6 +183,7 @@ function createPtyChoiceMenu(manager, {
   async function read(sid) {
     if (!hasPty(sid)) return { ok: false, reason: 'no-terminal' };
     if (busy.has(sid)) return { ok: true, menu: null, busy: true };
+    if (isPicking(sid)) return { ok: true, menu: null, picking: true };
     const rulesValue = rules();
     return withScreen(sid, async screen => {
       const lines = await screen.lines();
@@ -208,6 +208,7 @@ function createPtyChoiceMenu(manager, {
     if (!hasPty(sid)) return { ok: false, reason: 'no-terminal', message: '终端已经不在了' };
     if (!signature || key == null) return { ok: false, reason: 'bad-request', message: '缺少选项' };
     if (busy.has(sid)) return { ok: false, reason: 'busy', message: '上一次选择还在处理' };
+    if (isPicking(sid)) return { ok: false, reason: 'model-picking', message: 'Hub 正在后台切换模型，没有按键' };
     busy.add(sid);
     try {
       const rulesValue = rules();
@@ -230,4 +231,4 @@ function createPtyChoiceMenu(manager, {
   return { read, answer };
 }
 
-module.exports = { createPtyChoiceMenu, describeMenu, keysFor, optionTone, shortLabel, autoAnswerKey, signatureOf, inputBelow };
+module.exports = { createPtyChoiceMenu, describeMenu, keysFor, optionTone, shortLabel, autoAnswerKey, signatureOf };

@@ -156,9 +156,24 @@ test('answer：方向键后光标没到位或换了题，不按回车', async ()
   assert.ok(!stuck.writes.some(w => w[1] === '\r'), '没有回车');
   const other = PERMISSION.map(l => l.replace('Bash(dir)', 'Bash(del a.txt)'));
   const changed = fakeManager([PERMISSION, moveCursor(other, 2)]);
-  const r2 = await changed.api.answer('s1', { signature: sig, key: '2' });
+  const r2 = await m.createPtyChoiceMenu(changed.manager, { openScreen: changed.openScreen, rules: () => undefined, sleep: async () => {}, now: () => (t += 100), log: () => {} })
+    .answer('s1', { signature: sig, key: '2' });
   assert.equal(r2.reason, 'menu-changed');
   assert.deepEqual(changed.writes.map(w => w[1]), ['\x1b[B']);
+});
+
+test('answer：方向键后读到画了一半的帧（光标暂时不见）先接着等，画完、光标到位才按回车', async () => {
+  const sig = m.describeMenu(PERMISSION).signature;
+  const half = PERMISSION.map(l => l.replace(/❯/, ' ')); // 旧光标擦掉了，新光标还没画上
+  const writes = [];
+  const reads = [PERMISSION, half, half, moveCursor(PERMISSION, 3), IDLE];
+  let n = 0, t = 0;
+  const manager = { sessions: new Map([['s1', { pty: {}, info: {} }]]), writeToSession: (sid, d) => writes.push(d) };
+  const openScreen = async () => ({ lines: async () => reads[Math.min(n++, reads.length - 1)], dispose() {} });
+  const api = m.createPtyChoiceMenu(manager, { openScreen, rules: () => undefined, sleep: async () => {}, now: () => (t += 100), log: () => {} });
+  const r = await api.answer('s1', { signature: sig, key: '3' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(writes, ['\x1b[B', '\x1b[B', '\r']);
 });
 
 test('签名带上工具参数行：选项一样、命令不同的两道题不算同一道', () => {
@@ -313,6 +328,118 @@ test('提示条：「已发送未确认」和出错原因至少留 3 秒', async
   await sleepMs(900); // 之后的读屏（菜单已不在）不抹掉提示
   assert.equal(note.textContent, '已发送，终端尚未确认');
   assert.equal(c.element.hidden, false);
+  c.dispose();
+  delete global.document;
+});
+
+// ---- 2026-11-27：CodeAgent（opentui）的方向键菜单：底栏「Navigate ↑ ↓ | Select enter | Back esc」，选项可能没有编号 ----
+const CA_UNNUMBERED = [
+  ' ● Bash(dir)',
+  '',
+  ' Allow this command?',
+  ' ❯ Allow once',
+  '   Allow always',
+  '      remember for this project',
+  '   Reject',
+  '',
+  ' Navigate ↑ ↓ | Select enter | Back esc',
+];
+const CA_NUMBERED_NO_QUESTION = [
+  '  Pick a plan',
+  '',
+  '  ❯  1. Fast',
+  '     2. Careful',
+  '',
+  '  Navigate ↑ ↓ | Select enter | Back esc',
+];
+const CA_IDLE = [
+  ' │ > Anything I can assist you with? (Ctrl+J 换行 · esc×2 清空 · ↑↓ 历史) │',
+  ' Bypass (Cycle shift+tab) | GLM-5.2',
+];
+
+test('CodeAgent 无编号方向键菜单：按光标行和对齐认选项，说明行不算选项，点选仍是方向键 + 回车', () => {
+  const menu = m.describeMenu(CA_UNNUMBERED);
+  assert.ok(menu, '认得出');
+  assert.equal(menu.kind, 'permission');
+  assert.equal(menu.question, '允许执行 dir？');
+  assert.deepEqual(menu.options.map(o => o.label), ['Allow once', 'Allow always', 'Reject']);
+  assert.deepEqual(menu.options.map(o => o.tone), ['allow', 'always', 'deny']);
+  assert.deepEqual(m.keysFor(menu, '3'), ['\x1b[B', '\x1b[B', '\r']);
+  // 光标在中间
+  const moved = CA_UNNUMBERED.map(l => l === ' ❯ Allow once' ? '   Allow once' : l === '   Allow always' ? ' ❯ Allow always' : l);
+  const mm = m.describeMenu(moved);
+  assert.equal(mm.options[1].selected, true);
+  assert.deepEqual(m.keysFor(mm, '1'), ['\x1b[A', '\r']);
+  assert.equal(mm.signature, menu.signature, '光标移动不算换题');
+});
+
+test('CodeAgent 编号菜单只有 Navigate 底栏、题目不带问号也能认', () => {
+  const menu = m.describeMenu(CA_NUMBERED_NO_QUESTION);
+  assert.ok(menu);
+  assert.equal(menu.kind, 'question');
+  assert.deepEqual(menu.options.map(o => o.label), ['Fast', 'Careful']);
+});
+
+test('CodeAgent 无编号菜单：没有底栏、两个光标、空闲输入框都不当菜单', () => {
+  assert.equal(m.describeMenu(CA_UNNUMBERED.slice(0, -2)), null, '没有按键提示底栏');
+  assert.equal(m.describeMenu(CA_UNNUMBERED.map(l => l === '   Reject' ? ' ❯ Reject' : l)), null, '两个光标');
+  assert.equal(m.describeMenu(CA_IDLE), null, '空闲输入框的「↑↓ 历史」不是菜单底栏');
+  assert.equal(m.describeMenu([' ❯ only one', '', ' Navigate ↑ ↓ | Select enter']), null, '只有一项');
+});
+
+test('CodeAgent 运行状态：方向键选择框报「等你操作」，空闲输入框不报', () => {
+  const rt = require('../core/terminal-runtime-state');
+  const w = rt.classifyTerminalRuntime('codeagent', CA_UNNUMBERED);
+  assert.equal(w.state, rt.RUNTIME_WAITING);
+  assert.equal(w.reason, 'codeagent-choice-menu');
+  assert.notEqual(rt.classifyTerminalRuntime('codeagent', CA_IDLE).state, rt.RUNTIME_WAITING);
+});
+
+test('卡片输入框按键直通：只在提示条显示、输入框为空、无修饰键时把 ↑↓←→/回车交给终端', async () => {
+  const { menuKeyBytes } = (() => { global.document = fakeDom(); delete require.cache[require.resolve('../renderer/pty-attention-controls')]; return require('../renderer/pty-attention-controls'); })();
+  const on = { active: true, inputEmpty: true };
+  assert.equal(menuKeyBytes({ key: 'ArrowUp' }, on), '\x1b[A');
+  assert.equal(menuKeyBytes({ key: 'ArrowDown' }, on), '\x1b[B');
+  assert.equal(menuKeyBytes({ key: 'Enter' }, on), '\r');
+  assert.equal(menuKeyBytes({ key: 'a' }, on), null);
+  assert.equal(menuKeyBytes({ key: 'Enter', shiftKey: true }, on), null);
+  assert.equal(menuKeyBytes({ key: 'Enter' }, { active: true, inputEmpty: false }), null, '有草稿：回车仍是发送');
+  assert.equal(menuKeyBytes({ key: 'ArrowUp' }, { active: false, inputEmpty: true }), null, '没有提示条：↑ 仍是翻历史');
+
+  const ui = require('../renderer/pty-attention-controls');
+  const writes = [];
+  const c = ui.createPtyAttentionControls({ invoke: async () => ({ ok: true, menu: MENU }), writeTerminal: (sid, d) => writes.push([sid, d]) });
+  c.element.connected = true; c.element.card = true;
+  const ev = key => ({ key, prevented: false, preventDefault() { this.prevented = true; } });
+  const e0 = ev('ArrowDown');
+  assert.equal(c.forwardKey(e0, true), false, '提示条没出现前不拦');
+  c.update({ id: 's1', agentRuntime: 'pty' }, { state: 'waiting', detail: 'x' });
+  await sleepMs(250);
+  assert.equal(c.element.dataset.mode, 'menu');
+  const e1 = ev('ArrowDown');
+  assert.equal(c.forwardKey(e1, true), true);
+  assert.ok(e1.prevented);
+  assert.equal(c.forwardKey(ev('Enter'), false), false, '输入框有字不拦');
+  assert.equal(c.forwardKey(ev('Enter'), true), true);
+  assert.deepEqual(writes, [['s1', '\x1b[B'], ['s1', '\r']]);
+  // 用户点了 × 收起：不再拦
+  c.element.children[4].handlers.click();
+  assert.equal(c.forwardKey(ev('ArrowUp'), true), false);
+  c.dispose();
+  delete global.document;
+});
+
+test('卡片提示条：终端光标停着的那一项按钮带 data-selected', async () => {
+  global.document = fakeDom();
+  delete require.cache[require.resolve('../renderer/pty-attention-controls')];
+  const ui = require('../renderer/pty-attention-controls');
+  const c = ui.createPtyAttentionControls({ invoke: async () => ({ ok: true, menu: MENU }) });
+  c.element.connected = true; c.element.card = true;
+  c.update({ id: 's1', agentRuntime: 'pty' }, { state: 'waiting', detail: 'x' });
+  await sleepMs(250);
+  const buttons = c.element.children[1].children;
+  assert.equal(buttons[0].dataset.selected, '1');
+  assert.equal(buttons[1].dataset.selected, undefined);
   c.dispose();
   delete global.document;
 });

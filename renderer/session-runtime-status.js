@@ -147,6 +147,9 @@ function deriveSessionRuntimeStatus(session, options = {}) {
     visibleDetail,
     provider,
     source: truth.source,
+    // 等待的具体原因（如 codeagent-model-menu）：卡片提示条靠它决定是否转发按键（2026-11-27 审查：以前没带出，
+    // 手动 /model 菜单仍显示「或按 ↑↓ 回车」并把回车发给终端，绕过默认模型保护）。
+    reason: truth.reason || (state === RUNTIME_WAITING ? session?.waitingReason || session?._ptyRuntimeReason : null) || null,
     confidence: truth.confidence,
     observedAt: truth.observedAt,
     ...(native ? {threadId:truth.threadId,turnId:truth.turnId,revision:truth.revision,epoch:truth.epoch,connection:truth.connection,

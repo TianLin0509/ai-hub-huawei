@@ -248,7 +248,8 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   function modelChip() {
     const g = pf()?.agent;
     if (!g) return '';
-    if (!g.ok) return `<span class="avx-ch r" title="${esc(g.label)}"><i class="avx-dot r"></i>模型不可用</span>`;
+    // 不可用时点一下就到那个分身的「后端与前缀」模型卡（R53b）：以前是不能点的静态徽标，要自己找原因。
+    if (!g.ok) return `<button class="avx-ch r" data-av="fix" data-kind="open_account_card" data-hl="model" data-avatar="${esc(g.avatarId || '')}" title="${esc(g.label)}"><i class="avx-dot r"></i>模型不可用</button>`;
     return `<span class="avx-ch" title="${esc(g.label)}"><i class="avx-dot g"></i>${esc(String(g.label || '模型就绪').slice(0, 28))}</span>`;
   }
   function welinkChip() {
@@ -460,7 +461,29 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
       <div class="avx-stack"><div class="avx-card grow scroll" data-sc="kn"><h3>知识来源</h3>${a.memoryLines ? `<div class="avx-li"><span>群历史问答</span><small>自动 · ${a.memoryLines} 条</small></div>` : ''}${a.sources.map((s, i) => `<div class="avx-li"><span title="${esc(s.path)}">${esc(s.name)}</span><small>${s.type === 'dir' ? '文件夹' : '文件'}</small><button class="avx-x" data-av="source-del" data-i="${i}" aria-label="移除">×</button></div>`).join('')}${!a.memoryLines && !a.sources.length ? '<p class="avx-m">还没有资料。</p>' : ''}<div class="avx-line mt"><button class="avx-btn s" data-av="source" data-t="file">添加文件</button><button class="avx-btn s" data-av="source" data-t="dir">添加文件夹</button></div></div>
       <div class="avx-card"><h3>范例<small>你改过的稿自动进来</small></h3><p class="avx-m">已有 <b>${a.examples}</b> 条，分身写新草稿时会参考。</p></div></div>
       <div class="avx-stack"><div class="avx-card grow col"><h3>补充要求<small>随时告诉它怎么做</small></h3><textarea class="avx-ta grow" data-save="notes" placeholder="比如：涉及排期的问题都转给我">${esc(a.notes)}</textarea></div>
-      <div class="avx-card"><h3>当前会话</h3><p class="avx-m">${a.session.alive ? `运行中，已处理 ${a.session.questions} 条，到 80 条自动换新。` : '闲置时自动休眠，有新消息时启动。'}记忆都在文件里，换新不丢。</p></div></div></div>`;
+      <div class="avx-card"><h3>当前会话</h3><p class="avx-m">${a.session.alive ? `运行中，已处理 ${a.session.questions} 条，到 80 条自动换新。` : '闲置时自动休眠，有新消息时启动。'}记忆都在文件里，换新不丢。</p>${pickMissLine(a)}</div></div></div>`;
+  }
+  // 分身会话启动时没选上所选模型（R53 第 4 件）：就地说清选的是谁、现在用的是谁，给「打开后台手动选」（同会话下拉失败时的按钮）。
+  function pickMissLine(a) {
+    const miss = a.session?.pickMiss;
+    if (!miss) return '';
+    return `<div class="avx-bn r slim" data-avx-pick-miss>选的 ${esc(miss.want)} 没选上，现在用的是 ${esc(miss.using || 'CodeAgent 当前的模型')}。${backstage.backstageLinkHtml({ sessionId: a.session.id || '', from: 'avatar', label: '打开后台手动选' })}</div>`;
+  }
+  // 设置 →「功能使用的 Agent → 分身」选了具体模型时，它比这里的模型卡优先（所有分身共用）：写明生效的是哪一处，一键打开那一项。
+  // 也认 Claude Code 外壳线路（kind=claude + 来源：公司模型 / 自有接口 / 自有 API，自有的可不写模型）；没检测到可用 CodeAgent 时的自动默认单独说。
+  function featureOverride() {
+    const choice = data?.backends?.featureChoice, picked = choice?.selected;
+    if (!picked) return null;
+    if (picked.model && /^codeagent/.test(picked.kind)) return { ...picked, auto: !!choice.auto };
+    return picked.kind === 'claude' && picked.source ? { ...picked, auto: !!choice.auto } : null;
+  }
+  function overrideText(o) {
+    if (o.kind !== 'claude') return `当前生效的是「设置 → 功能使用的 Agent → 分身」选的 ${esc(o.model)}${o.codeagentModelProviderLabel ? ' · ' + esc(o.codeagentModelProviderLabel) : ''}（所有分身共用），这里的模型选择暂不生效。`;
+    let source = o.source;
+    try { source = require('../core/harness-route').LABELS[o.source] || o.source; } catch { /* 用来源 id */ }
+    const line = `Claude Code · ${esc(source)}${o.model ? ' · ' + esc(o.model) : ''}`;
+    return o.auto ? `没检测到可用 CodeAgent，自动用 ${line}（所有分身共用），这里的账号和模型选择暂不生效。`
+      : `当前生效的是「设置 → 功能使用的 Agent → 分身」：${line}（所有分身共用），这里的账号和模型选择暂不生效。`;
   }
   // 部门 API key（网关）行选中时（所有分身共用，R45）：账号卡亮它，模型卡列网关模型。
   const gatewayOn = () => data?.backends?.rows?.find(r => r.gateway && r.selected) || null;
@@ -468,9 +491,14 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   function backend(a) {
     const rows = data.backends.rows, gw = gatewayOn(), chosen = gw || rows.find(r => r.id === a.backend.account && !r.gateway) || rows[0], models = chosen?.models || [];
     const model = gw ? gw.model : a.backend.model;
-    const sub = r => (r.id === 'auto' ? '挑当前最空闲的账号' : !r.usable ? esc(r.reason || '不可用') : r.gateway ? `${r.models.length} 个模型 · 所有分身共用；切回 CodeAgent 账号即撤销` : `${r.models.length} 个模型`);
+    // 带供应商的选项（和会话下拉同一份）；同名模型在不同分组各一项。老的不带供应商的选择亮同名第一项。
+    const options = !gw && chosen?.options?.length ? chosen.options : models.map(id => ({ id, label: id }));
+    const hit = options.find(o => o.id === model && (o.provider || '') === (gw ? '' : a.backend.provider || '')) || options.find(o => o.id === model);
+    const override = gw ? null : featureOverride();
+    const overrideNote = override ? `<div class="avx-bn slim" data-avx-override>${overrideText(override)}<button class="avx-btn s" data-feature-agent="avatar">去改那一项</button></div>` : '';
+    const sub = r => (r.id === 'auto' ? '挑当前最空闲的账号' : !r.usable ? esc(r.reason || '不可用') : r.gateway ? `${r.models.length} 个模型 · 所有分身共用；切回 CodeAgent 账号即撤销` : `${(r.options?.length ? r.options : r.models || []).length} 个模型`);
     return `<div class="avx-c3"><div class="avx-card scroll" data-sc="ac"><h3>账号<small>和启动中心同一份</small></h3>${rows.map(r => `<button class="avx-ac ${r.id === (chosen?.id) ? 'on' : ''}" data-av="account" data-id="${esc(r.id)}" ${r.usable ? '' : 'disabled'}><b><i class="avx-dot ${r.usable ? 'g' : ''}"></i>${esc(r.label)}</b><small>${sub(r)}</small></button>`).join('')}</div>
-      <div class="avx-card scroll" data-sc="md"><h3>模型</h3><button class="avx-ac ${model ? '' : 'on'}" data-av="model" data-id=""><b>${gw ? '网关默认模型' : '账号默认模型'}</b><small>${esc(chosen?.defaultModel || '由账号决定')}</small></button>${models.map(m => `<button class="avx-ac ${model === m ? 'on' : ''}" data-av="model" data-id="${esc(m)}"><b>${esc(m)}</b></button>`).join('')}<label class="avx-lb">思考档位</label><div class="avx-seg">${EFFORT.map(([k, n]) => `<button class="${(a.backend.effort || '') === k ? 'on' : ''}" data-av="effort" data-k="${k}">${n}</button>`).join('')}</div><p class="avx-m">${gw ? '部门 API key 由 Claude Code 经本机转发作答，所有分身共用这一项；点左边任一 CodeAgent 账号就换回。' : ''}换账号或模型后，下一条消息会用新的会话处理。</p></div>
+      <div class="avx-card scroll" data-sc="md"><h3>模型</h3>${overrideNote}<button class="avx-ac ${model ? '' : 'on'}" data-av="model" data-id=""><b>${gw ? '网关默认模型' : '账号默认模型'}</b><small>${esc(chosen?.defaultModel || '由账号决定')}</small></button>${options.map(o => `<button class="avx-ac ${o === hit ? 'on' : ''}" data-av="model" data-id="${esc(o.id)}"${o.provider ? ` data-provider="${esc(o.provider)}" data-provider-label="${esc(o.providerLabel || o.provider)}" data-menu-label="${esc(o.menuLabel || o.id)}"` : ''}${o.unavailable ? ` disabled title="${esc(o.reason || '不可用')}"` : ''}><b>${esc(o.label || o.id)}</b></button>`).join('')}${options.some(o => o.unavailable && o.reason) ? `<p class="avx-m" data-avx-default-only>${esc(options.find(o => o.unavailable && o.reason).reason)}</p>` : ''}<label class="avx-lb">思考档位</label><div class="avx-seg">${EFFORT.map(([k, n]) => `<button class="${(a.backend.effort || '') === k ? 'on' : ''}" data-av="effort" data-k="${k}">${n}</button>`).join('')}</div><p class="avx-m">${gw ? '部门 API key 由 Claude Code 经本机转发作答，所有分身共用这一项；点左边任一 CodeAgent 账号就换回。' : ''}换账号或模型后，下一条消息会用新的会话处理。</p></div>
       <div class="avx-stack"><div class="avx-card"><h3>发言前缀</h3><div class="avx-pfx"><span>🤖</span><input class="avx-in" maxlength="20" data-save="prefix" value="${esc(a.prefix)}"></div><p class="avx-m">🤖 不能去掉：同事能看出是 AI，其他分身也靠它避免对聊。群答疑和空白分身发送时带前缀。</p><label class="avx-lb">群里看到的样子</label><div class="avx-bub" id="avx-preview">🤖【${esc(a.prefix)}】张三 关于『导出纪要』：在纪要页右上角选导出，格式选 Word。</div></div>
       <div class="avx-card grow"><h3>名字与身份</h3><label class="avx-lb">分身名字</label><input class="avx-in" maxlength="30" data-save="name" value="${esc(a.name)}"><label class="avx-line mt"><input type="checkbox" data-chg="hide" ${a.hideModel ? 'checked' : ''}> 不透露底层用的是哪个模型</label></div></div></div>`;
   }
@@ -687,6 +715,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (kind === 'retry_tick' && redo) { await redoFix(redo.dataset?.fixredo || ''); return; }
     if (kind === 'provider_repair') { await repairProvider(b.dataset.account, b); return; }
     if (kind === 'open_account_card') {
+      if (b.dataset.avatar && data?.avatars?.some(x => x.id === b.dataset.avatar)) sel = b.dataset.avatar;
       if (!cur() && data?.avatars?.[0]) sel = data.avatars[0].id;
       if (!cur()) { flash('先建一个分身，账号卡在分身的「后端与前缀」页签里'); render(); return; }
       tab = 'back'; focus = { hl: b.dataset.hl || 'gateway', until: Date.now() + 6000 }; render(); return;
@@ -853,7 +882,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (op === 'account' && b.dataset.id === 'api-gateway') { await setGateway({ kind: 'api-gateway', model: '' }, '已改用部门 API key，下一条消息起生效'); return; }
     if (op === 'account') { const back = accountSwitchChoice(data?.backends?.rows, data?.backends?.featureChoice); if (back && !(await setGateway(back))) return; await save({ backend: { ...av.backend, account: b.dataset.id, model: '' } }); return; }
     if (op === 'model' && gatewayOn()) { await setGateway({ kind: 'api-gateway', model: b.dataset.id }, '已换模型，下一条消息起生效'); return; }
-    if (op === 'model') { await save({ backend: { ...av.backend, model: b.dataset.id } }); return; }
+    if (op === 'model') { await save({ backend: { ...av.backend, model: b.dataset.id, provider: b.dataset.provider || '', providerLabel: b.dataset.providerLabel || '', menuLabel: b.dataset.menuLabel || '' } }); return; }
     if (op === 'effort') { await save({ backend: { ...av.backend, effort: b.dataset.k } }); }
   }
   async function fixAct(op, b) {

@@ -664,9 +664,10 @@ test('actual renderer key handler keeps IME, popup Enter/Esc, ordinary send and 
   const source = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'renderer.js'), 'utf8');
   const match = source.match(/inputBox\.addEventListener\('keydown', \(e\) => \{([\s\S]*?)\n  \}\);/);
   assert.ok(match);
-  let sends = 0, focuses = 0;
+  let sends = 0, focuses = 0, menuForward = false;
   const handle = vm.runInNewContext(`(e) => {${match[1]}\n}`, {
     codeagentSkills: f.controller, slashPicker: null, sendInput: () => { sends += 1; }, inputHistory: null,
+    inputBox: f.input, ptyAttention: { forwardKey: (e, empty) => menuForward && empty }, contenteditableHasText: el => !!String(el.textContent || '').trim(),
     isNativeAgent: () => false, sessions: new Map(), sessionId: 'test', terminal: { focus: () => { focuses += 1; } },
     focusAfterSend: () => { focuses += 1; },
     require: id => require(path.join(__dirname, '..', 'renderer', id)), localStorage: { getItem: () => null },
@@ -681,6 +682,10 @@ test('actual renderer key handler keeps IME, popup Enter/Esc, ordinary send and 
   handle(event('keydown', { key: 'Escape' })); assert.equal(focuses, 0);
   handle(event('keydown', { key: 'Escape' })); assert.equal(focuses, 1);
   const arrow = event('keydown', { key: 'ArrowUp' }); handle(arrow); assert.equal(arrow.prevented, undefined);
+  // 终端停在选择菜单上、输入框为空：键交给提示条转发，不发送
+  f.input.textContent = ''; menuForward = true; const before = sends;
+  handle(event('keydown', { key: 'Enter' })); assert.equal(sends, before);
+  menuForward = false;
 });
 
 

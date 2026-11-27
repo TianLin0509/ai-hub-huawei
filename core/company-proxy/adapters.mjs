@@ -52,6 +52,9 @@ function normalizeClaudeMessages(messages){
   }
   return out;
 }
+// 客户端选的思考档位照传给上游（2026-11-27 黄区实测：CodeAgent --effort low 比 high 输出少约 30%、同任务通过；以前一律改成 high，
+// 用户在 Claude Code / DSH 里调低档位不生效）。上游认 low / medium / high，更高的档位都按 high。
+export function upstreamEffort(value){const v=String(value||'').toLowerCase();return v==='low'||v==='medium'?v:'high';}
 export function createClaudeAdapter({defaultModel,resolve=null,maxTokensCap=32768,onRequest=()=>{}}){
   return {
     convertRequest(body){
@@ -67,7 +70,8 @@ export function createClaudeAdapter({defaultModel,resolve=null,maxTokensCap=3276
       if(Number.isFinite(body.temperature))clean.temperature=body.temperature;
       if(Array.isArray(body.stop_sequences)&&body.stop_sequences.length)clean.stop_sequences=body.stop_sequences;
       if(thinkingOn)clean.thinking={type:'enabled'};
-      const converted=convertMessagesRequest(clean,{mapThinking:()=>({thinking:{type:'enabled'},reasoning_effort:'high'})});
+      const effort=upstreamEffort(object(body.output_config)?body.output_config.effort:'');
+      const converted=convertMessagesRequest(clean,{mapThinking:()=>({thinking:{type:'enabled'},reasoning_effort:effort})});
       for(const m of converted.messages)if(m.content===null&&!m.tool_calls)m.content='';
       converted.messages=converted.messages.filter(m=>!(m.role==='assistant'&&m.content===''&&!m.tool_calls&&!m.reasoning_content));
       if(converted.messages.length===0)throw refused('Request has no forwardable messages',400);
@@ -184,7 +188,7 @@ export function createDshAdapter({defaultModel,resolve=null,maxTokensCap=32768,o
       if(typeof clean.max_tokens!=='number'&&Number.isSafeInteger(body.max_completion_tokens))clean.max_tokens=body.max_completion_tokens;
       const maxTokens=capTokens(clean.max_tokens,maxTokensCap);if(maxTokens)clean.max_tokens=maxTokens;else delete clean.max_tokens;
       const thinkingOn=(object(body.thinking)&&body.thinking.type!=='disabled')||(typeof body.reasoning_effort==='string'&&!object(body.thinking));
-      if(thinkingOn){clean.thinking={type:'enabled'};clean.reasoning_effort='high';}
+      if(thinkingOn){clean.thinking={type:'enabled'};clean.reasoning_effort=upstreamEffort(body.reasoning_effort);}
       clean.messages=(Array.isArray(body.messages)?body.messages:[]).filter(object).map(m=>{
         const role=m.role==='developer'?'system':m.role;
         const out={role,content:chatText(m.content)};

@@ -78,6 +78,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   // R29/R35（2026-11-24 用户定）：程序更新只走公司内源，版本清单只从内源读（签名清单，fetchManifest）；
   // 只有测试（纯 Node 单测、AI_HUB_UPDATE_SOURCES 注入本机服务）才用 sources。
   const only = () => openxSource.active(env);
+  // R55：告诉内源模块本机版本，读到的版本索引比本机还旧时再试一次列表（防索引没跟上发版）。
+  try { openxSource.setLocalVersion(currentVersion); } catch (_) {}
   const effectiveSources = next => (only() ? [] : resolveSources(next, env));
   let sources = effectiveSources(config);
   let allowSame = !!(config && config.switchEdition);
@@ -197,7 +199,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   // 更新窗和失败提示据此给「下载完整安装包」按钮。没找到不报错，1 分钟内不重找。
   let fullLookup = null, fullTriedAt = 0;
   // 不在公司网络（errorKind offline）时内源根本连不上，不白找、也不占掉 1 分钟的重找冷却（R44 审查 P2-6）。
-  function needsFullPackage(s) { return !s.fullPackage && ((s.phase === 'error' && s.errorKind !== 'offline') || (s.phase === 'none' && !!s.pending) || !!(s.lastResult && !s.lastResult.ok)); }
+  function needsFullPackage(s) { return !s.fullPackage && ((s.phase === 'error' && !['offline', 'auth'].includes(s.errorKind)) || (s.phase === 'none' && !!s.pending) || !!(s.lastResult && !s.lastResult.ok)); }
   function lookupFullPackage() {
     if (fullLookup || Date.now() - fullTriedAt < 60 * 1000) return;
     fullTriedAt = Date.now();
@@ -268,7 +270,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       if (!best && !olderRow && !pendingRow) {
         const row = results.find(r => r && r.id === 'openx-manifest');
         // R44：不在公司网络（快判）→ 平静说明、不催重试；在公司但内源慢 → 一句话 + 旁边一个「重试」；两种都在 30 分钟后静默再查。
-        const errorKind = !only() ? 'error' : row && row.offline ? 'offline' : row && row.slow ? 'slow' : 'error';
+        // R55：内源连得上、但版本查询接口要求登录（auth）——单独一类：不说连不上、不催查网络，30 分钟后静默再查。
+        const errorKind = !only() ? 'error' : row && row.auth ? 'auth' : row && row.offline ? 'offline' : row && row.slow ? 'slow' : 'error';
         if (errorKind !== 'error') scheduleRecheck();
         // 后台静默检查失败时，用户正看着的错误说明不刷回「点检查更新」（R44 审查 P1-1）。
         if (silent && state.phase === 'error') return state;
@@ -557,7 +560,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       const r = await openxSource.listAppReleases({ fetchImpl: resolveFetch(fetchImpl), validate: validateManifest, publicKey: manifestPublicKey, env });
       if (!r.ok) {
         return { ok: false, current: currentVersion, pinned, items: [], hidden: [], skipped: r.skipped || [], backups: backups(),
-          error: '读不到可回退的版本：' + openxSource.userReason(r.reason, { file: '版本清单' }) };
+          error: '读不到可回退的版本：' + openxSource.userReason(r.reason, { file: '版本清单', what: '可回退的旧版本' }) };
       }
       let history = [];
       try { history = require('../core/app-update/release-history').loadHistory(); } catch (_) {}
