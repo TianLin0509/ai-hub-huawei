@@ -360,5 +360,5 @@ async function run(opt) {
   return result;
 }
 
-module.exports = { census, run, THEMES, __seed: seed };
+module.exports = { census, run, THEMES, __seed: seed, __baseStates: baseStates };
 if (require.main === module) run(parseArgs(process.argv.slice(2)));

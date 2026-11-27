@@ -18,6 +18,7 @@
 .avx-btn:hover{background:var(--sf2)}.avx-btn.p{background:var(--b);border-color:var(--b);color:var(--hw-text-on)}.avx-btn.p:hover{background:var(--bh)}.avx-btn.d{color:var(--r);border-color:color-mix(in srgb,var(--hw-red) 30%,var(--hw-surface))}.avx-btn.d:hover{background:var(--rs)}.avx-btn.dd{background:var(--hw-red);border-color:var(--hw-red);color:var(--hw-surface)}.avx-btn.s{padding:2px 9px;font-size:12px}.avx-btn:disabled{opacity:.5;cursor:default}
 .avx-btn:focus-visible,.avx-row:focus-visible,.avx-tabs button:focus-visible,.avx-it:focus-visible{outline:2px solid var(--b);outline-offset:1px}
 .avx-bn{flex:none;display:flex;align-items:center;gap:10px;padding:7px 18px;border-bottom:1px solid var(--ln);font-size:13px;overflow-wrap:anywhere}
+.avx-bn>b,.avx-bn>.avx-btn{flex:none;white-space:nowrap}
 .avx-bn.r{background:var(--rs);color:color-mix(in srgb,var(--hw-red) 65%,var(--hw-text-1))}.avx-bn.w{background:var(--ws);color:color-mix(in srgb,var(--hw-amber) 60%,var(--hw-text-1))}.avx-bn.b{background:var(--bs);color:color-mix(in srgb,var(--hw-brand) 70%,var(--hw-text-1))}.avx-bn.slim{padding:4px 18px;font-size:12.5px}
 .avx-bn .avx-btn{margin-left:auto}
 .avx-main{flex:1;min-height:0;display:flex}

@@ -223,10 +223,19 @@
 .composer-model:hover,
 .composer-model:focus-visible { border-color: var(--brand-tint-border); }
 .composer-model.switching { color: var(--brand-text); border-color: var(--brand-tint-border); }
+/* 「实际在用」：在一行 flex 里，必须单行不换行，放不下用省略号、悬停看全文；不能用 overflow-wrap:anywhere，否则被挤成一字一行的竖排。 */
 .composer-actual-model {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 260px;
+  overflow: hidden;
   font-size: 12px;
   color: var(--text-secondary);
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@media (max-width: 1240px) {
+  .composer-actual-model { display: none; }
 }
 .composer-model-logo {
   display: inline-grid;

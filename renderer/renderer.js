@@ -5964,6 +5964,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     if (actualModelLabel.dataset.rawLabel !== actualStatus) {
       actualModelLabel.dataset.rawLabel = actualStatus;
       actualModelLabel.textContent = actualStatus;
+      actualModelLabel.title = actualStatus;
     }
     if (rail.model.visible) {
       const label = rail.model.pending
@@ -5973,7 +5974,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       modelChip.classList.toggle('switching', !!rail.model.pending);
       modelChip.title = webRoute
         ? '通过 ChatGPT 网页回答，本地 Codex 执行工具。点击调整网页档位或打开专用设置。'
-        : `${rail.model.id || rail.model.label}${session?.codeagentActualModel && session.codeagentActualModel !== (rail.model.id || rail.model.label) ? ` · 最近一轮实际是 ${session.codeagentActualModel}` : ''}${session?.codeagentPoolAccount ? ` · 号池账号 ${session.codeagentPoolLabel || ''}` : ''} — 点击切换模型`;
+        : `${rail.model.id || rail.model.label}${session?.codeagentActualModel && session.codeagentActualModel !== (rail.model.id || rail.model.label) ? ` · 最近一轮实际是 ${session.codeagentActualModel}` : ''}${session?.codeagentPoolAccount ? ` · 号池账号 ${session.codeagentPoolLabel || ''}` : ''}${actualStatus ? ` · ${actualStatus}` : ''} — 点击切换模型`;
       modelChip.disabled = false;
       const logoClass = `composer-model-logo ${modelClass(rail.model.id || require('../core/codeagent-models').iconModelId(session))}`.trim();
       if (modelChipLogo.className !== logoClass) modelChipLogo.className = logoClass;
