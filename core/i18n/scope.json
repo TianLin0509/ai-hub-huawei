@@ -6,6 +6,9 @@
   ],
   "frame": [
    "renderer/community-page.js",
+   "renderer/community-square.js",
+   "renderer/community-crew.js",
+   "renderer/community-scene.js",
    "renderer/context-menus.js",
    "renderer/format-time.js",
    "renderer/file-attachments.js",

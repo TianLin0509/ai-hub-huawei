@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" preserveAspectRatio="xMidYMid slice">
+            <defs>
+              <pattern id="wall" width="28" height="28" patternUnits="userSpaceOnUse"><rect width="28" height="28" fill="#f6f0e9"/><circle cx="14" cy="14" r="1.6" fill="#ece2d6"/></pattern>
+              <pattern id="wood" width="120" height="34" patternUnits="userSpaceOnUse"><rect width="120" height="34" fill="#ecdcc5"/><path d="M0 33.5H120M60 0V34" stroke="#e0ccb0" stroke-width="1.5"/></pattern>
+              <linearGradient id="win" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d9e9fb"/><stop offset="1" stop-color="#f4ecfb"/></linearGradient>
+            </defs>
+            <rect width="1000" height="250" fill="url(#wall)"/>
+            <rect y="250" width="1000" height="310" fill="url(#wood)"/>
+            <rect y="244" width="1000" height="10" fill="#dcc8ad"/>
+            <!-- 窗 -->
+            <rect x="96" y="46" width="200" height="140" rx="10" fill="url(#win)" stroke="#d6c5ae" stroke-width="6"/>
+            <path d="M196 46V186M96 116H296" stroke="#d6c5ae" stroke-width="5"/>
+            <circle cx="250" cy="82" r="14" fill="#fff6cf"/>
+            <g fill="#fff"><ellipse cx="140" cy="90" rx="22" ry="7"/><ellipse cx="156" cy="85" rx="14" ry="6"/></g>
+            <!-- 白板 -->
+            <rect x="390" y="40" width="260" height="150" rx="8" fill="#fff" stroke="#d6cfe2" stroke-width="5"/>
+            <!-- 书架 -->
+            <rect x="760" y="34" width="150" height="212" rx="6" fill="#d9bf9e"/>
+            <rect x="770" y="44" width="130" height="58" fill="#f1e4d1"/><rect x="770" y="112" width="130" height="58" fill="#f1e4d1"/><rect x="770" y="180" width="130" height="58" fill="#f1e4d1"/>
+            <g><rect x="778" y="54" width="12" height="48" fill="#b9a2dc"/><rect x="792" y="60" width="11" height="42" fill="#f2b8a2"/><rect x="805" y="52" width="13" height="50" fill="#9cc884"/><rect x="826" y="64" width="40" height="38" rx="4" fill="#fff"/><text x="846" y="88" font-size="10" text-anchor="middle" fill="#9590a3" font-family="Microsoft YaHei, sans-serif">口径库</text></g>
+            <g><rect x="778" y="124" width="14" height="46" fill="#f7d26b"/><rect x="794" y="130" width="12" height="40" fill="#b9a2dc"/><rect x="842" y="140" width="48" height="30" rx="15" fill="#a9d18f"/></g>
+            <!-- 地毯 -->
+            <ellipse cx="500" cy="420" rx="330" ry="98" fill="#e7def5"/>
+            <ellipse cx="500" cy="420" rx="300" ry="84" fill="none" stroke="#d6c8ee" stroke-width="3" stroke-dasharray="10 8"/>
+            <!-- 植物 -->
+            <g><path d="M60 300 h44 l-6 46 h-32z" fill="#c9a888"/><path d="M82 300 q-30 -40 -8 -72 q10 30 8 72 q6 -50 30 -66 q-6 40 -30 66" fill="#9cc884"/></g>
+            <!-- 共享箱 -->
+            <g id="chest"><rect x="868" y="430" width="92" height="58" rx="8" fill="#c99d6b"/><rect x="862" y="416" width="104" height="22" rx="8" fill="#b58654"/><rect x="906" y="430" width="16" height="16" rx="3" fill="#f6d27a"/><text x="914" y="508" font-size="12" text-anchor="middle" fill="#8a6a4a" font-family="Microsoft YaHei, sans-serif">团队共享箱</text></g>
+            <!-- 小桌 -->
+            <g><ellipse cx="500" cy="300" rx="64" ry="14" fill="#d2b391"/><rect x="494" y="300" width="12" height="34" fill="#c4a37f"/><rect x="484" y="282" width="32" height="18" rx="3" fill="#fff"/><path d="M490 282 q10 -14 20 0" stroke="#e7def5" stroke-width="3" fill="none"/></g>
+          </svg>

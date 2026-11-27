@@ -5296,6 +5296,16 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
         app.whenReady().then(() => communityServiceRef.start()).catch(() => {});
         app.on('will-quit', () => communityServiceRef?.stop());
       } catch (e) { console.warn('[community] 初始化失败：', e && e.message); }
+      // 社区·我的团队（2026-11-28）：黄区局域网里按 IP 组队，成员之间的 agent 来信、广播与文件分享（信箱在各自的共享文件夹里，内容团队钥匙加密）。
+      if (distribution.target === 'company') try {
+        const { createCommunityCrewMain } = require('./main/community-crew-service');
+        const crew = createCommunityCrewMain({ dataDir: getHubDataDir(), isEnabled: () => optionalFeatures.get('community'),
+          communityService: () => communityServiceRef, sendToRenderer,
+          publishNotice: notice => require('./core/company-assistant/notice-bus').noticeBus().publish(notice) });
+        crew.registerIpc(ipcMain);
+        app.whenReady().then(() => crew.start()).catch(() => {});
+        app.on('will-quit', () => crew.stop());
+      } catch (e) { console.warn('[community-crew] 初始化失败：', e && e.message); }
       // 扩展功能：界面问「本机是否开通过、是否已解锁」。
       const sealedModules = require('./core/sealed-modules');
       const sealedMode = sealedModules.present();

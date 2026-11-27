@@ -39,8 +39,8 @@ async function main() {
     await wait(`typeof window.__hubOpenConfigModal==='function' && !!window.__featureAgents && document.readyState==='complete'`);
     await c.eval('window.__hubOpenConfigModal()');
     await click('#cfg-tab-agents');
-    await wait(`document.querySelectorAll('#cfg-feature-agents [data-fa-row]').length===7`);
-    assert.equal(await c.eval(`(async()=> (await ipcRenderer.invoke('feature-agents:get')).features.length)()`), 11);
+    await wait(`document.querySelectorAll('#cfg-feature-agents [data-fa-row]').length===8`);
+    assert.equal(await c.eval(`(async()=> (await ipcRenderer.invoke('feature-agents:get')).features.length)()`), 12);
     assert.equal(await c.eval(`document.querySelectorAll('#cfg-feature-agents [data-fa-reset]').length`), 0);
     const meetingDefault = await c.eval(`(() => { const s=document.querySelector('#cfg-feature-agents [data-fa-row="meeting"] [data-fa-backend]'); return { text:s.selectedOptions[0].textContent, title:s.title }; })()`);
     assert.equal(meetingDefault.text, '默认·会议所选'); assert.match(meetingDefault.title, /会议中所选引擎/);

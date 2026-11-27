@@ -164,8 +164,13 @@ function pageHtml(vm) {
   return `${head}${statsHtml(vm)}${hostHtml(vm)}<div class="cmy-lb">${boardHtml(vm)}${meHtml(vm)}</div>`;
 }
 
+// 子页（2026-11-28）：广场（所有人的桌宠，只带公开名片）、我的团队（按 IP 组队的小屋）、排行榜（原来的整页）。
+const SUBS = [{ id: 'square', name: '广场' }, { id: 'crew', name: '我的团队' }, { id: 'board', name: '排行榜' }];
+
 function createCommunityPage({ document, window, ipcRenderer, closeOtherPanels = () => {} }) {
-  let page = null, data = null, board = 'level', summary = null;
+  let page = null, data = null, board = 'level', summary = null, square = null, crew = null, myPet = null;
+  let sub = (() => { try { return window.localStorage.getItem('community.sub') || 'square'; } catch { return 'square'; } })();
+  if (!SUBS.some(x => x.id === sub)) sub = 'square';
   const invoke = async (channel, payload) => ipcRenderer.invoke('community:' + channel, payload);
 
   function nav() {
@@ -176,7 +181,7 @@ function createCommunityPage({ document, window, ipcRenderer, closeOtherPanels =
     if (!anchor && !list) return null;
     btn = document.createElement('button');
     btn.type = 'button'; btn.className = 'btn-shell-nav'; btn.id = 'btn-community';
-    btn.title = '社区 Beta · 在线人数与匿名排行榜'; btn.setAttribute('aria-label', '社区 Beta'); btn.setAttribute('aria-controls', 'community-page');
+    btn.title = '社区 Beta · 广场、我的团队与排行榜'; btn.setAttribute('aria-label', '社区 Beta'); btn.setAttribute('aria-controls', 'community-page');
     btn.innerHTML = '<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 21V11M12 21V5M17 21v-7"/><path d="M4 21h16"/></svg></span><span class="btn-label">社区</span><em class="cmy-live" hidden></em>';
     btn.insertAdjacentHTML('afterbegin', '<i class="rail-beta" aria-hidden="true">Beta</i>');
     if (anchor) anchor.after(btn); else list.append(btn);
@@ -205,13 +210,47 @@ function createCommunityPage({ document, window, ipcRenderer, closeOtherPanels =
   function build() {
     if (page) return;
     page = document.createElement('section'); page.className = 'community-page'; page.id = 'community-page'; page.hidden = true; page.setAttribute('aria-label', '社区');
+    page.innerHTML = `<div class="cmy-shell"><div class="cmy-subbar"><h1>AI HUB 社区<span class="cmy-beta">Beta</span></h1>
+        <div class="cmy-subtabs" role="tablist">${SUBS.map(x => `<button type="button" role="tab" data-cmy-sub="${x.id}">${esc(x.name)}</button>`).join('')}</div>
+        <span class="sp"></span><span class="lan">🔒 <span>团队之间只在公司内网直连，内容加密</span></span></div>
+      <div class="cmy-sub" data-sub="board"><div class="cmy-page"></div></div></div>`;
     document.body.append(page);
+    const shell = page.querySelector('.cmy-shell');
+    const toastEl = document.createElement('div'); toastEl.className = 'cc-toast'; page.append(toastEl);
+    const toast = text => { if (!text) return; toastEl.textContent = text; toastEl.classList.add('show'); clearTimeout(toastEl.t); toastEl.t = setTimeout(() => toastEl.classList.remove('show'), 2600); };
+    try {
+      const { createCrew } = require('./community-crew');
+      const { createSquare } = require('./community-square');
+      crew = createCrew({ host: shell, ipcRenderer, toast, onSnapshot: () => { if (sub === 'square' && square) square.refresh(); } });
+      const getCrew = () => {
+        const s = crew.snapshot();
+        const m = s && s.crews[0] ? s.crews[0].members.find(x => x.me) : null;
+        return { me: s ? s.me : null, nick: (m && m.nick) || '', pet: (myPet && myPet.role) || (m && m.pet) || '' };
+      };
+      square = createSquare({ host: shell, ipcRenderer, toast, getBoard: () => data, getCrew, reloadCrew: () => crew.load(),
+        goCrew: mode => { setSub('crew', mode); } });
+      shell.querySelector('[data-sub="crew"]')?.before(shell.querySelector('[data-sub="square"]'));
+    } catch (e) { console.warn('[community] 广场/团队加载失败：', e && e.message); }
     page.addEventListener('click', event => {
+      const st = event.target.closest('[data-cmy-sub]');
+      if (st) { setSub(st.dataset.cmySub); return; }
       const t = event.target.closest('[data-cmy-board]');
       if (t) { board = t.dataset.cmyBoard; render(); return; }
       const b = event.target.closest('[data-cmy]');
       if (b) { event.preventDefault(); void action(b.dataset.cmy, b).catch(e => setLine(e.message)); }
     });
+  }
+  function setSub(next, mode) {
+    if (!SUBS.some(x => x.id === next)) next = 'board';
+    // 纯离线：广场和团队都不可用，只显示锁定的一行字（排行榜子页里）。
+    if (data && data.state === 'disabled') next = 'board';
+    sub = next;
+    try { window.localStorage.setItem('community.sub', sub); } catch { /* 不记也行 */ }
+    if (!page) return;
+    page.querySelectorAll('[data-cmy-sub]').forEach(b => { b.classList.toggle('on', b.dataset.cmySub === sub); b.setAttribute('aria-selected', String(b.dataset.cmySub === sub)); });
+    page.querySelectorAll('.cmy-sub').forEach(el => el.classList.toggle('on', el.dataset.sub === sub));
+    if (sub === 'square') square?.show(); else square?.hide();
+    if (sub === 'crew') void crew?.show(mode); else crew?.hide();
   }
   const setLine = text => { const el = page && page.querySelector('[data-slot="line"]'); if (el) el.textContent = text || ''; };
   async function action(name, button) {
@@ -242,8 +281,23 @@ function createCommunityPage({ document, window, ipcRenderer, closeOtherPanels =
   }
   function render() {
     if (!page) return;
-    if (page.querySelector('.cmy-nick-input')) return; // 正在改昵称时不重画
-    page.innerHTML = `<div class="cmy-page">${pageHtml(viewModel(data, board))}</div>`;
+    const disabled = data && data.state === 'disabled';
+    if (disabled) {
+      setSub('board');
+      // 锁定时从页面移走交互区，保留原节点以便重新参与时恢复。
+      if (!page.offlineParts) page.offlineParts = [];
+      page.querySelectorAll('.cmy-subbar, .cmy-sub:not([data-sub="board"])').forEach(el => {
+        const marker = document.createComment('');
+        el.hidden = true; el.replaceWith(marker); page.offlineParts.push({ el, marker });
+      });
+    } else if (page.offlineParts?.length) {
+      for (const { el, marker } of page.offlineParts) { el.hidden = false; marker.replaceWith(el); }
+      page.offlineParts = []; setSub(sub);
+    }
+    if (!disabled && page.querySelector('.cmy-nick-input')) return; // 正在改昵称时不重画
+    const host = page.querySelector('.cmy-sub[data-sub="board"] .cmy-page');
+    if (host) host.innerHTML = pageHtml(viewModel(data, board));
+    if (sub === 'square' && square && !page.hidden) square.refresh();
   }
   async function load() {
     try {
@@ -272,11 +326,16 @@ function createCommunityPage({ document, window, ipcRenderer, closeOtherPanels =
     nav()?.classList.add('active');
     window.addEventListener('resize', onResize);
     if (!data) render();
+    if (!myPet) { try { const r = await ipcRenderer.invoke('hub-pet:get-settings'); myPet = (r && r.settings) || {}; } catch { myPet = {}; } }
+    if (crew && !crew.snapshot()) await crew.load();
+    setSub(sub);
     await load();
+    setSub(sub);
   }
   function close() {
     if (!page || page.hidden) return;
     page.hidden = true; document.body.classList.remove('community-page-open');
+    square?.hide(); crew?.hide();
     document.getElementById('btn-community')?.classList.remove('active');
     window.removeEventListener('resize', onResize);
   }
@@ -295,7 +354,7 @@ function createCommunityPage({ document, window, ipcRenderer, closeOtherPanels =
       try {
         const s = await invoke('set-enabled', { enabled: !offline });
         box.checked = !!(s && s.enabled === false);
-        if (box.checked) { data = { state: 'disabled' }; paintSummary({ state: 'disabled', online: null, at: 0 }); }
+        if (box.checked) { data = { state: 'disabled' }; setSub('board'); render(); paintSummary({ state: 'disabled', online: null, at: 0 }); }
         else { data = null; const r = await invoke('get-board', { cachedOnly: true }).catch(() => null); if (r && r.state) paintSummary({ state: r.state, online: r.online, at: r.at }); }
         if (page && !page.hidden) { if (box.checked) render(); else await load(); }
       } catch { box.checked = !offline; } finally { box.disabled = false; }
@@ -313,4 +372,4 @@ function createCommunityPage({ document, window, ipcRenderer, closeOtherPanels =
   return { open, close, isOpen: () => !!page && !page.hidden, _summary: () => summary };
 }
 
-module.exports = { createCommunityPage, viewModel, pageHtml, BOARDS, entryValue, tokenText, petThumb, NICK_MAX };
+module.exports = { createCommunityPage, viewModel, pageHtml, BOARDS, SUBS, entryValue, tokenText, petThumb, NICK_MAX };

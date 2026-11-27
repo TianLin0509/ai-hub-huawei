@@ -73,6 +73,8 @@ async function session(out, evidence, name, prepare, steps) {
       await c.eval(installMock(board));
       if (await c.eval(`!!document.getElementById('community-page')&&!document.getElementById('community-page').hidden`)) await clickSel('#btn-community');
       await clickSel('#btn-community');
+      await wait(`!!document.querySelector('#community-page .cmy-rows, #community-page .cmy-emptybox')`, 'community loaded');
+      await clickSel('#community-page [data-cmy-sub="board"]');
       await wait(`document.querySelector('#community-page ${untilSel}')`, 'page ' + untilSel);
     };
     await steps({ c, wait, shot, clickSel, show });

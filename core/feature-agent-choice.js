@@ -24,6 +24,7 @@ const FEATURES = [
   { id: 'progress', label: '进展卡自动摘要', kinds: ONESHOT, defaultText: 'Claude · Haiku' },
   { id: 'meeting', label: '会议理解 / 问答', kinds: SESSION_GW, defaultText: '会议中所选引擎' },
   { id: 'text', label: '草稿整理 / 团队文字任务', kinds: SESSION_GW, defaultText: 'CodeAgent · 启动默认模型' },
+  { id: 'crew', label: '社区团队来信（自动作答 / 起草回信）', kinds: ONESHOT, exclude: ['codex', 'deepseek-acp'], defaultText: 'CodeAgent · 启动默认模型' },
 ];
 const LABELS = { codeagent: 'CodeAgent', [LITE]: 'CodeAgent-Lite（省内存）', claude: 'Claude', codex: 'Codex', 'deepseek-acp': 'DSH', qwen: 'Qwen Code', glm: 'ZCode', [GATEWAY]: '部门 API key（网关）' };
 // 网关这一行：模型 = key 的对话模型表（附一键体检的说明）+ 手填检测通过的；allowCustom 让界面给出「手填模型」。
@@ -41,7 +42,7 @@ function gatewayRow(dataDir, { env, findCommand }) {
 function feature(id) { const row = FEATURES.find(f => f.id === id); if (!row) throw new Error('未知功能'); return row; }
 // 公司版会话功能另收「Claude Code 外壳 + 公司模型 / 自有接口 / 自有 API」（部门 key 那条仍存成 api-gateway，和以前同一条线路）。
 // 单次任务另收 DSH（经 ACP 只读作答，core/dsh-oneshot.js）。
-const kindAllowed = (f, kind) => f.kinds.includes(kind) || (companyEdition() && (f.kinds === ONESHOT ? kind === 'deepseek-acp' : kind === 'claude'));
+const kindAllowed = (f, kind) => !f.exclude?.includes(kind) && (f.kinds.includes(kind) || (companyEdition() && (f.kinds === ONESHOT ? kind === 'deepseek-acp' : kind === 'claude')));
 // 公司版（2026-11-26 修正）：Claude Code / Codex / DSH 只是外壳（harness），公司里没有 Claude、GPT 这类模型。
 // 外壳背后的模型只从启动中心同一份来源里列（2026-11-27 宗旨：部门 API / 自有 API 用户和 CodeAgent 用户同样的体验）：
 // 部门 API key（网关）、公司模型（经本机反代用 CodeAgent 账号）、自有接口、自有 API 账号。「沿用本机 CLI 配置」不进后台功能
@@ -329,6 +330,7 @@ function parseSourceValue(value) {
   return cut > 0 ? { source, profileId: tail.slice(0, cut), model: tail.slice(cut + 1) } : null;
 }
 function featureOptions(f, backends) {
+  backends = backends.filter(b => !f.exclude?.includes(b.kind));
   const choiceValues = require('./codeagent-model-choice');
   const plain = (b, models) => ({ value: b.kind, label: b.label, available: !!b.available, reason: b.reason || '', setup: b.setup || '', allowCustom: !!b.allowCustom || (oneshot(f) && b.kind === 'codeagent' && !!b.available),
     defaultModel: b.defaultModel || '', models: models.map(m => ({ value: choiceValues.choiceValue(m), label: m.label || m.id, id: m.id, ...(m.unavailable ? { unavailable: true } : {}) })) });

@@ -20,7 +20,7 @@ test('各功能独立持久化选择，重新读取仍有效，恢复默认保�
   const dir = temp(t);
   routes.setPreference(dir, 'personal', { model: 'legacy', provider: 'builtin' });
   for (const f of choice.FEATURES) {
-    const selected = f.kinds.includes('codex') ? { kind: 'codex', model: 'gpt-6-astra', source: 'company' } : { kind: 'codeagent', model: 'glm-test' };
+    const selected = f.kinds.includes('codex') && !f.exclude?.includes('codex') ? { kind: 'codex', model: 'gpt-6-astra', source: 'company' } : { kind: 'codeagent', model: 'glm-test' };
     choice.set(dir, f.id, selected, { backends });
     assert.deepEqual(choice.resolve(dir, f.id, { backends }).selected, selected);
   }
@@ -57,6 +57,16 @@ test('无效功能、非法模型、不可用后端不写入配置', t => {
   assert.throws(() => choice.set(dir, 'help', { kind: 'claude', model: 'a\nb' }, { backends }));
   assert.throws(() => choice.set(dir, 'help', { kind: 'claude', model: 'missing' }, { backends }));
   assert.equal(routes.featurePreference(dir, 'help'), null);
+});
+test('团队来信隐藏并拒绝 Codex，旧配置不会被继续执行，其他单次功能照常可选', t => {
+  const dir = temp(t), crew = choice.FEATURES.find(f => f.id === 'crew');
+  assert.ok(!choice.featureOptions(crew, backends).some(b => b.value === 'codex'));
+  assert.ok(choice.featureOptions(choice.FEATURES.find(f => f.id === 'help'), backends).some(b => b.value === 'codex'));
+  const codex = { kind: 'codex', source: 'company', model: 'gpt-6-astra' };
+  assert.throws(() => choice.set(dir, 'crew', codex, { backends }), /可用的后端/);
+  routes.setFeaturePreference(dir, 'crew', codex);
+  assert.equal(choice.resolve(dir, 'crew', { backends }).selected, null);
+  assert.match(choice.resolve(dir, 'crew', { backends }).warning, /不支持/);
 });
 test('公司版外壳目录与启动中心同源：只有部门 key 与公司模型，没有 claude-opus / gpt 这类公司用不了的模型', t => {
   const dir = temp(t);

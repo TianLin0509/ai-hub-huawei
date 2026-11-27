@@ -1,10 +1,11 @@
 'use strict';
 // 单次纯文字任务复用答疑的只读参数和隐藏进程，不把功能任务变成编码权限。
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
-async function run(selected, prompt, { dataDir, signal, timeoutMs = 60000, env = process.env,
+async function run(selected, prompt, { dataDir, signal, timeoutMs = 60000, env = process.env, crew = false,
   runOnce = require('./company-assistant/ppt-map-model').runOnce,
   findCommand = require('./community-setup').findCommand, onActivity = () => {} } = {}) {
   const engine = require('./help-ask/engine'), kind = selected.kind;
+  if (crew && !['codeagent', 'claude'].includes(kind)) throw new Error('团队来信只支持能关闭全部工具的后端');
   const launchEnv = engine.childEnv(env), cwd = path.join(dataDir, 'feature-agent-cwd');
   fs.mkdirSync(cwd, { recursive: true });
   // DSH 走 ACP（不是命令行一问一答）：core/dsh-oneshot.js 起一个只读的 DSH，问一句收一段回答。
@@ -16,7 +17,7 @@ async function run(selected, prompt, { dataDir, signal, timeoutMs = 60000, env =
     command = config.command || command;
     require('./codeagent-launch-env').applyAccountEnv(launchEnv, { configDirEnv: config.configDirEnv, configDir: config.configDir });
   }
-  if (kind === 'claude') launchEnv.CLAUDE_CODE_DISABLE_CLAUDE_MDS = '1';
+  if (kind === 'claude' || (crew && kind === 'codeagent')) launchEnv.CLAUDE_CODE_DISABLE_CLAUDE_MDS = '1';
   // 公司版外壳（core/feature-agent-choice.js）：Claude Code / Codex 只当外壳，模型来源和启动中心同一套
   // （部门 API key、公司模型经本机反代；自有接口、自有 API 账号直连；本机 CLI 配置原样不动，见 core/harness-route.js）。
   const source = (kind === 'claude' || kind === 'codex') ? selected.source || '' : '';
@@ -53,6 +54,11 @@ async function run(selected, prompt, { dataDir, signal, timeoutMs = 60000, env =
         : engine.claudeArgs(help, { model: selected.model, settingsFile });
       // 空模型表示沿用 CLI 当前默认，不能传一个空 --model。
       if (kind === 'codeagent' && !selected.model) args.splice(args.indexOf('--model'), 2);
+      // 团队来信的默认模型也关闭插件和 hook；显式供应商沿用原有 settings 路线。
+      if (crew && kind === 'codeagent' && !selected.model) {
+        if (!help.includes('--bare')) throw new Error('当前 CodeAgent 不支持团队来信的精简隔离模式');
+        if (!args.includes('--bare')) args.push('--bare');
+      }
       if (kind === 'codeagent' && selected.codeagentModelProvider) {
         if (!help.includes('--settings')) throw new Error('当前 CodeAgent 不支持单次指定供应商，请恢复默认');
         providerFile = path.join(cwd, `${crypto.randomUUID()}.json`);
