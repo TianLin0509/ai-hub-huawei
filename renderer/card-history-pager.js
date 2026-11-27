@@ -30,6 +30,6 @@ function createCardHistoryPager({ document: doc, activeId, load }) {
           && !event.target.closest?.('pre,textarea,input,[contenteditable="true"]')) void more(activeId(), container);
     }, { passive: true });
   }
-  return { get, render, bind, reset(id) { states.delete(id); }, INITIAL_CARDS, PAGE_CARDS };
+  return { get, render, bind, more, reset(id) { states.delete(id); }, INITIAL_CARDS, PAGE_CARDS };
 }
 module.exports = { createCardHistoryPager, INITIAL_CARDS, PAGE_CARDS };

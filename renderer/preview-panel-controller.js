@@ -1165,20 +1165,26 @@ function createPreviewPanelController({
     }
   }
 
-  function applyPreviewLayout(isFullscreen, { persist = true, refit = true } = {}) {
+  // 对话区被全屏预览藏起前先记下位置；全屏切回分屏、对话区重新露出时回到那里（预览退出回原位）。
+  // 切回带着预览的会话（restoringContext）时沿用最初进入预览时记的位置，不重记。
+  // 必须在预览面板显示、分屏宽度变化之前判断并记：那之后对话区已被挤窄重排，记下的锚点偏移会差十几到二十多像素。
+  function sourceMove(hideNow) {
+    ensureSourcePanel();
+    const src = previewSourcePanel ? document.getElementById(previewSourcePanel) : null;
+    return src ? sourceTransition({ wasHidden: src.style.display === 'none', hideNow, restoring: restoringContext }) : null;
+  }
+
+  function applyPreviewLayout(isFullscreen, { persist = true, refit = true, leaveNoted = false } = {}) {
     const state = getContextState();
     previewIsFullscreen = !!isFullscreen;
     if (persist && state) state.isFullscreen = previewIsFullscreen;
-    ensureSourcePanel();
+    const move = sourceMove(previewIsFullscreen);
+    if (move === 'leave' && !leaveNoted) onLeaveConversation?.(currentContextKey);
     const isSplit = !previewIsFullscreen;
     previewPanelEl.classList.toggle('preview-split', isSplit);
     previewSplitterEl.style.display = isSplit ? '' : 'none';
     applySplitWidths(isSplit ? previewSplitRatio : null);
     const src = previewSourcePanel ? document.getElementById(previewSourcePanel) : null;
-    // 对话区被全屏预览藏起前先记下位置；全屏切回分屏、对话区重新露出时回到那里（预览退出回原位）。
-    // 切回带着预览的会话（restoringContext）时沿用最初进入预览时记的位置，不重记。
-    const move = src ? sourceTransition({ wasHidden: src.style.display === 'none', hideNow: previewIsFullscreen, restoring: restoringContext }) : null;
-    if (move === 'leave') onLeaveConversation?.(currentContextKey);
     if (src) src.style.display = previewIsFullscreen
       ? 'none'
       : (previewSourcePanel === 'terminal-panel' ? '' : 'flex');
@@ -1197,11 +1203,12 @@ function createPreviewPanelController({
   function showPanelFrame(state) {
     previewIsFullscreen = !!state.isFullscreen;
     previewSplitRatio = Number(state.splitRatio) || 0.5;
-    ensureSourcePanel();
+    const leaving = sourceMove(previewIsFullscreen) === 'leave';
+    if (leaving) onLeaveConversation?.(currentContextKey);
     const emptyEl = document.getElementById('empty-state');
     if (emptyEl) emptyEl.style.display = 'none';
     previewPanelEl.style.display = 'flex';
-    applyPreviewLayout(previewIsFullscreen, { persist: false, refit: false });
+    applyPreviewLayout(previewIsFullscreen, { persist: false, refit: false, leaveNoted: leaving });
     renderTabs();
     if (!previewIsFullscreen) refitActiveTerminal();
   }

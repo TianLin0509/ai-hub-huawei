@@ -149,7 +149,7 @@ for (const [name, want] of [['跨版本', 'GLM-5.3(Volcano-MaaS)'], ['同版本�
 test('菜单选择：没有同家族候选时报错并列出菜单里的可选项', async t => {
   const { result } = await drive(t, 'Qwen3-Coder', MENU);
   assert.equal(result.ok, false);
-  assert.match(result.message, /选不了 Qwen3-Coder/);
+  assert.match(result.message, /菜单里没有 Qwen3-Coder，这个账号可能没开通它/);
   assert.match(result.technicalReason, /模型菜单里没有 Qwen3-Coder（菜单里有：GLM-5\.2\(Volcano-MaaS\)、/);
 });
 

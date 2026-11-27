@@ -46,6 +46,9 @@
   "pi · 终端 Agent": "pi · Terminal agent",
   "CodeAgent · 公司内网": "CodeAgent · Company intranet",
   "一键安装 pi": "Install pi",
+  "opencode · 终端 Agent": "opencode · Terminal agent",
+  "一键安装 opencode": "Install opencode",
+  "开源终端编码 Agent opencode：用 Hub 已有的公司模型 / DeepSeek / 套餐钥匙，或 opencode 自己的配置": "opencode, an open-source terminal coding agent: uses Hub's existing company model / DeepSeek / plan keys, or its own configuration",
   "启动配置": "Launch settings",
   "新建会话将沿用这组配置": "New sessions will use these settings",
   "消费通道": "Billing channel",
@@ -258,6 +261,8 @@
   "普通会话卡片": "Single session card",
   "调整后立即预览": "Changes preview immediately",
   "正文字号": "Body font size",
+  "打开会话时定位到最新提问（关掉则滚到最底下）": "Open conversations at the latest question (off: jump to the bottom)",
+  "打开或切换会话时，把最新一条提问放到页面最上方，从回答开头往下读；回答不足一屏时仍停在最底下。关掉后打开会话直接滚到底。": "When you open or switch to a conversation, your latest question is placed at the top so you can read the answer from its start; if the answer fits on one screen it stays at the bottom. Turn off to always open at the bottom.",
   "字体风格": "Font style",
   "系统清晰（推荐）": "System clear (recommended)",
   "微软雅黑": "Microsoft YaHei",
@@ -485,5 +490,10 @@
   "默认每天第一次启动时播放，修改后立即保存。现在播放一次只重播当前动画，不改变启动频率；点击画面或按 Esc 可跳过。更换动画可选其他款式。": "By default, the animation plays on the first launch each day. Changes are saved immediately. Play once now replays the current animation without changing the startup frequency; click or press Esc to skip. Use Change animation to choose another style.",
   "员工助手 Beta · 让员工助手用 HUB-H 的公司模型": "Employee Assistant Beta · let Employee Assistant use HUB-H company models",
   "员工助手 Beta": "Employee Assistant Beta",
-  "员工助手": "Employee Assistant"
+  "员工助手": "Employee Assistant",
+  "广场": "Plaza",
+  "规则 · 广场、资源、账号、回顾": "Rules · Plaza, Resources, Accounts, Review",
+  "规则 · 广场、资源、账号、回顾；悬停展开": "Rules · Plaza, Resources, Accounts, Review; hover to expand",
+  "广场 · 员工助手、AgentCenter 和本机各家 AI 的技能": "Plaza · skills from Employee Assistant, AgentCenter and local AIs",
+  "技能广场": "Skill Plaza"
 }

@@ -538,7 +538,7 @@ function createWelinkBlackboardPage({ document, window, ipcRenderer, closeOtherP
 
   async function open() {
     build(); closeOtherPanels();
-    for (const n of ['__communityHide', '__avatarHide', '__weclawHide', '__teamHide', '__cloudHide', '__profileHide', '__companyRoomsHide', '__companyMeetingHide', '__assistantHide', '__wirelessHide', '__companyAssistantHide', '__companyForumHide', '__companyPptHide', '__companyAttendanceHide', '__companyW3Hide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide']) { try { window[n]?.(); } catch { /* 别的页自己的收起出错不影响这里 */ } }
+    for (const n of ['__communityHide', '__avatarHide', '__weclawHide', '__skillPlazaHide', '__teamHide', '__cloudHide', '__profileHide', '__companyRoomsHide', '__companyMeetingHide', '__assistantHide', '__wirelessHide', '__companyAssistantHide', '__companyForumHide', '__companyPptHide', '__companyAttendanceHide', '__companyW3Hide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide']) { try { window[n]?.(); } catch { /* 别的页自己的收起出错不影响这里 */ } }
     // 每次打开都回到「总览与自救」首屏：异常时第一眼就能看到自救条。
     Object.assign(ui, { tab: 'overview', filter: 'all', page: 1, confirmLogout: false, confirmCooldown: false, hideLogin: false, err: null });
     page.hidden = false; document.body.classList.add('welink-blackboard-page-open'); place();

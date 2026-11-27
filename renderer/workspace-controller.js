@@ -187,6 +187,9 @@
   let deepseekRoutes = null;
   // pi（r39）：pi:status 的结果（装没装、可用线路）；piInstalling 时按钮显示进度。
   let piStatus = null;
+  // opencode（2026-11-26）：opencode:status 的结果；opencodeInstalling 时按钮显示进度。
+  let opencodeStatus = null;
+  let opencodeInstalling = false;
   let piInstalling = false;
   let deepseekRouteTouched = false;
   function panelKind(kind) {
@@ -1832,6 +1835,48 @@
       if (slot) { slot.hidden = install.hidden || piInstalling; if (!install.hidden) void require('./download-source-view').fill(slot).catch(() => {}); }
     }
   }
+  // opencode 没装：就地给「一键安装 opencode」；装好了说明走哪条模型线路。
+  function paintOpencodeNote() {
+    const note = document.getElementById('new-session-opencode-note');
+    if (!note) return;
+    note.hidden = selectedKind !== 'opencode';
+    if (note.hidden) return;
+    const text = document.getElementById('new-session-opencode-note-text');
+    const install = document.getElementById('new-session-opencode-install');
+    const diagnosis = opencodeStatus?.diagnosis;
+    const ready = diagnosis?.state === 'ready';
+    note.dataset.state = !opencodeStatus || ready ? 'info' : 'error';
+    const routes = (opencodeStatus?.routes || []).map(route => route.label).join('、');
+    const [headline, detail] = !opencodeStatus ? ['正在检查 opencode…', '']
+      : opencodeInstalling ? ['正在安装 opencode…', '从公司内源下载（约 200 MB），装进 Hub 自己的目录，不改你的全局 npm。']
+      : diagnosis?.state === 'none' ? ['这台电脑还没有 opencode，点右边「一键安装 opencode」。', '从公司内源下载（约 200 MB），装进 Hub 自己的目录；自己装过 opencode 的会自动识别。']
+      : !ready ? [diagnosis.message, '']
+      : [`opencode ${diagnosis.version || ''} 已就绪（${diagnosis.source === 'hub' ? 'Hub 安装' : '本机已装'}）。`, (routes
+        ? `模型线路：${routes}。`
+        : '没有找到 Hub 可用的模型钥匙：opencode 会用它自己的配置；还没配过就在 opencode 终端里 /connect，或在设置里接入公司模型。')
+        + 'Hub 的「问一下」、分支按钮与附件暂不支持 opencode；回答进行中请等它答完或先停止再发。'];
+    fieldHint.setLabelText(text, headline);
+    fieldHint.setIconHint(text, detail);
+    if (install) {
+      install.hidden = !opencodeStatus || ready;
+      install.disabled = opencodeInstalling;
+      install.textContent = opencodeInstalling ? '安装中…' : '一键安装 opencode';
+    }
+  }
+  async function installOpencodeFromLaunch() {
+    if (opencodeInstalling) return;
+    opencodeInstalling = true; paintOpencodeNote();
+    // 和 pi 一样在按钮下方挂统一进度条（进度、速度、剩余时间、来源）。
+    const button = document.getElementById('new-session-opencode-install');
+    let host = document.querySelector('[data-opencode-dlp]');
+    if (!host && button) { button.insertAdjacentHTML('afterend', '<div data-opencode-dlp></div>'); host = document.querySelector('[data-opencode-dlp]'); }
+    const unmount = require('./download-progress-view').mount(host, 'cli:opencode', { title: '安装 opencode', ipcRenderer });
+    try {
+      const result = await ipcRenderer.invoke('cli-tools:install', { id: 'opencode' });
+      if (!result?.ok) setError('安装 opencode 没有成功：' + (result?.error || '未知原因'));
+    } catch (error) { setError('安装 opencode 没有成功：' + error.message); }
+    finally { opencodeInstalling = false; setTimeout(unmount, 7000); await loadModelCatalog('opencode'); paint(); }
+  }
   async function installPiFromLaunch() {
     if (piInstalling) return;
     piInstalling = true; paintPiNote();
@@ -1898,6 +1943,7 @@
       { level: routeStatus.available ? 'info' : 'error', label: fieldHint.fieldLabel(routeField) });
     }
     paintPiNote();
+    paintOpencodeNote();
     paintLaunchLayout();
     const existingRow = document.getElementById('new-session-existing-path');
     menuEl.querySelectorAll('[data-project-path]').forEach(button => {
@@ -2289,6 +2335,11 @@
         return chatgptCatalog;
       });
     }
+    if (base === 'opencode') return ipcRenderer.invoke('opencode:status').then(status => {
+      setRuntimeModelOptions('opencode', (status?.models || []).filter(m => m.id));
+      opencodeStatus = status || null;
+      return status;
+    }).catch(error => { console.warn('[opencode-status]', error.message); opencodeStatus = null; return null; });
     if (base === 'pi') return ipcRenderer.invoke('pi:status').then(status => {
       setRuntimeModelOptions('pi', (status?.models || []).filter(m => m.id));
       piStatus = status || null;
@@ -2325,13 +2376,14 @@
   }
 
   function loadPrimaryModelCatalogs(options = {}) {
-    if (companyApi.isCompany()) return Promise.all(['claude', 'codex', 'deepseek-acp', 'codeagent', 'pi'].map(kind => loadModelCatalog(kind)));
+    if (companyApi.isCompany()) return Promise.all(['claude', 'codex', 'deepseek-acp', 'codeagent', 'pi', 'opencode'].map(kind => loadModelCatalog(kind)));
     return Promise.all([
       loadClaudeModelCatalog(options),
       loadCodexTuningCatalog(options),
       loadModelCatalog('codeagent'),
       ...require('../core/acp-profiles').ACP_KINDS.map(kind=>loadModelCatalog(kind)),
       loadModelCatalog('pi'),
+      loadModelCatalog('opencode'),
     ]);
   }
 
@@ -2587,6 +2639,7 @@
       });
     });
     document.getElementById('new-session-pi-install')?.addEventListener('click', () => { void installPiFromLaunch(); });
+    document.getElementById('new-session-opencode-install')?.addEventListener('click', () => { void installOpencodeFromLaunch(); });
     document.getElementById('new-session-deepseek-route')?.addEventListener('change', event => {
       setError('');
       void saveDeepseekRoute(event.target.value).then(paint);

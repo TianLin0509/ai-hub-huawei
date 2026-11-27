@@ -449,6 +449,7 @@
 .config-reading-title { margin-top: 18px; }
 .config-reading-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .config-reading-grid .config-field { margin-bottom: 4px; }
+.config-check-grid.config-card-open-at { margin: 2px 0 0; }
 .config-reading-grid output { float: right; color: var(--brand-text); font-size: 12px; font-variant-numeric: tabular-nums; }
 .config-reading-grid input[type="range"] { padding: 7px 0; accent-color: var(--brand); cursor: pointer; }
 .config-reading-note { margin: 4px 0 18px; color: var(--fg-muted); font-size: 11.5px; line-height: 1.55; }
@@ -1871,7 +1872,9 @@
   font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
   font-size: 13px;
   line-height: 1.6;
-  white-space: pre;
+  /* Long lines wrap: the horizontal scrollbar of a tall pre sat at the far bottom of the file and was never seen. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   overflow: auto;
   tab-size: 4;
 }
@@ -1880,6 +1883,9 @@
   min-height: 1.6em;
   display: block;
   padding-right: 16px;
+  /* Hanging indent: wrapped continuation lines stay right of the line-number gutter. */
+  padding-left: 48px;
+  text-indent: calc(-1 * 48px);
 }
 
 .preview-code-line.preview-line-target {

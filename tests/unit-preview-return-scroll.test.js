@@ -123,3 +123,82 @@ test('审查 P2-3：全屏预览藏起对话前记位置，全屏切分屏露出
   assert.equal(back.has('session:s1'), false);
   assert.equal(c.element.scrollTop, 1500);
 });
+
+// 像浏览器一样：对话区藏着时（高度 0）写 scrollTop 被忽略，原值保留；露出后高度要过一两帧才稳定。
+function browserLike(c) {
+  let height = 600, top = c.element.scrollTop;
+  Object.defineProperty(c.element, 'clientHeight', { get: () => height, configurable: true });
+  Object.defineProperty(c.element, 'scrollTop', { get: () => top, set: v => { if (height > 0) top = v; }, configurable: true });
+  return { setHeight: h => { height = h; } };
+}
+
+test('R54 后续：关预览那一拍对话区还藏着，等露出且高度稳定后再按锚点对齐；预览期间前面卡片长高也对得上', () => {
+  const c = conversation([400, 400, 400, 400, 400]);
+  const view = browserLike(c);
+  c.follow.holdAt(820); // 看第 3 张卡（开头往下 20）
+  const back = createPreviewReturnScroll();
+  back.leave('session:s1', c.element);
+  view.setHeight(0); // 全屏预览把对话区藏起
+  c.grow(0, 700); // 预览期间第一张卡长高 300
+  const frames = [];
+  assert.equal(back.back('session:s1', c.element, { requestFrame: fn => frames.push(fn) }), true);
+  assert.equal(c.element.scrollTop, 820, '这一拍还藏着，不动');
+  view.setHeight(790); frames.shift()(); // 揭开，输入框还没出
+  view.setHeight(622); frames.shift()(); // 输入框出来，高度变了
+  assert.equal(frames.length, 1, '高度还在变，继续等');
+  frames.shift()(); // 连续两帧 622：稳定
+  assert.equal(frames.length, 0);
+  assert.equal(c.element.scrollTop, 1120, '按当时看的那张卡对齐（820 + 前面长高的 300）');
+  assert.equal(c.follow.isFollowing(), false);
+});
+
+test('R54 后续：等布局期间又打开预览，上一次回原位作废；一直没露出最多等 SETTLE_FRAMES 帧、不动位置', () => {
+  const { SETTLE_FRAMES } = require('../renderer/preview-return-scroll');
+  const c = conversation([400, 400, 400, 400, 400]);
+  const view = browserLike(c);
+  c.follow.holdAt(820);
+  const back = createPreviewReturnScroll();
+  back.leave('session:s1', c.element);
+  view.setHeight(0);
+  const frames = [];
+  back.back('session:s1', c.element, { requestFrame: fn => frames.push(fn) });
+  view.setHeight(600);
+  back.leave('session:s1', c.element); // 又点开了预览
+  c.element.scrollTop = 50;
+  while (frames.length) frames.shift()();
+  assert.equal(c.element.scrollTop, 50, '作废的回原位不再改位置');
+  view.setHeight(0);
+  back.back('session:s1', c.element, { requestFrame: fn => frames.push(fn) });
+  let count = 0;
+  while (frames.length) { count++; frames.shift()(); }
+  assert.equal(count, SETTLE_FRAMES + 1);
+  assert.equal(c.element.scrollTop, 50);
+});
+
+test('审查 P2：等布局期间用户滚动 / 点回到最新、切到别的会话、或 forget，到期都不再抢位置', () => {
+  const run = interrupt => {
+    const c = conversation([400, 400, 400, 400, 400]);
+    const view = browserLike(c);
+    c.follow.holdAt(820);
+    const back = createPreviewReturnScroll();
+    back.leave('session:s1', c.element);
+    view.setHeight(0);
+    c.grow(0, 700);
+    const frames = [];
+    back.back('session:s1', c.element, { requestFrame: fn => frames.push(fn) });
+    view.setHeight(622);
+    frames.shift()(); // 露出第一帧，还在等稳定
+    interrupt(c, back);
+    const at = c.element.scrollTop;
+    while (frames.length) frames.shift()();
+    return { at, now: c.element.scrollTop };
+  };
+  const scrolled = run(c => { c.follow.pause(); c.element.scrollTop = 300; }); // 用户往上翻
+  assert.equal(scrolled.now, 300, '用户滚动后不再改位置');
+  const latest = run(c => c.follow.follow()); // 点「回到最新」/ 发消息置底
+  assert.equal(latest.now, latest.at, '回到最新后不被拉回旧位置');
+  const switched = run(c => { c.follow.activate('s2'); c.element.scrollTop = 0; }); // 切到会话 B
+  assert.equal(switched.now, 0, '不把会话 A 的位置套到会话 B 上');
+  const forgot = run((c, back) => back.forget('session:s1')); // 全屏切分屏后立刻关掉
+  assert.equal(forgot.now, forgot.at, 'forget 后不再对齐');
+});

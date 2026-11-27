@@ -1452,7 +1452,7 @@ function registerSessionIpc(ipcMain, deps) {
           onDefaultChange: change => guard.recordChange(dataDir, { account, session: String(sessionId).slice(0, 8), before: change.restoredTo || '', after: change.written || '',
             source: `codeagent-menu-enter:${reason}`, extra: { file: change.file, restoredTo: change.restoredTo || '(空)', restoreOk: change.ok, ...(change.error ? { restoreError: change.error } : {}) } }, { persist: false }),
           sendToPty: require('../../core/group-chat-watcher').sendToPty });
-      } catch (error) { return { ok: false, technicalReason: error && error.message ? error.message : String(error), message: `这个账号在 CodeAgent 模型菜单里选不了 ${want}` }; }
+      } catch (error) { return { ok: false, technicalReason: error && error.message ? error.message : String(error), pickFailure: 'mismatch', message: `Hub 没能在 CodeAgent 模型菜单里自动选中 ${want}（菜单操作出错）；请点「打开后台」在菜单里手动选一次` }; }
     };
     let result = await driveMenu(modelId);
     if (result.loginRequired) return result;
@@ -1707,7 +1707,8 @@ function registerSessionIpc(ipcMain, deps) {
       } else if (!result.ok) {
         // 真失败（菜单没关掉、输入框不能用）：第一条消息被退回，常驻提示讲清原因和下一步，不用一闪而过的提示。
         const why = result.technicalReason && result.technicalReason !== result.message ? `（${result.technicalReason}）` : '';
-        sendToRenderer('session-notice', { sessionId, level: 'warning', persistent: true,
+        // 菜单没对上或选了没确认：提示条带「打开后台」按钮，一步到终端里手动选（R53）。
+        sendToRenderer('session-notice', { sessionId, level: 'warning', persistent: true, ...(result.pickFailure && result.pickFailure !== 'absent' ? { action: 'open-backstage' } : {}),
           message: `${result.message || `没能选中 ${modelId}`}${why}。第一条消息还没发出；请到会话的终端里按 Esc 关掉模型菜单，或用 /model 手动选一次，再重新发送。` });
       }
       return result;
@@ -1858,7 +1859,7 @@ function registerSessionIpc(ipcMain, deps) {
     }
     // result.fallback：菜单没选上、只是按当前模型照常可用——不算切成了（同 fixCodeAgentModel）。
     if (!result || !result.ok || result.fallback) {
-      return { ok: false, error: 'pick-failed', message: (result && result.message) || 'CodeAgent 没能切换模型' };
+      return { ok: false, error: 'pick-failed', message: (result && result.message) || 'CodeAgent 没能切换模型', ...(result?.pickFailure ? { pickFailure: result.pickFailure } : {}) };
     }
     // 菜单里没有所选模型、按统一对照改选了同版本的一个（core/model-name-match.js）：之后都按实际选中的记。
     const chosen = result.substituted && typeof result.model === 'string' && result.model ? result.model : modelId;

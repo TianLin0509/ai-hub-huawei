@@ -63,7 +63,7 @@
       return `<div class="fa-row" data-fa-row="${f.id}"><label for="fa-backend-${host.id}-${f.id}">${esc(f.label)}${!selected && f.auto ? `<span class="fa-auto" data-fa-auto title="${esc(f.defaultText)}">默认：${esc(f.defaultText)}（未检测到可用的 CodeAgent）</span>` : ''}</label>
         <select data-fa-backend id="fa-backend-${host.id}-${f.id}" aria-label="${esc(f.label)}后端" title="${esc(backendTitle)}"><option value="" title="${esc(f.defaultText)}">${esc(defaultBackend)}</option>${backendOptions.map(b => `<option value="${esc(b.value)}"${b.value === cur.backend ? ' selected' : ''}${b.available ? '' : ' disabled'} title="${esc(b.reason || b.label)}">${esc(b.label)}${b.available ? '' : `（${esc(b.reason || '不可用')}）`}</option>`).join('')}</select>
         <select data-fa-model aria-label="${esc(f.label)}模型"${selected && backend?.available ? '' : ' disabled'}><option value="">默认（当前：${esc(backend?.defaultModel || f.defaultText)}）</option>${stale || (f.legacy && !cur.model) ? `<option selected value="${esc(cur.model)}">${esc(staleLabel)}</option>` : ''}${models.map(m => `<option value="${esc(m.value)}"${m.value === cur.model ? ' selected' : ''}${m.unavailable ? ' disabled' : ''}>${esc(m.label || m.id)}</option>`).join('')}${backend?.allowCustom ? '<option value="__custom__">手填模型名…</option>' : ''}</select>
-        ${selected ? '<button class="fa-reset" data-fa-reset type="button">恢复默认</button>' : ''}${f.warning ? `<span class="fa-warning" role="status">${esc(f.warning)}</span>` : ''}${gatewayExtras(f, backend, features.length)}</div>`;
+        ${selected ? '<button class="fa-reset" data-fa-reset type="button">恢复默认</button>' : ''}${f.warning ? `<span class="fa-warning" role="status">${esc(f.warning)}</span>` : ''}${gatewayExtras(f, backend, features.length)}${customBox(backend)}</div>`;
     }).join('') + footer(features, host);
     if (host.id === 'fa-assistant-settings') {
       const overridden = features.filter(f => f.selected).map(f => f.id === 'avatar' ? '分身' : '助理');
@@ -128,7 +128,8 @@
       + `${need.setup === 'own' ? '' : '<button type="button" class="fa-reset" data-fa-open-gateway>去配置部门 API key</button>'}<button type="button" class="fa-reset" data-fa-open-own>去配置自有 API</button><i title="${esc(GATEWAY_INFO)}" aria-label="${esc(GATEWAY_INFO)}">ⓘ</i></span>` : '';
     const note = setup || (features.some(f => f.kinds.includes('api-gateway'))
       ? `<span class="fa-gw"><span title="${esc(GATEWAY_LINE)}">${esc(GATEWAY_LINE)}</span><i title="${esc(GATEWAY_INFO)}" aria-label="${esc(GATEWAY_INFO)}">ⓘ</i></span>` : '');
-    const status = host?.id === 'fa-settings-page' ? presetNote : '';
+    // 设置页和 ⚙ Agent 弹窗都显示回执（一键预设、手填模型检测结果），随后到达的重绘不冲掉。
+    const status = ['fa-settings-page', 'fa-popup-body'].includes(host?.id) ? presetNote : '';
     return `<div class="fa-foot">${note}<span role="status" data-fa-message${status ? ` title="${esc(status)}"` : ''}>${esc(status)}</span></div>`;
   }
   function gatewayExtras(f, backend, count) {
@@ -136,9 +137,11 @@
     // 底部已有网关说明：行内只留「只有助理一项、本机没有 CodeAgent」时的引导，不重复「正在用」。
     const noCodeagent = state?.backends.find(b => b.kind === 'codeagent')?.available === false;
     const line = count === 1 && f.id === 'assistant' && noCodeagent && !f.selected ? '没有 CodeAgent 也能用：后端选「Claude Code」，模型用部门 API key 或自有 API' : '';
-    const hint = line ? `<span class="fa-hint">${line}</span>` : '';
-    const custom = backend?.allowCustom ? `<div class="fa-custom" data-fa-custom hidden><input data-fa-custom-input maxlength="128" placeholder="模型名，例如 deepseek-v4.1-flash-1017" aria-label="手填模型名"><button type="button" class="fa-reset" data-fa-custom-check>检测并使用</button><span role="status" data-fa-custom-msg></span></div>` : '';
-    return hint + custom;
+    return line ? `<span class="fa-hint">${line}</span>` : '';
+  }
+  // 手填模型框：部门 API key（网关）和单次任务的 CodeAgent（问问 Hub / PPT 库地图 / 进展卡摘要，R53）都有；默认收起，下拉选「手填模型名…」才展开。
+  function customBox(backend) {
+    return backend?.allowCustom ? `<div class="fa-custom" data-fa-custom hidden><input data-fa-custom-input maxlength="128" placeholder="模型名，例如 deepseek-v4.1-flash-1017" aria-label="手填模型名"><button type="button" class="fa-reset" data-fa-custom-check>检测并使用</button><span role="status" data-fa-custom-msg></span></div>` : '';
   }
   async function checkCustom(row) {
     const input = row.querySelector('[data-fa-custom-input]'), msg = row.querySelector('[data-fa-custom-msg]'), btn = row.querySelector('[data-fa-custom-check]');
@@ -147,13 +150,14 @@
     if (!model) { msg.textContent = '先填模型名'; input.focus(); return; }
     btn.disabled = true; msg.textContent = '正在试跑一句检测连通…';
     try {
-      const r = await ipcRenderer.invoke('feature-agents:custom-model', { feature: row.dataset.faRow, model });
+      const r = await ipcRenderer.invoke('feature-agents:custom-model', { feature: row.dataset.faRow, model, backend: row.querySelector('[data-fa-backend]')?.value || '' });
       if (!r?.ok) { msg.textContent = r?.error || '没有连通'; msg.title = r?.error || ''; return; }
       // 刷新会重画各处的行：按发起检测的那个容器（设置页或 ⚙ Agent 弹窗）找回状态栏，不落到别处同名行上。
       const host = row.parentElement, hostId = host?.id;
       state = r; refresh();
       const note = (hostId ? document.getElementById(hostId) : host)?.querySelector('[data-fa-message]');
       const text = r.warning || `已连通${r.checked?.firstMs ? `（首字 ${(r.checked.firstMs / 1000).toFixed(1)} 秒）` : ''}，下次提问起用 ${model}`;
+      presetNote = text;
       if (note) { note.textContent = text; note.title = text; }
     } catch (error) { msg.textContent = error.message; }
     finally { btn.disabled = false; }
@@ -199,6 +203,8 @@
   function close() { popup?.remove(); popup = null; }
   async function open(ids, anchor) {
     close();
+    // 新开的弹窗不带上一次（设置页或别的弹窗）留下的回执。
+    presetNote = '';
     popup = document.createElement('section'); popup.className = 'fa-popup'; popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', '功能使用的 Agent');
     popup.innerHTML = '<header><strong>功能使用的 Agent</strong><button type="button" data-fa-close aria-label="关闭">✕</button></header><div id="fa-popup-body" data-fa-body role="group">正在读取模型…</div>';
     popup._ids = ids; document.body.append(popup);
@@ -278,7 +284,7 @@
     if (!hidden) void load().then(refresh).catch(error => { document.getElementById('cfg-feature-agents').textContent = error.message; });
   }).observe(modal, { attributes: true, attributeFilter: ['class'] });
   // 一键预设自己触发的变更保留回执；别处（单项修改、其他窗口）改了选型就清掉，免得旧回执误导。
-  ipcRenderer.on('feature-agents:changed', (_event, detail = {}) => { if (!detail?.preset) presetNote = ''; void load().then(refresh).catch(() => {}); });
+  ipcRenderer.on('feature-agents:changed', (_event, detail = {}) => { if (!detail?.preset && !detail?.checked) presetNote = ''; void load().then(refresh).catch(() => {}); });
   window.__featureAgents = { open, refresh: () => load().then(refresh) };
   mount();
   void load().then(refresh).catch(() => {});

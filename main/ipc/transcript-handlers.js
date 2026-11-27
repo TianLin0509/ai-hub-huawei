@@ -357,6 +357,10 @@ async function parseProviderTranscript(args = {}, deps) {
       return { turns: isDshBranchView(record, parseOpts) ? await withInheritedBranchTurns(args, deps, session, dshTurns, parseOpts, transcriptPath) : dshTurns,
         transcriptPath, source: 'provider-cli', error: null };
     }
+    // opencode（2026-11-26）：休眠会话读 Hub 每轮结束另存的快照。
+    if (String(record?.kind || inKind).replace(/-resume$/, '') === 'opencode' && transcriptPath && /transcript-ses_[A-Za-z0-9]+.json$/i.test(transcriptPath)) {
+      return { turns: require('../../core/opencode-cli-session').readOpencodeCliTranscript(transcriptPath, parseOpts), transcriptPath, source: 'provider-cli', error: null };
+    }
     // pi（r39）：休眠会话直接读 pi 自己的会话文件。
     if (String(record?.kind || inKind).replace(/-resume$/, '') === 'pi' && transcriptPath && /\.jsonl$/i.test(transcriptPath)) {
       return { turns: require('../../core/pi-cli-session').readPiCliTranscript(transcriptPath, parseOpts), transcriptPath, source: 'provider-cli', error: null };

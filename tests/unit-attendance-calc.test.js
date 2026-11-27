@@ -89,6 +89,25 @@ test('公司假期日历把周末也列进来时：周末仍按周末 / 月末�
   assert.equal(A.dayKind('2026-10-01', { holidays }), 'holiday');
 });
 
+test('法定调休补班日按工作日算：2026-09-20（周日）、2026-10-10（周六）正常上班，不按周末全天算加班', () => {
+  // 公司假期日历只列休息日，可能把补班的周末也列成「休息日」；补班日照样按工作日。
+  const holidays = { '2026-09-20': '休息日', '2026-10-10': '休息日' };
+  for (const k of ['2026-09-20', '2026-10-10']) {
+    assert.equal(A.dayKind(k), 'workday', k);
+    assert.equal(A.dayKind(k, { holidays }), 'workday', k);
+  }
+  // 09:00–18:00 在岗：工作日没有加班、扣 0.5 小时；按周末算会是 7.5 小时加班
+  const days = A.buildDays([card('2026-09-20', '09:00', '18:00'), card('2026-10-10', '09:00', '18:00')], { holidays });
+  assert.deepEqual(days.map(x => [x.kind, x.ot, x.owe]), [['workday', 0, 30], ['workday', 0, 30]]);
+  // 当月应出勤天数也把补班日算进去：9 月 = 22 个周一到周五 + 月末周六 9/26 + 补班 9/20；普通周末不受影响
+  assert.equal(A.monthWorkdays(2026, 8), 24);
+  assert.equal(A.monthWorkdays(2026, 9), 24);
+  assert.equal(A.dayKind('2026-09-19'), 'weekend');
+  assert.equal(A.dayKind('2026-10-11'), 'weekend');
+  // 2027 年安排已公布（国办发明电〔2026〕10号）
+  for (const k of ['2027-01-31', '2027-02-14', '2027-05-08', '2027-09-26', '2027-10-09']) assert.equal(A.dayKind(k), 'workday', k);
+});
+
 test('核心工作时间可自定义：默认口径不变，改时间后扣时与加班起点跟着变', () => {
   const def = A.rulesFromWorkTime({});
   assert.deepEqual([def.amEnd, def.pmStart, def.owePerWorkday, def.ratedMinutes], [540, 1080, 30, 450]);

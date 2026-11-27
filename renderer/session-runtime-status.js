@@ -29,6 +29,7 @@ function providerLabel(session) {
   if (kind === 'powershell') return 'PowerShell';
   if (kind === 'codeagent') return 'CodeAgent';
   if (kind === 'pi') return 'pi';
+  if (kind === 'opencode') return 'opencode';
   return 'AI';
 }
 

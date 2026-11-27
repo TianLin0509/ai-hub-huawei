@@ -37,6 +37,14 @@ function registerAcpIpc(ipcMain, {sessionManager} = {}) {
       defaultModel: pi.defaultPiModel(config, process.env, { dataDir }),
       routes: pi.availableRoutes(config, process.env, { dataDir }).map(route => ({ id: route.id, label: pi.routeLabel(route) })) };
   });
+  // opencode（2026-11-26）：装没装、能用哪些模型线路（一键安装走 cli-tools:install，只从内源下载）。钥匙不出主进程。
+  ipcMain.handle('opencode:status', () => {
+    const oc = require('../../core/opencode-cli-profile');
+    const config = getConfig(), dataDir = require('../../core/data-dir').getHubDataDir();
+    return { diagnosis: oc.diagnoseOpencode(process.env), models: oc.opencodeModelOptions(config, process.env, { dataDir }),
+      defaultModel: oc.defaultOpencodeModel(config, process.env, { dataDir }),
+      routes: oc.availableRoutes(config, process.env, { dataDir }).map(route => ({ id: route.id, label: oc.routeLabel(route) })) };
+  });
   // pi 会话存的模型这次能不能用（r39 审查 P1）：缺钥匙时返回线路和要补的 Key，界面就地给输入框。不返回钥匙本身。
   ipcMain.handle('pi:route-check', (_event, { model, profileId } = {}) => {
     const pi = require('../../core/pi-cli-profile');

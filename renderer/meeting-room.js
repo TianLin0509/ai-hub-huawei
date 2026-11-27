@@ -341,7 +341,7 @@ if (typeof document !== 'undefined') (function () {
       _restoreGroupChatScroll(panel, opts.scroll, opts.restoreOpts || {});
     }
     if (opts.forceMeetingBottom) {
-      _scrollMeetingContentToBottom(panel, meeting);
+      _scrollMeetingContentToBottom(panel, meeting, { openLatest: opts.openLatestQuestion === true });
     }
     return true;
   }
@@ -2996,6 +2996,7 @@ if (typeof document !== 'undefined') (function () {
 
   function _captureGroupChatScroll(panel, meeting) {
     if (!panel || !meeting || !meeting.groupChat) return null;
+    if (panel.__mrGcMeeting && panel.__mrGcMeeting.id !== meeting.id) return null;
     const el = panel.querySelector('.mr-gc-messages');
     if (!el) return null;
     const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
@@ -3012,7 +3013,8 @@ if (typeof document !== 'undefined') (function () {
     if (!el) return;
     const follow = el._cardFollowController;
     if (follow) {
-      if (opts.forceBottom || snapshot.stickToBottom) follow.follow();
+      if (opts.forceBottom) { if (opts.openLatest) follow.openLatest(); else follow.follow(); }
+      else if (snapshot.stickToBottom) follow.follow();
       else { follow.pause(); follow.restore({...follow.capture(),top:snapshot.scrollTop}); }
     } else el.scrollTop = opts.forceBottom || snapshot.stickToBottom ? el.scrollHeight : snapshot.scrollTop;
   }
@@ -3020,12 +3022,12 @@ if (typeof document !== 'undefined') (function () {
   // 用户从左侧栏重新进入群聊时，“打开该会话”与普通 session 一样表示查看最新。
   // 聊天流只有一个消息滚动容器；卡片视图则每家 AI 都有自己的 preview，tab 模式
   // 还可能由外层 bottom 承担滚动，因此两层都置底。后台刷新不传此标记，仍保留阅读位置。
-  function _scrollMeetingContentToBottom(panel, meeting) {
+  function _scrollMeetingContentToBottom(panel, meeting, { openLatest = false } = {}) {
     if (!panel || !meeting) return;
     const apply = () => {
       if (meeting.groupChat) {
         const messages = panel.querySelector('.mr-gc-messages');
-        if (messages?._cardFollowController) messages._cardFollowController.follow();
+        if (messages?._cardFollowController) { if (openLatest) messages._cardFollowController.openLatest(); else messages._cardFollowController.follow(); }
         else if (messages) messages.scrollTop = Math.max(0, messages.scrollHeight - messages.clientHeight);
         return;
       }
@@ -3110,15 +3112,16 @@ if (typeof document !== 'undefined') (function () {
     if (meeting.id !== activeMeetingId) return;
     const panel = _ensureGcPanel();
     const forceMeetingBottom = opts.forceMeetingBottom === true;
-    const forceGroupChatBottom = (forceMeetingBottom || !!opts.forceGroupChatBottom)
+    const forceGroupChatBottom = (forceMeetingBottom || !!opts.forceGroupChatBottom || opts.openLatestQuestion === true)
       && !!meeting.groupChat;
     const groupScroll = forceGroupChatBottom
       ? { scrollTop: 0, stickToBottom: true }
       : _captureGroupChatScroll(panel, meeting);
     _renderGcPanelInto(panel, meeting, state, {
       scroll: groupScroll,
-      restoreOpts: { forceBottom: forceGroupChatBottom },
+      restoreOpts: { forceBottom: forceGroupChatBottom, openLatest: opts.openLatestQuestion === true },
       forceMeetingBottom,
+      openLatestQuestion: opts.openLatestQuestion === true,
     });
     // 2026-06-28 maintainer：nextActions(综合共识/互相挑错/生成交接/引用焦点卡)已移到作战面板，
     //   轮次状态随每次 refresh 变化，故同步刷新作战面板，让按钮在轮次结束时即时出现/消失。
@@ -3145,7 +3148,7 @@ if (typeof document !== 'undefined') (function () {
       });
       const cnt = panel.querySelector('.mr-gc-search-count');
       if (cnt) cnt.textContent = kw ? (hits + ' 条匹配') : '';
-      if (kw && first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      if (kw && first) { msgEl._cardFollowController?.pause(); first.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
     });
   }
 
@@ -3171,7 +3174,12 @@ if (typeof document !== 'undefined') (function () {
   function _setupScrollToBottom(panel) {
     const el = panel?.querySelector('.mr-gc-messages'), button = panel?.querySelector('.mr-gc-scroll-bottom');
     if (!el || !button || el._cardFollowController) return;
-    const follow = require('./card-follow-scroll').createCardFollowScroll({element:el,window,document,button});
+    // 打开群聊时同样定位到最新一条用户提问（派发卡、成员回答不算），开关与普通会话共用。
+    const follow = require('./card-follow-scroll').createCardFollowScroll({element:el,window,document,button,
+      landingTarget: () => [...el.querySelectorAll('.mr-gc-msg[data-user-question="true"]')].pop() || null,
+      landOnOpen: () => document.documentElement.dataset.cardOpenAt !== 'bottom',
+      // 群聊面板整块重绘会新建控制器：只在打开群聊时显式定位，重绘、后台刷新不定位。
+      armOnSwitch: false});
     follow.activate(activeMeetingId);
   }
 
@@ -6192,6 +6200,8 @@ if (typeof document !== 'undefined') (function () {
     if (_isPanelCapableMeeting(meeting)) {
       refreshGroupChatPanel(meeting, {
         forceMeetingBottom: opts.forceScrollBottom === true,
+        // 打开 / 切到群聊（侧栏、右键、重启恢复等）：定位到最新一条用户提问；全局搜索命中传 false，不定位。
+        openLatestQuestion: opts.forceScrollBottom !== false,
       });
       // 异步等首次 poll 后再 refresh 一次（poll 内部已会重渲，这里只是兜底，不阻塞 UI）
       if (firstPoll && typeof firstPoll.then === 'function') {
@@ -7849,7 +7859,7 @@ if (typeof document !== 'undefined') (function () {
   // --- Expose global ---
 
   function focusSearchHit(hit = {}) {
-    const panel = document.getElementById('mr-gc-panel');
+    const panel = document.getElementById('mr-group-chat-panel') || document.getElementById('mr-gc-panel');
     if (!panel || panel.style.display === 'none') return false;
     const normalize = value => String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
     const fullNeedle = normalize(hit.text);
@@ -7864,6 +7874,7 @@ if (typeof document !== 'undefined') (function () {
       });
     if (!target) return false;
     target.classList.add('global-search-focus');
+    panel.querySelector('.mr-gc-messages')?._cardFollowController?.pause();
     target.scrollIntoView({ block: 'center', behavior: 'smooth' });
     setTimeout(() => { if (target.isConnected) target.classList.remove('global-search-focus'); }, 1500);
     return true;

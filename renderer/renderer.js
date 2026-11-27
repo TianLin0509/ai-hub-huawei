@@ -953,6 +953,12 @@ const modelUi = createModelUiController({
   // 头部徽章 T2 删了，模型名只剩 composer 底栏那个 chip。模型切换的每一步
   // （发起 / 确认 / 超时回滚）都要让它重画一次，否则会停在切换前的名字上。
   repaintActiveComposer: () => updateFloatingBarState(),
+  // 模型下拉里「打开后台手动选」：切到这个会话的终端（同 session-notice 的 open-backstage 按钮）。
+  openBackstage: async sessionId => {
+    if (!sessions.has(sessionId)) throw new Error('会话已关闭');
+    await selectSession(sessionId, { splitBypass: true });
+    applyViewMode('pty');
+  },
 });
 const attachModelPickerHandler = modelUi.attachModelPickerHandler;
 const updateActiveModelChip = modelUi.updateActiveModelChip;
@@ -1517,7 +1523,7 @@ async function selectMeeting(meetingId, opts = {}) {
   if (terminalPanelEl) terminalPanelEl.classList.remove('home-active');
   if (window.__xresearchHide) window.__xresearchHide(); // 2026-07-23 投研面板互斥
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__skillPlazaHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
@@ -1591,7 +1597,8 @@ async function selectMeeting(meetingId, opts = {}) {
       });
     }
     MeetingRoom.openMeeting(meetingId, meeting, {
-      forceScrollBottom: opts.forceScrollBottom === true,
+      // 原样透传三态：true 侧栏置底、false 搜索命中不动、不传＝其他入口打开（定位到最新提问）。
+      forceScrollBottom: opts.forceScrollBottom,
     });
   }
 
@@ -2158,7 +2165,7 @@ const APP_TOOLBAR_VIEWS = [
 function getReadingSurface() {
   // Detached full-page tabs are above the session stage. Keep their mounted
   // controls and content instead of copying them into a fullscreen shell.
-  for (const id of ['team-page', 'avatar-page', 'weclaw-page', 'welink-blackboard-page', 'cloud-page', 'assistant-page', 'wireless-page', 'account-page', 'hub-workspace', 'memo-panel', ...APP_TOOLBAR_VIEWS.map(v => v.id)]) {
+  for (const id of ['team-page', 'avatar-page', 'weclaw-page', 'skill-plaza-page', 'welink-blackboard-page', 'cloud-page', 'assistant-page', 'wireless-page', 'account-page', 'hub-workspace', 'memo-panel', ...APP_TOOLBAR_VIEWS.map(v => v.id)]) {
     const panel = document.getElementById(id);
     if (panelIsVisible(panel)) return panel;
   }
@@ -2188,6 +2195,7 @@ function paintAppToolbarForView(label) {
   if (label !== '分身') window.__avatarHide?.();
   if (label !== '员工助手') window.__weclawHide?.();
   if (label !== 'WeLink') window.__welinkBlackboardHide?.();
+  if (label !== '技能广场') window.__skillPlazaHide?.();
   if (label !== 'AI 网页') window.__webSessionHide?.();
   if (label !== '网页圆桌') window.__webRoundtableHide?.();
   if (!toolbarCrumbEl || !toolbarActionsEl) return;
@@ -2380,7 +2388,7 @@ document.addEventListener('bridge-threads-updated', () => {
 });
 
 function currentAppToolbarView() {
-  for (const [id, label] of [['web-session-panel', 'AI 网页'], ['web-roundtable-panel', '网页圆桌'], ['team-page', '团队'], ['avatar-page', '分身'], ['weclaw-page', '员工助手'], ['welink-blackboard-page', 'WeLink'], ['cloud-page', '云端'], ['assistant-page', '助理'], ['wireless-page', '无线'], ['account-page', '账号'], ['hub-workspace', '资源与回顾'], ['memo-panel', '速记']]) {
+  for (const [id, label] of [['web-session-panel', 'AI 网页'], ['web-roundtable-panel', '网页圆桌'], ['team-page', '团队'], ['avatar-page', '分身'], ['weclaw-page', '员工助手'], ['skill-plaza-page', '技能广场'], ['welink-blackboard-page', 'WeLink'], ['cloud-page', '云端'], ['assistant-page', '助理'], ['wireless-page', '无线'], ['account-page', '账号'], ['hub-workspace', '资源与回顾'], ['memo-panel', '速记']]) {
     if (panelIsVisible(document.getElementById(id))) return label;
   }
   for (const view of APP_TOOLBAR_VIEWS) {
@@ -2539,7 +2547,7 @@ function showTerminal(sessionId, opts = { focus: true }) {
   const existingInput = terminalPanelEl.querySelector('.floating-input-bar');
   if (opts.reuseCardHistory && !opts.mountTarget && currentView === 'card'
       && existingInput?.dataset.sessionId === sessionId && cardHistoryViews.ready(session)) {
-    if (opts.forceScrollBottom) cardFollowScroll.follow();
+    if (opts.forceScrollBottom) { cardFollowScroll.openLatest(); continueLandingWithOlderCards(sessionId, document.getElementById('msg-overlay')); }
     replyReturnAnchor.apply(sessionId);
     if (opts.focus) existingInput.querySelector('.floating-input-box')?.focus();
     return;
@@ -2893,7 +2901,42 @@ function syncTurnPresentationToSession(sessionId, presentation, turn) {
   if (adoptedLiveActivities) queueMicrotask(() => rerenderTurn(turn.id));
 }
 const { createCardFollowScroll } = require('./card-follow-scroll');
-const cardFollowScroll = createCardFollowScroll({ element: document.getElementById('msg-overlay'), window, document });
+// 卡片刚挂好时目录还没刷新（它等下一帧），所以这里当场现找，不读目录的缓存。设置里关掉后照旧滚到底。
+function latestRealQuestionCard() {
+  const overlay = document.getElementById('msg-overlay');
+  if (!overlay || currentView !== 'card' || !activeSessionId) return null;
+  const bridgeMessageKind = () => null;
+  const { isTeamMessage } = require('./team-notice-identity');
+  const cards = overlay.querySelectorAll(':scope > .turn-card.user');
+  for (let i = cards.length - 1; i >= 0; i--) {
+    const card = cards[i];
+    if (card.dataset.sessionId && card.dataset.sessionId !== String(activeSessionId)) continue;
+    const turn = card.dataset.turnId && window._sessionTurns ? window._sessionTurns.get(card.dataset.turnId) : null;
+    const text = turn && typeof turn.text === 'string' ? (turn.assistantContext?.userText ?? turn.text)
+      : (card.querySelector('.turn-body')?.textContent || '');
+    if (!bridgeMessageKind(text) && !isTeamMessage(text)) return card;
+  }
+  return null;
+}
+const cardFollowScroll = createCardFollowScroll({ element: document.getElementById('msg-overlay'), window, document,
+  landingTarget: () => { try { return latestRealQuestionCard(); } catch { return null; } },
+  landOnOpen: () => document.documentElement.dataset.cardOpenAt !== 'bottom' });
+// 最新提问不在首屏已加载的卡片里（回答的进展卡很多）时，再往前加载至多 2 页去找；找不到就照旧停在最新处。
+const _landingOlderTries = new Map();
+function continueLandingWithOlderCards(sessionId, container) {
+  if (sessionId !== activeSessionId || !cardFollowScroll.landingMissing()) { _landingOlderTries.delete(sessionId); return; }
+  const tries = _landingOlderTries.get(sessionId) || 0;
+  if (!cardHistoryPager.get(sessionId).more || tries >= 2) { _landingOlderTries.delete(sessionId); cardFollowScroll.giveUpLanding(); return; }
+  _landingOlderTries.set(sessionId, tries + 1);
+  // 本函数常在上一页加载的收尾里被调到，那时翻页器还标着「加载中」：延后执行，
+  // 等它复位再翻下一页；到时再确认一次还在等。定位最多等 8 秒，过时自然放弃。
+  const go = left => setTimeout(() => {
+    if (sessionId !== activeSessionId || !cardFollowScroll.landingMissing()) return;
+    if (cardHistoryPager.get(sessionId).busy) { if (left > 0) go(left - 1); return; }
+    void cardHistoryPager.more(sessionId, container);
+  }, 30);
+  go(100);
+}
 // 长回复回来看：没在看时跑完的长回复，切回来停在回复开头（见 reply-return-anchor.js）。
 const { createReplyReturnAnchor, isSessionInView } = require('./reply-return-anchor');
 const replyReturnAnchor = createReplyReturnAnchor({
@@ -3124,7 +3167,8 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
     top: container.scrollTop,
     wasAtBottom: forceScrollBottom || _isCardOverlayAtBottom(container),
   };
-  if (forceScrollBottom) cardFollowScroll.follow();
+  // 卡片马上要重新加载：只做标记，等新卡挂好（restore）再定位，不在旧卡上提前定位。
+  if (forceScrollBottom) cardFollowScroll.openLatest({ defer: true });
   const followSnapshot = cardFollowScroll.capture();
 
   // 2. clear container + Map (avoid stale turns from previous session)
@@ -3545,6 +3589,7 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
   // — 仅当 batch 开始前用户在底部才滚(scroll-respect-user)
   if (container._cardFollowController) {
     cardFollowScroll.restore(followSnapshot);
+    continueLandingWithOlderCards(sessionId, container);
   } else if (lastCardEl && _batchWasAtBottom) {
     try {
       lastCardEl.scrollIntoView({ behavior: 'auto', block: 'end' });
@@ -5624,7 +5669,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       return;
     }
     const stopTarget = sessions.get(sessionId);
-    if (stopTarget?.codeagentRunMode === 'serve') {
+    // opencode：停止走它自带服务的 /abort（终端里单按一次 Esc 停不下来），会话类 interrupt 里有兜底。
+    if (stopTarget?.codeagentRunMode === 'serve' || /^opencode(?:-resume)?$/.test(String(stopTarget?.kind || ''))) {
       const result = await ipcRenderer.invoke('codex:native-action', { sessionId, action: 'interrupt' }).catch(error => ({ ok: false, message: error.message }));
       if (!result?.ok) showToast(result?.message || '停止失败', 'warning');
       focusAfterSend();
@@ -6101,7 +6147,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       const cardCapableKind = !!kind && (isClaudeFamily(kind) || isTranscriptCliKind(kind));
       const acpQueueing = session?.runtimeBackend === 'acp' && ['running','waiting'].includes(session.nativeRuntime?.state);
       // pi（r39）和 DSH 一样：发送回执以终端里 pi 记下的那条为准，临时卡带上回执号才能被它认领，不会显示两张。
-      const optimisticReceipt = isNativeAgent(session) || isDshCliSession(session) || /^pi(?:-resume)?$/.test(String(kind || '')) || isCodeAgentKind(kind)
+      const optimisticReceipt = isNativeAgent(session) || isDshCliSession(session) || /^(?:pi|opencode)(?:-resume)?$/.test(String(kind || '')) || isCodeAgentKind(kind)
         || (session?.purpose === 'hub-assistant' && !nativeCommand && !ptyCommand)
         ? { clientSubmissionId } : {};
       if ((pane.isCard ? pane.isCard() : currentView === 'card') && cardCapableKind && !acpQueueing && typeof mountOptimisticUserCard === 'function') {
@@ -6136,7 +6182,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     }
     // 上一轮还在跑：这条由终端里的 CLI 排队。发出这一刻就说清楚（确认要等 CLI 开工，可能要十几秒）；
     //   主进程看着它，CLI 没执行会放回输入框提醒（core/busy-queued-watch.js）。DSH 插话另有提示。
-    if (wasRunning && !nativeCommand && session?.agentRuntime === 'pty' && !isNativeAgent(session) && !isDshCliSession(session)
+    // opencode 运行中不收新消息（会话类直接说明原因），这里不提示「已排在终端里」。
+    if (wasRunning && !nativeCommand && session?.agentRuntime === 'pty' && !isNativeAgent(session) && !isDshCliSession(session) && !/^opencode(?:-resume)?$/.test(String(session?.kind || ''))
         && !require('../core/codeagent-command-policy').isPtyLocalCommand(session, text)) {
       showToast('上一条还没跑完：这条已排在终端里，上一条结束后执行；没执行的话会放回输入框提醒你', 'info', { sessionId });
     }
@@ -6694,7 +6741,7 @@ async function selectSession(id, opts = {}) {
   }
   if (window.__xresearchHide) window.__xresearchHide(); // 2026-07-23 投研面板互斥
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__skillPlazaHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
@@ -7106,6 +7153,8 @@ async function openGlobalSearchHit(hit, opts = {}) {
 
   if (opts.focus) {
     // 搜索命中要在卡片视图里看，但这是导航副作用而非用户的视图偏好，不写记忆。
+    // 停掉「定位到最新提问」：这次要看的是搜索命中，不让定位或补载在命中后把视图拉走。
+    cardFollowScroll.pause();
     applyViewMode('card', { remember: false });
     const loaded = await loadSessionHistoryToOverlay(target.id, { forceScrollBottom: false });
     if (loaded && loaded.mounted > 0) _cardHistoryHydratedSid = target.id;
@@ -7313,7 +7362,10 @@ function previewConversationOverlay(key) {
 // 回到对话时照常跟随最新的，顺带补上「预览期间跑完、超过一屏的回复停在开头」。
 function returnFromPreview(key) {
   const sid = String(key).startsWith('session:') ? String(key).slice('session:'.length) : null;
-  previewReturnScroll.back(key, previewConversationOverlay(key), { onFollow: sid ? () => replyReturnAnchor.applySoon(sid, fn => requestAnimationFrame(fn)) : undefined });
+  const nextFrame = fn => requestAnimationFrame(fn);
+  previewReturnScroll.back(key, previewConversationOverlay(key), {
+    requestFrame: nextFrame, onFollow: sid ? () => replyReturnAnchor.applySoon(sid, nextFrame) : undefined,
+  });
 }
 const previewPanel = createPreviewPanelController({
   document,
@@ -9815,7 +9867,7 @@ function escapeToHome() {
   window.hubWorkspaces?.close();
   if (window.__xresearchHide) window.__xresearchHide();
   if (window.__studyHide) window.__studyHide();
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__skillPlazaHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
@@ -10086,7 +10138,7 @@ document.getElementById('btn-team')?.remove();
     document, window, ipcRenderer, selectSession: id => selectSession(id, { forceScrollBottom: true }),
     closeOtherPanels: () => {
       window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close();
-      for (const key of ['__teamHide', '__weclawHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide', '__welinkBlackboardHide']) window[key]?.();
+      for (const key of ['__teamHide', '__weclawHide', '__skillPlazaHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide', '__welinkBlackboardHide']) window[key]?.();
     },
     showMessage: message => showToast(message),
   });
@@ -10104,7 +10156,7 @@ document.getElementById('btn-team')?.remove();
     document, window, ipcRenderer,
     closeOtherPanels: () => {
       window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close();
-      for (const key of ['__teamHide', '__avatarHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide', '__welinkBlackboardHide']) window[key]?.();
+      for (const key of ['__teamHide', '__avatarHide', '__skillPlazaHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide', '__welinkBlackboardHide']) window[key]?.();
     },
     showMessage: message => showToast(message),
   });
@@ -10114,6 +10166,22 @@ document.getElementById('btn-team')?.remove();
     if (!weclawButton) return;
     if (state?.missing) weclawButton.remove(); else { weclawButton.hidden = false; weclawButton.style.display = ''; }
   }).catch(() => weclawButton?.remove());
+}
+// 技能广场（2026-11-27）：左栏「规则」组里的「广场」。员工助手、AgentCenter、本机各家 AI 的技能一处找、一处装。
+{
+  const skillPlaza = require('./skill-plaza-page').createSkillPlazaPage({
+    document, window, ipcRenderer,
+    closeOtherPanels: () => {
+      window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close();
+      for (const key of ['__teamHide', '__avatarHide', '__weclawHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__companyPptHide', '__profileHide', '__communityHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide', '__welinkBlackboardHide']) window[key]?.();
+    },
+    showMessage: message => showToast(message),
+  });
+  window.__skillPlazaHide = () => skillPlaza.close();
+  window.__skillPlazaShow = () => skillPlaza.open();
+  document.getElementById('btn-skill-plaza')?.addEventListener('click', () => skillPlaza.open());
+  // 「管理」：主进程让界面打开现有的「资源 → 工具」（打开后广场自己收起）。
+  ipcRenderer.on('skill-plaza:open-manage', () => window.hubWorkspaces?.open('resources', 'tools'));
 }
 const openConfigModal = configModal.open;
 window.__hubOpenConfigModal = openConfigModal; // 截图与验收脚本用（tests/capture-i18n-cdp.js）
@@ -10402,7 +10470,7 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
   // 2026-09-02：session-created 会直接亮出终端面板，但此前只隐藏了群聊面板。
   // 主区是 flex 容器，学习面板若还开着就会和终端并排各占一半。
   if (window.__studyHide) window.__studyHide();
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__skillPlazaHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
@@ -11938,7 +12006,7 @@ if (process && process.env && process.env.CLAUDE_HUB_E2E === '1') {
           currentView = 'card';
           _cardHistoryHydratedSid = sessionId;
           if (window.__studyHide) window.__studyHide();   // 同上：别和学习面板并排
-          if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+          if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__weclawHide?.(); window.__skillPlazaHide?.(); window.__welinkBlackboardHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
           if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
           window.__companyRoomsHide?.();
           window.__rulesHide?.(); // 独立页面互斥

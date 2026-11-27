@@ -66,6 +66,13 @@ function pickerLabelFor(modelId, env = process.env) {
   return String(modelId || '');
 }
 
+// 菜单里两行模型之间的分组标题（Built-in、Custom 等）；用量行、表头、边框不算。
+function groupHeading(line) {
+  const heading = String(line || '').replace(/^[\s│┃]+|[\s│┃]+$/g, '').trim();
+  return heading && !/^(?:[╭╰─━┌└]|⌕|Credit|月度|忙时|闲时|Hour\b|Min\b|Day\b|Token\b|模型名称|Model\s+name)/i.test(heading)
+    && !/\s{2,}|[●%]/.test(heading) && heading.length <= 100 ? heading : '';
+}
+
 // 解析屏幕上的模型菜单。认不出返回 null。
 // rows: [{ line, cursor, number|null, text, label }]，cursor 是光标所在行的下标。
 function parsePicker(lines, { requireTitle = false, allowNoCursor = false } = {}) {
@@ -92,8 +99,26 @@ function parsePicker(lines, { requireTitle = false, allowNoCursor = false } = {}
           && (startLine >= 0 || row.line - last[last.length - 1].line <= 3)) last.push(row);
       else runs.push([row]);
     }
+    // 公司 CodeAgent 1.2615.02.05 的菜单每个分组各自从 1 编号（2026-11-25 同事一键反馈实录：Built-in 1–3、Custom 又 1–9，
+    // 见 tests/fixtures/codeagent-model-picker-grouped-real.txt）。以前只认跨分组连续编号，整张菜单被拆成几份、只留一组，
+    // 另一组的模型（如 Built-in 的 DeepSeek-V4.1-Flash-1017）永远「菜单里没有」。中间隔着分组标题、又从 1 起的一段并回同一张菜单，
+    // number 改成整张菜单里的顺序号（方向键就是按这个顺序走的），groupNumber 留菜单上显示的组内编号。
+    // CodeAgent 1.2615.02.05 numbers each group from 1. A run that restarts at 1 after a group heading belongs to the same menu.
+    const blocks = [];
+    for (const run of runs) {
+      const prev = blocks[blocks.length - 1], prevLast = prev && prev[prev.length - 1];
+      const digitAt = screen[run[0].line].search(/\d/);
+      if (prev && codeagentFrame && run[0].number === 1 && screen.slice(prevLast.line + 1, run[0].line)
+        .some(line => groupHeading(line) && line.search(/\S/) < digitAt)) prev.push(...run.map(row => ({ ...row, restarted: true })));
+      else blocks.push([...run]);
+    }
+    for (const block of blocks) {
+      if (!block.some(row => row.restarted)) continue;
+      const start = block[0].number;
+      block.forEach((row, index) => { row.groupNumber = row.number; row.number = start + index; delete row.restarted; });
+    }
     // 屏幕镜像里可能还留着菜单的旧画面（TUI 重绘没擦干净）：取最靠下、也就是最新的那一份。
-    rows = runs.filter(run => run.length >= minRows && (run.some(r => r.cursor) || allowNoCursor && codeagentFrame)).pop() || [];
+    rows = blocks.filter(run => run.length >= minRows && (run.some(r => r.cursor) || allowNoCursor && codeagentFrame)).pop() || [];
   } else rows = [];
   // 没有编号的菜单：以光标行为准，向上下收集同一缩进、光标列为空白的相邻行。
   if (rows.length < minRows) {
@@ -117,15 +142,25 @@ function parsePicker(lines, { requireTitle = false, allowNoCursor = false } = {}
   if (rows.length < minRows || !rows.some(row => MODEL_WORDS.test(row.text))) return null;
   // Group headings belong to the following rows; duplicate names may be
   // offered by separate providers. Never identify those rows by name alone.
+  // 标题要缩进在编号列左边：右侧说明列折行的文字不算分组标题。
   let group = '';
   for (const row of rows) {
-    const previous = rows[rows.indexOf(row) - 1];
+    const previous = rows[rows.indexOf(row) - 1], digitAt = screen[row.line].search(/\d/);
     for (const line of screen.slice(previous ? previous.line + 1 : startLine + 1, row.line)) {
-      const heading = line.replace(/^[\s│┃]+|[\s│┃]+$/g, '').trim();
-      if (heading && !/^(?:[╭╰─━┌└]|⌕|Credit|月度|忙时|闲时|Hour\b|Min\b|Day\b|Token\b|模型名称|Model\s+name)/i.test(heading)
-          && !/\s{2,}|[●%]/.test(heading) && heading.length <= 100) group = heading;
+      const heading = groupHeading(line);
+      if (heading && line.search(/[^\s│┃]/) < digitAt) group = heading;
     }
     if (group) row.group = group;
+  }
+  // 公司 CodeAgent 1.2615.02.05 的内置模型那一组上方没有标题（只有下面的「Custom」有）：菜单里有分组标题时，
+  // 第一个标题之前、名字不带「供应商/」前缀的行就是内置组，记成 Built-in，按供应商 w3 / Built-in 选时才认得出（R53 审查 P0）。
+  // 只有一组、没有任何标题的老菜单不动。
+  // The first (built-in) group of CodeAgent 1.2615.02.05 has no heading; when other groups are headed, its rows are Built-in.
+  if (codeagentFrame && rows.some(row => row.group)) {
+    for (const row of rows) {
+      if (row.group) break;
+      if (!String(row.label || '').includes('/')) row.group = 'Built-in';
+    }
   }
   // 判断「能不能发消息」时，菜单上方必须有菜单标题：回答正文里的「> 1. GLM… / 2. MiniMax…」这类编号列表
   // 也有光标符号和模型名，以前会被当成菜单，之后每条消息都以「仍在模型选择界面」退回（2026-10-16 同事反馈
@@ -427,6 +462,11 @@ async function waitForInput(screen, timeoutMs = 3000) {
 }
 
 const exactLabel = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+// 指定了供应商时，菜单行「供应商/名字」就是这个模型的原样写法：Hub 存的 id / menuLabel 不带前缀（serve 与 settings.json 自配都是），
+// 公司 1.2615.02.05 的 Custom 组却显示「cannbotprovider/GLM-5.3」。不认它时首屏、搜索命中都被当成未确认的别名丢掉（R53 审查 P1）。
+// With a provider, '<provider>/<label>' on the menu is the exact spelling of that route's model.
+const exactRow = (row, label, route = {}) => exactLabel(row?.label, label)
+  || [route.provider, route.providerLabel].some(prefix => prefix && exactLabel(row?.label, `${prefix}/${label}`));
 const pickerSignature = picker => picker ? JSON.stringify(picker.rows.map(row => [row.number, row.label, row.cursor])) : '';
 
 // Poll the model rows, not changing Stats/history text beside the menu. A key
@@ -542,7 +582,7 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, route 
     onSearchFrame(stable.lines);
     let searched = { value: stable.value?.picker || null };
     let found = searched.value && locateLabel(searched.value.rows, label, route);
-    if (found >= 0 && searched.value && !searched.value.complete && !exactLabel(searched.value.rows[found]?.label, label)
+    if (found >= 0 && searched.value && !searched.value.complete && !exactRow(searched.value.rows[found], label, route)
       && bareLabel(searched.value.rows[found]?.label) === bareLabel(label)) found = -1;
     // 搜索结果里同名行只有一条、只是分组对不上（搜索结果常不带分组标题）：选它，并把目标分组改成这一行的，免得回车前的分组核对再拦下。
     // 以前这里对不上就按 Esc 清搜索，新版 CodeAgent 上清不掉、重开菜单也失败（2026-11-25 同事日志 switch-search result=clear-failed）。
@@ -595,7 +635,9 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, route 
   // 能否按「整张菜单同名只有一行」选它（2026-11-25 公司实录滚动布局：一屏只显示一个模型，旧线路对不上新分组名，翻完照报「没有」）。
   // nameRows: every same-name or truncated-lookalike row met while scrolling, any group; decided by relaxUnique once the list is fully traversed.
   const seen = new Set(), truncated = new Set(), aliases = new Set(), nameRows = new Map(), limit = picker.total || MODEL_SCROLL_LIMIT;
-  const identityOf = row => JSON.stringify([row.number, row.label]);
+  // 行的身份用组内编号：分组菜单滚动后，上面的组滚出屏幕，下面一组的顺序号会从 4 变回 1（不再看得到重新编号），
+  // 按顺序号记账会把同一行记成两行，误报「多个线路都有」（R53 审查 P1）。
+  const identityOf = row => JSON.stringify([row.groupNumber ?? row.number, row.label]);
   const noteTruncated = () => {
     for (const index of truncatedRows(picker.rows, label)) if (groupMatches(picker.rows[index], route.provider, route.providerLabel)) truncated.add(identityOf(picker.rows[index]));
     for (const index of aliasRows(picker.rows, label)) if (groupMatches(picker.rows[index], route.provider, route.providerLabel)) aliases.add(identityOf(picker.rows[index]));
@@ -607,7 +649,7 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, route 
   let steps = 0;
   while (steps < limit) {
     const row = picker.rows[picker.cursor], identity = identityOf(row);
-    if (exactLabel(row.label, label) && groupMatches(row, route.provider, route.providerLabel)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
+    if (exactRow(row, label, route) && groupMatches(row, route.provider, route.providerLabel)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
     noteTruncated();
     if (seen.has(identity)) break;
     seen.add(identity);
@@ -617,7 +659,7 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, route 
     if (!next.value) break;
     picker = next.value;
   }
-  if (exactLabel(picker.rows[picker.cursor]?.label, label) && groupMatches(picker.rows[picker.cursor], route.provider, route.providerLabel)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
+  if (exactRow(picker.rows[picker.cursor], label, route) && groupMatches(picker.rows[picker.cursor], route.provider, route.providerLabel)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
   noteTruncated();
   let candidates = aliases.size ? aliases : truncated, sameNameOnly = false;
   // 带总数提示时要真走过这么多行才算翻完（光标停住不动不等于到底）。
@@ -729,7 +771,9 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     const rows = menu?.rows || [];
     const same = rows.map((row, index) => exactLabel(row.label, label) ? index : -1).filter(index => index >= 0);
     if (same.length !== 1) return -1;
-    if (truncatedRows(rows, label).some(index => !same.includes(index))) return -1;
+    // 截断名带着别家「供应商/」前缀的（如 Custom 组的 cannbotprovider/deepseek-v4.1-f…）是另一条线路，不算「也像它」（R53 审查 P0）。
+    const foreign = row => { const prefix = String(row?.label || '').split('/').slice(0, -1).join('/'); return !!prefix && !groupMatches(row, provider, providerLabel); };
+    if (truncatedRows(rows, label).some(index => !same.includes(index) && !foreign(rows[index]))) return -1;
     const row = rows[same[0]], known = knownProviders(label), wanted = squash(provider), group = squash(row.group);
     if (group && [...known].some(id => squash(id) === group && squash(id) !== wanted)) return -1;
     if (!allSeen && known.size > 1) return -1;
@@ -812,7 +856,7 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
       const relaxed = relaxUnique(picker, { allSeen, stage: 'menu' });
       if (relaxed >= 0) target = relaxed;
     }
-    if (!first && target >= 0 && !picker.complete && !exactLabel(picker.rows[target].label, label)
+    if (!first && target >= 0 && !picker.complete && !exactRow(picker.rows[target], label, route)
       && bareLabel(picker.rows[target].label) === bareLabel(label)) target = -1;
     if (!first && !picker.rows.some(row => exactLabel(row.label, label)) && aliasRows(picker.rows, label)
       .filter(index => groupMatches(picker.rows[index], route.provider, route.providerLabel)).length > 1) {
@@ -969,9 +1013,30 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
   if (usage) result = { ...result, usage };
   if (!result.ok && !result.loginRequired) {
     require('./codeagent-models').appendModelLog(dataDir, { event: 'pick-menu-failed', session: String(sid).slice(0, 8), model: modelId, error: result.message });
-    result = { ...result, technicalReason: result.message, message: result.requiresGroupSelection ? result.message : result.nameFallback || `这个账号在 CodeAgent 模型菜单里选不了 ${modelId}` };
+    const pickFailure = pickFailureKind(result);
+    result = { ...result, technicalReason: result.message, pickFailure,
+      message: result.requiresGroupSelection ? result.message : result.nameFallback || pickFailureMessage(pickFailure, modelId) };
   }
   return menu ? { ...result, menu } : result;
+}
+
+// 选不上的三种情况分开说（R53，2026-11-27 同事反馈「deepseek-v4.1-flash 用不了」：以前一律说「这个账号选不了」，
+// 用户分不清是账号没开通还是 Hub 没对上菜单）。
+//   absent      菜单读到了、搜过也翻过，确实没有这个名字：多半是账号没开通，换一个模型；
+//   unconfirmed 已在菜单里按了选择键，只是没等到 CodeAgent 回到普通输入框：去后台看一眼；
+//   mismatch    其余：菜单布局没认出、光标没对上、同名行分不清等，是 Hub 没对上菜单，不是账号没有，去后台手动选一次。
+// Three failure kinds: the model is really absent from the menu, the pick was sent but not confirmed, or Hub could not match the menu.
+function pickFailureKind(result) {
+  const reason = String(result?.message || '');
+  // 菜单里确实没有、但退出菜单没确认（终端还停在菜单里）：也给「打开后台」去关掉它，不当成单纯的「没有」（R53 审查 P2）。
+  if (/^模型菜单里没有 /.test(reason) && !result.menuMiss && result.inputReady !== false) return 'absent';
+  if (/^选中后未确认恢复普通输入框|^CodeAgent 回显选中的不是|^CodeAgent 把默认模型改成了/.test(reason)) return 'unconfirmed';
+  return 'mismatch';
+}
+function pickFailureMessage(kind, modelId) {
+  if (kind === 'absent') return `CodeAgent 模型菜单里没有 ${modelId}，这个账号可能没开通它；请换一个菜单里有的模型`;
+  if (kind === 'unconfirmed') return `已在 CodeAgent 模型菜单里选了 ${modelId}，但没等到它回到输入框；请点「打开后台」看一眼终端`;
+  return `Hub 没能在 CodeAgent 模型菜单里自动选中 ${modelId}（菜单没对上，不一定是账号没有这个模型）；请点「打开后台」在菜单里手动选一次`;
 }
 
 // ---------------------------------------------------------------- 排队与第一条消息的闸门
@@ -1108,6 +1173,7 @@ module.exports = {
   FIRST_MENU_MODEL,
   isFirstMenuModel,
   parsePicker,
+  pickFailureKind,
   modelMenuLines,
   closeModelMenu,
   collectModelMenu,

@@ -26,6 +26,7 @@ function applyCardDisplaySettings(document, config = {}) {
     // 用「正文字号 / 默认字号」做倍率，没调过字号的用户代码块仍是原来的大小。
     root.style.setProperty('--card-code-scale', codeFontScale(normalized.cardFontSize));
   }
+  if (root && root.dataset) root.dataset.cardOpenAt = normalized.cardOpenAt;
   return normalized;
 }
 

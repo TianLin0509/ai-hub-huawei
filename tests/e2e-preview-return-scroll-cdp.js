@@ -111,6 +111,19 @@ async function run() {
     // 2) 网页链接 → 网页预览
     await clickIn(`a[href^="${pageUrl}"]`, '网页链接');
     await closeAndCheck('链接预览', '20261127-R50-3b-链接预览');
+    // 2a) R54 后续：全屏预览期间卡片被重新渲染（节点整批换新，像跑完一轮后重载历史）且前面的卡片长高 300px，
+    //     关掉后仍按当时看的那张卡（同一个 turnId）对齐。节点换新后浏览器自带的滚动锚定失效，只能靠我们按卡片对齐。
+    await c.eval(`openPreviewPanel(${JSON.stringify(IMAGE)},{preview:true,fullscreen:true})`);
+    await wait(async () => (await where()).previewOpen, '预览打开（长高）', 15000); await sleep(500);
+    await c.eval(`(()=>{for(const card of [...${O}.querySelectorAll(':scope>.turn-card')])card.replaceWith(card.cloneNode(true));const pad=document.createElement('div');pad.className='r50-e2e-pad';pad.style.height='300px';${O}.querySelector(':scope>.turn-card').appendChild(pad);return 1})()`);
+    // 关掉后第 10 帧就要停对（不能先停错、过一会儿再跳），600ms 后仍然对。
+    const early = await c.eval(`new Promise(resolve=>{document.getElementById('preview-close').click();let n=0;const tick=()=>{if(++n<10)return requestAnimationFrame(tick);const o=${O},card=${middleCard};resolve(card?Math.round(card.getBoundingClientRect().top-o.getBoundingClientRect().top):null)};requestAnimationFrame(tick)})`);
+    await wait(async () => !(await where()).previewOpen, '预览关闭（长高）', 10000); await sleep(600);
+    const grown = await where();
+    ok('预览期间卡片重渲染且前面长高：关掉后第 10 帧就停在原来那段', Math.abs(early - before.middleOffset) <= 4, JSON.stringify({ before: before.middleOffset, early }));
+    ok('预览期间前面卡片长高：600ms 后仍停在原来那段', Math.abs(grown.middleOffset - before.middleOffset) <= 4 && !grown.following, JSON.stringify({ before, grown }));
+    await c.eval(`document.querySelector('.r50-e2e-pad')?.remove()`); await sleep(300);
+
     // 2b) 审查 P2-3：全屏预览切分屏，左半屏对话回到原来那段；在分屏里往下滚，再关预览，不被旧位置覆盖
     await clickIn('a.rt-file-link', '图片（切分屏）');
     await c.eval(`document.getElementById('preview-layout-split').click()`); await sleep(800);

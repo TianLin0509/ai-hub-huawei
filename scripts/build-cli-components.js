@@ -12,6 +12,7 @@
 //       --dsh-version 0.2.1-rc.2 --dsh-tui-version 0.16.1   --dsh-from <已装好的运行环境目录>（直接打包它，不再 npm install）
 //       --node-version v22.x.y（默认取 22 系列最新）   --registry https://registry.npmmirror.com
 //       --pi-version 1.5.2（pi 终端 Agent，--only 里写 pi 才打）
+//       --opencode-version 1.19.6（opencode 终端 Agent，--only 里写 opencode 才打；npm 上的 opencode-windows-x64 原包，单个 exe）
 //       --mirror-claude（Claude Code 也放一份到自家源，默认只写官方地址；许可见报告）
 //       --base <线上 components.json 的 https 地址或本地文件>（r41：以线上目录为底增量合并，验签后其余组件原样保留）
 //         不加 --base 时，输出目录里已有的 components.json 就是底目录，同样先用程序内置公钥验签，验不过、读不懂都直接停
@@ -28,7 +29,7 @@ const { packTgz, listTree, extractTgz } = require('../core/cli-tools/tar');
 const catalogLib = require('../core/cli-tools/catalog');
 
 const DEFAULTS = { registry: 'https://registry.npmmirror.com', claude: 'latest', codex: 'latest', dsh: '0.2.1-rc.2', dshTui: '0.16.1', node: '22', git: 'latest',
-  pi: require('../core/pi-cli-profile').PI_VERSION };
+  pi: require('../core/pi-cli-profile').PI_VERSION, opencode: require('../core/opencode-cli-profile').OPENCODE_VERSION };
 const GIT_MIRROR = 'https://registry.npmmirror.com/-/binary/git-for-windows';
 const GIT_RELEASES = 'https://api.github.com/repos/git-for-windows/git/releases/tags';
 const NPMJS = 'https://registry.npmjs.org';
@@ -50,6 +51,7 @@ function parseArgs(argv) {
     else if (a === '--dsh-from') o.dshFrom = path.resolve(next());
     else if (a === '--node-version') o.node = next();
     else if (a === '--pi-version') o.pi = next();
+    else if (a === '--opencode-version') o.opencode = next();
     else if (a === '--git-version') o.git = next();
     else if (a === '--registry') o.registry = next().replace(/\/+$/, '');
     else if (a === '--mirror-claude') o.mirrorClaude = true;
@@ -182,6 +184,16 @@ async function planDsh(o) {
   return { id: 'dsh', name: 'DSH 运行环境', version, dsh, tui, file: `dsh-runtime-${dsh}-tui-${tui}-win32-x64.tgz`, license: 'MIT（@deepseek-ai/dsh、@deepseek-harness-tui/dsh-tui；依赖各自许可）',
     preferOfficial: false, mirror: true, official: [],
     install: { requires: ['node'], minNode: 22, versionArgs: ['--version'], check: ['node_modules/@deepseek-ai/dsh/lib/bin.js', 'node_modules/@deepseek-harness-tui/dsh-tui/package.json'] } };
+}
+// opencode（2026-11-26）：npm 上 opencode-windows-x64-baseline 的原包（里面只有 bin/opencode.exe），和 Codex 一样原样转存到内源。
+// 用 baseline 版：不要求 CPU 支持 AVX2，老电脑也能跑（复审 P2-5）；版本号取 npm 实际解析出的版本，传 latest 也不会过不了目录校验。
+async function planOpencode(o) {
+  const pkg = 'opencode-windows-x64-baseline';
+  const meta = await npmMeta(o.registry, pkg, o.opencode);
+  const file = path.basename(new URL(meta.dist.tarball).pathname);
+  return { id: 'opencode', name: 'opencode 终端 Agent', version: meta.version, pkg, meta, file, license: meta.license || 'MIT',
+    preferOfficial: false, mirror: true, official: officialTarballs(pkg, file),
+    install: { strip: 'package', bin: 'bin/opencode.exe', versionArgs: ['--version'] } };
 }
 // pi（r39）：@earendil-works/pi-coding-agent 连同依赖装好后整包打成 tgz，和 DSH 一样由 Hub 用 node 跑入口脚本。
 async function planPi(o) {
@@ -378,7 +390,7 @@ async function main() {
     const partial = catalogLib.IDS.some(id => !o.only.includes(id));
     if (partial && !previous.length && !o.fresh) throw new Error('只打部分组件（' + o.only.join(',') + '）却没有底目录，会丢掉其他组件；请加 --base <线上 components.json>，或确认要新目录时加 --fresh');
   }
-  const planners = { claude: planClaude, codex: planCodex, dsh: planDsh, node: planNode, git: planGit, pi: planPi };
+  const planners = { claude: planClaude, codex: planCodex, dsh: planDsh, node: planNode, git: planGit, pi: planPi, opencode: planOpencode };
   const plans = [];
   for (const id of o.only) plans.push(await planners[id](o));
   log('计划：');

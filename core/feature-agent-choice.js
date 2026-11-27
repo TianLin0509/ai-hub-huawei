@@ -200,8 +200,14 @@ function resolve(dataDir, id, options = {}) {
   const backends = options.backends || catalog(dataDir);
   const backend = backends.find(b => b.kind === choice.kind && b.available);
   const hit = backend?.models.find(m => !m.unavailable && (choice.source ? sameModel(m, choice) : m.id === choice.model) && (!choice.codeagentModelProvider || (m.provider || m.codeagentModelProvider) === choice.codeagentModelProvider));
-  if (!backend || ((choice.model || choice.source) && !hit)) return { choice, selected: null, warning: '所选后端或模型当前不可用，本次沿用默认。' };
+  if (!backend || ((choice.model || choice.source) && !hit && !customCodeAgent(f, choice))) return { choice, selected: null, warning: '所选后端或模型当前不可用，本次沿用默认。' };
   return { choice, selected: choice, warning: '' };
+}
+// 单次任务（问问 Hub / PPT 库地图 / 进展卡摘要）用 CodeAgent 时可以手填模型名：单次执行直接把名字交给 CLI 的 --model，
+// 不经 /model 菜单，所以清单里没有、但账号能用的模型照样能跑。手填的名字试跑通过才记下（customCodeAgentModel），带 custom 标记。
+// One-shot CodeAgent features accept a hand-typed model name; it is saved only after a trial run succeeds.
+function customCodeAgent(f, choice) {
+  return !!choice?.custom && choice.kind === 'codeagent' && oneshot(f) && require('./model-id').isSafeModelId(choice.model);
 }
 function legacyWarning(choice) {
   const what = `${HARNESS_LABELS[choice.kind] || choice.kind}${choice.model ? ' · ' + choice.model : ' · 本机默认模型'}`;
@@ -234,15 +240,18 @@ function set(dataDir, id, choice, options) {
     const harness = companyEdition() && HARNESS.includes(choice.kind);
     if (harness && !HARNESS_SOURCES.includes(choice.source)) throw new Error('请选择模型来源：部门 API key、公司模型或自有 API');
     if (harness && choice.source === 'api' && !/^[a-zA-Z0-9_-]{1,64}$/.test(choice.profileId || '')) throw new Error('请选择自有 API 账号');
+    // 下拉里重新选回之前手填的那个模型时，沿用手填标记（清单里本来就没有它；R53）。
+    const previous = routes.featurePreference(dataDir, id);
+    const custom = customCodeAgent(f, choice) || customCodeAgent(f, { ...choice, custom: !!previous?.custom && previous.kind === choice.kind && previous.model === choice.model && !choice.codeagentModelProvider });
     const normalized = { kind: choice.kind, model: choice.model || '', ...(harness ? { source: choice.source, ...(choice.source === 'api' ? { profileId: choice.profileId } : {}) } : {}),
-      ...require('./codeagent-model-choice').routeFields(choice) };
+      ...require('./codeagent-model-choice').routeFields(choice), ...(custom ? { custom: true } : {}) };
     const backends = options?.backends || catalog(dataDir);
     const b = backends.find(b => b.kind === normalized.kind && b.available);
     if (normalized.kind === GATEWAY && !b) throw new Error(backends.find(r => r.kind === GATEWAY)?.reason || '部门 API key 暂时用不了');
     if (harness && !b) throw new Error(backends.find(r => r.kind === normalized.kind)?.reason || '所选外壳暂时用不了');
     // 自有接口 / 自有 API 账号可以不写模型名（用接口自己的默认模型），其余来源要选具体模型。
     if (harness && !normalized.model && !['own', 'api'].includes(normalized.source)) throw new Error('请选择模型');
-    if (!b || ((normalized.model || harness) && !b.models.some(m => !m.unavailable && (harness ? sameModel(m, normalized) : m.id === normalized.model) && (!normalized.codeagentModelProvider || m.provider === normalized.codeagentModelProvider)))) throw new Error('所选后端或模型当前不可用，请恢复默认');
+    if (!b || ((normalized.model || harness) && !custom && !b.models.some(m => !m.unavailable && (harness ? sameModel(m, normalized) : m.id === normalized.model) && (!normalized.codeagentModelProvider || m.provider === normalized.codeagentModelProvider)))) throw new Error('所选后端或模型当前不可用，请恢复默认');
     routes.setFeaturePreference(dataDir, id, normalized);
   } else routes.setFeaturePreference(dataDir, id, null);
   return resolve(dataDir, id, options);
@@ -316,14 +325,16 @@ function parseSourceValue(value) {
 }
 function featureOptions(f, backends) {
   const choiceValues = require('./codeagent-model-choice');
-  const plain = (b, models) => ({ value: b.kind, label: b.label, available: !!b.available, reason: b.reason || '', setup: b.setup || '', allowCustom: !!b.allowCustom,
+  const plain = (b, models) => ({ value: b.kind, label: b.label, available: !!b.available, reason: b.reason || '', setup: b.setup || '', allowCustom: !!b.allowCustom || (oneshot(f) && b.kind === 'codeagent' && !!b.available),
     defaultModel: b.defaultModel || '', models: models.map(m => ({ value: choiceValues.choiceValue(m), label: m.label || m.id, id: m.id, ...(m.unavailable ? { unavailable: true } : {}) })) });
-  const dedupe = models => oneshot(f) ? [...new Map(models.map(m => [m.id, { id: m.id, label: m.id, unavailable: m.unavailable }])).values()] : models;
-  if (!companyEdition()) return backends.filter(b => f.kinds.includes(b.kind)).map(b => plain(b, dedupe(b.models || [])));
+  // 单次任务的 Claude / Codex 目录里同一模型会按思考档出现多次，按名字并成一项。CodeAgent 不并：同名模型在不同供应商（菜单分组）
+  // 是不同线路，单次执行也能按供应商跑（feature-agent-run 的 --settings），和会话里的模型下拉同样列全、同样带供应商（R53）。
+  const dedupe = (b, models) => oneshot(f) && b.kind !== 'codeagent' ? [...new Map(models.map(m => [m.id, { id: m.id, label: m.id, unavailable: m.unavailable }])).values()] : models;
+  if (!companyEdition()) return backends.filter(b => f.kinds.includes(b.kind)).map(b => plain(b, dedupe(b, b.models || [])));
   const out = [];
   for (const b of backends) {
     if (b.kind === GATEWAY) continue; // 公司版里部门 key 就是「Claude Code · 部门 API key」，不单列
-    if (!HARNESS.includes(b.kind)) { if (f.kinds.includes(b.kind)) out.push(plain(b, dedupe(b.models || []))); continue; }
+    if (!HARNESS.includes(b.kind)) { if (f.kinds.includes(b.kind)) out.push(plain(b, dedupe(b, b.models || []))); continue; }
     const sup = harnessSupport(f, b.kind);
     if (!sup.ok) { out.push({ value: b.kind, label: b.label, available: false, reason: sup.reason, models: [], defaultModel: '' }); continue; }
     const models = (b.models || []).filter(m => sup.sources.includes(m.source));
@@ -412,8 +423,19 @@ function state(dataDir, options) {
     return f.defaultText;
   };
   return { ok: true, company: companyEdition(), backends, features: FEATURES.map(f => {
-    const r = resolve(dataDir, f.id, { backends });
-    return { ...f, defaultText: defaultLabel(f), ...r, options: featureOptions(f, backends), current: currentValues(f, r.choice) };
+    const r = resolve(dataDir, f.id, { backends }), options = featureOptions(f, backends);
+    // 手填过的 CodeAgent 模型不在清单里：补成下拉里的一项，标明是手填的，而不是显示成「不可用」。
+    const row = r.selected?.custom && options.find(o => o.value === r.selected.kind);
+    if (row && !row.models.some(m => m.value === r.selected.model)) row.models.push({ value: r.selected.model, id: r.selected.model, label: `${r.selected.model}（手填）` });
+    // 升级前单次任务按名字并项，存下的 CodeAgent 选择不带供应商（如 DeepSeek-V4.1-Flash-1017）；现在选项带供应商，
+    // 当前值对不上会显示成「（不可用）」。对齐到同名的第一项（同名多个供应商时也取第一项，和 resolve() 命中的一致；R53 审查 P1）。
+    // Choices saved before R53 carry no provider: show them as the first listed same-name option instead of 'unavailable'.
+    const current = currentValues(f, r.choice), own = options.find(o => o.value === current.backend);
+    if (r.selected && current.model && !r.selected.codeagentModelProvider && !r.selected.custom && own && !own.models.some(m => m.value === current.model)) {
+      const same = own.models.find(m => !m.unavailable && m.id === current.model);
+      if (same) current.model = same.value;
+    }
+    return { ...f, defaultText: defaultLabel(f), ...r, options, current };
   }) };
 }
 // 会话的功能选型是否仍继承助理设置（assistantChoice）的模型与供应商：没有功能选型，或只把后端选成 CodeAgent / Lite、
@@ -461,5 +483,26 @@ function applyPreset(dataDir, preset, options = {}) {
   const stateOptions = backends ? { ...options, backends } : options;
   return { ok: true, preset, changed, skipped: preset === 'codeagent-lite' ? skipped : [], state: state(dataDir, stateOptions) };
 }
+// 手填 CodeAgent 模型（单次任务）：按真实执行路径试跑一句，通了才记下并选用；不通就地说清是「账号用不了这个模型 / 名字不对」还是别的原因。
+// Hand-typed CodeAgent model for one-shot features: trial-run one line through the real runner, save only on success.
+async function customCodeAgentModel(dataDir, id, model, { run = require('./feature-agent-run').run, backends, now = Date.now } = {}) {
+  const f = feature(id), name = String(model || '').trim();
+  if (!f || !oneshot(f)) return { ok: false, error: '这个功能不支持手填 CodeAgent 模型' };
+  if (!require('./model-id').isSafeModelId(name)) return { ok: false, error: '模型名里有不支持的字符' };
+  const rows = backends || catalog(dataDir);
+  if (!rows.find(b => b.kind === 'codeagent')?.available) return { ok: false, error: '本机 CodeAgent 暂不可用' };
+  const listed = rows.find(b => b.kind === 'codeagent').models.find(m => !m.unavailable && m.id.toLowerCase() === name.toLowerCase());
+  const choice = listed ? { kind: 'codeagent', model: listed.id, ...require('./codeagent-model-choice').routeFields(listed) } : { kind: 'codeagent', model: name, custom: true };
+  const started = now();
+  try {
+    await run(choice, '只回复 OK，不要别的内容。', { dataDir, timeoutMs: 90000 });
+  } catch (error) {
+    const said = require('./hub-feedback').redact(String(error?.message || error)).slice(0, 160);
+    if (require('./help-ask/model-choice').modelUnavailable(error)) return { ok: false, code: 'model-unavailable', error: `CodeAgent 用不了「${name}」：这个账号没有这个模型，或名字写错了（CodeAgent 原话：${said}）` };
+    return { ok: false, code: error?.timedOut ? 'timeout' : 'run-failed', error: error?.timedOut ? `试跑「${name}」超时，没等到回答；可稍后再试` : `试跑「${name}」没成功：${said}` };
+  }
+  set(dataDir, id, choice, { backends: rows });
+  return { ok: true, model: choice.model, firstMs: now() - started, already: !!listed };
+}
 module.exports = { FEATURES, LABELS, GATEWAY, HARNESS, HARNESS_SOURCES, SESSION_KINDS: SESSION, PRESETS, catalog, resolve, set, setFromUi, choiceFromUi, session, stale, state,
-  assertSessionKind, applyPreset, inheritsAssistantChoice, setRuntime, ensureProxy, harnessInUse, harnessDefault, featureOptions, workKind };
+  assertSessionKind, applyPreset, inheritsAssistantChoice, setRuntime, ensureProxy, harnessInUse, harnessDefault, featureOptions, workKind, customCodeAgentModel };

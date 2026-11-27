@@ -35,6 +35,8 @@ const SUPPORTED = Object.freeze({
   // DSH（2026-11-26 读 @deepseek-ai/dsh 0.2.2 与 dsh-tui 0.20 源码）：权限 = 沙箱 + 越界才问（DSH_PERMISSION_MODE 三档）。
   // 没有「每次调用工具都问」：只有命令被沙箱挡住、模型申请一次性升权时才弹「允许一次 / 拒绝」。
   'deepseek-acp': Object.freeze(['bypassPermissions', 'acceptEdits', 'default']),
+  // opencode（2026-11-26）：permission 配置（edit / bash 的 allow、ask、deny）+ 自带的 plan 智能体，见 core/opencode-cli-profile.js permissionConfig。
+  opencode: Object.freeze(['bypassPermissions', 'acceptEdits', 'default', 'plan']),
 });
 const SWITCHABLE_KINDS = Object.freeze(Object.keys(SUPPORTED));
 

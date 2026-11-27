@@ -5295,6 +5295,27 @@ require('./main/download-points-register').registerStaticDownloadPoints({});
 require('./main/download-source-ipc').registerDownloadSourceIpc(ipcMain, { getOpenxRecorder: () => appUpdateControllerRef?.openxRecorder || null });
 require('./main/ipc/capability-handlers').registerCapabilityIpc(ipcMain,
   capabilityService);
+// 技能广场（2026-11-27，core/skill-plaza/）：员工助手技能导入 + 本机已装 + AgentCenter 一个入口。不联网。
+// 隔离测试（CLAUDE_HUB_HOME_DIR）里给 CLAUDE_HUB_SKILL_PLAZA_WECLAW=1 可在没装员工助手时也扫测试 home 下的三个根目录。
+let skillPlazaService = null;
+try {
+  skillPlazaService = new (require('./core/skill-plaza/service').SkillPlazaService)({
+    dataDir: getHubDataDir(), homeDir: capabilityService.homeDir,
+    findInstall: () => (process.env.CLAUDE_HUB_HOME_DIR && process.env.CLAUDE_HUB_SKILL_PLAZA_WECLAW === '1')
+      || require('./core/weclaw-link').findInstall(),
+    catalog: refresh => capabilityService.catalog(refresh),
+    // 导入、移除改了技能目录：清掉「资源 → 工具」的能力目录缓存（与 codeagent-market 安装后的做法相同）。
+    invalidateCatalog: () => { capabilityService.cache = null; capabilityService.catalogGeneration++; },
+    // 导入、移除真正结束时（界面可能早已不等了）通知界面刷新。
+    onChanged: info => sendToRenderer('skill-plaza:changed', info),
+    market: capabilityService.market,
+    codeagentDir: () => capabilityService.codeagentConfigDir(),
+    writeClipboard: text => clipboard.writeText(text),
+    openExternal: url => shell.openExternal(url),
+    openManage: () => sendToRenderer('skill-plaza:open-manage', {}),
+  });
+} catch (error) { console.error('[skill-plaza] 技能广场未启动：', error.message); }
+require('./main/ipc/skill-plaza-handlers').registerSkillPlazaIpc(ipcMain, () => skillPlazaService);
 
 // --- Gemini/Codex/Kimi ring-buffer usage scanner ---
 // Periodically scans agent sessions' ring buffers for token/model patterns

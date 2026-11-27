@@ -1940,7 +1940,9 @@ class SessionManager extends EventEmitter {
     const dshCardScope = isCardSession && isDshCli ? (opts.cardScope || cardRunMode.dshCardScope(getConfig(), opts)) : null;
     // pi（r39）：终端里的 pi + Hub 观察扩展，和 DSH 同属 provider CLI（core/pi-cli-session.js）。
     const isPiCli = kind.replace(/-resume$/, '') === 'pi';
-    const isProviderCli = (isDshCli && !isDshCard) || isPiCli || (['qwen','glm'].includes(kind.replace(/-resume$/, '')) && require('./agent-runtime-mode').agentRuntimeMode() !== 'native');
+    // opencode（2026-11-26）：终端里的 opencode + 它自带的本机服务（core/opencode-cli-session.js）。
+    const isOpencodeCli = kind.replace(/-resume$/, '') === 'opencode';
+    const isProviderCli = (isDshCli && !isDshCard) || isPiCli || isOpencodeCli || (['qwen','glm'].includes(kind.replace(/-resume$/, '')) && require('./agent-runtime-mode').agentRuntimeMode() !== 'native');
     const isClaude = kind === 'claude' || kind === 'claude-resume';
     const isGemini = kind === 'gemini' || kind === 'gemini-resume';
     const isDeepSeek = kind === 'deepseek' || kind === 'deepseek-resume';
@@ -2740,6 +2742,9 @@ class SessionManager extends EventEmitter {
     let ptyProcess;
     try { ptyProcess = isCodeAgentServe
       ? createCodeAgentServeDriver({ id, opts, cwd: spawnCwd, env: sessionEnv, config: codeagentConfig, launch: codeagentLaunch, ptyModule: pty, dataDir: getHubDataDir() })
+      : isOpencodeCli
+      ? new (require('./opencode-cli-session').OpencodeCliSession)(require('./opencode-cli-profile').buildOpencodeCliOptions(kind,
+        {...opts,id,cwd:spawnCwd},getConfig(),getHubDataDir(),sessionEnv))
       : isPiCli
       ? new (require('./pi-cli-session').PiCliSession)(require('./pi-cli-profile').buildPiCliOptions(kind,
         {...opts,id,cwd:spawnCwd},getConfig(),getHubDataDir(),sessionEnv))
@@ -2847,6 +2852,9 @@ class SessionManager extends EventEmitter {
       // 线路/模型（如 deepseek/deepseek-flash）；没有 Hub 线路时由 pi 自己定，等观察扩展报回再补上。
       const mid = ptyProcess.options.model || '';
       currentModel = { id: mid, displayName: mid || 'pi 默认模型' };
+    } else if (isOpencodeCli) {
+      const mid = ptyProcess.options.model || '';
+      currentModel = { id: mid, displayName: mid || 'opencode 默认模型' };
     }
 
     const effectiveCodexMcpProfile = isCodexRuntime

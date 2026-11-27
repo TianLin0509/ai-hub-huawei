@@ -18,7 +18,7 @@ const registry = require('./registry');
 const { extractTgz } = require('./tar');
 
 const CATALOG_TTL_MS = 10 * 60 * 1000;
-const NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH 运行环境', node: 'Node.js 运行环境', git: 'Git for Windows', pi: 'pi 终端 Agent' };
+const NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH 运行环境', node: 'Node.js 运行环境', git: 'Git for Windows', pi: 'pi 终端 Agent', opencode: 'opencode 终端 Agent' };
 const gitBash = require('../git-bash');
 
 function resolveFetch(fetchImpl) {

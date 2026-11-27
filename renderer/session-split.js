@@ -171,6 +171,15 @@ function createSessionSplit({ document: doc, window: win, primary, buttons, serv
     if (button) void setLayout(button.dataset.sessionLayout).catch(error => s.alert(error.message));
   });
   const resize = new win.ResizeObserver(() => { if (enabled) setRatio(ratio); }); resize.observe(workspace);
+  // Fullscreen file preview (and other views) toggle primary's display directly.
+  // Without re-syncing, a sync that ran while the preview was open leaves the
+  // whole workspace hidden after the preview closes: the conversation goes
+  // blank and its file links can no longer be clicked.
+  if (win.MutationObserver) {
+    new win.MutationObserver(() => {
+      if (workspace.hidden !== (primary.style.display === 'none')) sync();
+    }).observe(primary, { attributes: true, attributeFilter: ['style'] });
+  }
   empty(); sync();
   return {
     sync, route, focusedId, setLayout, leaveBackstage,

@@ -6,6 +6,9 @@ const CARD_FONT_SIZE_MAX = 22;
 const DEFAULT_CARD_FONT_SIZE = require('./distribution').target === 'company' ? 16 : 15;
 const DEFAULT_CARD_FONT_FAMILY = 'system';
 const CARD_FONT_FAMILY_IDS = Object.freeze(['system', 'yahei', 'serif', 'mono']);
+// 打开会话时停在哪：question = 最新一条提问顶到上方（默认），bottom = 滚到最底下。
+const DEFAULT_CARD_OPEN_AT = 'question';
+const CARD_OPEN_AT_IDS = Object.freeze(['question', 'bottom']);
 
 function normalizeCardFontSize(value) {
   const parsed = Number.parseInt(value, 10);
@@ -18,10 +21,17 @@ function normalizeCardFontFamily(value) {
   return CARD_FONT_FAMILY_IDS.includes(id) ? id : DEFAULT_CARD_FONT_FAMILY;
 }
 
+function normalizeCardOpenAt(value) {
+  if (value === false) return 'bottom';
+  const id = String(value ?? '').trim().toLowerCase();
+  return CARD_OPEN_AT_IDS.includes(id) ? id : DEFAULT_CARD_OPEN_AT;
+}
+
 function normalizeCardDisplayConfig(config = {}) {
   return {
     cardFontSize: normalizeCardFontSize(config.cardFontSize),
     cardFontFamily: normalizeCardFontFamily(config.cardFontFamily),
+    cardOpenAt: normalizeCardOpenAt(config.cardOpenAt),
   };
 }
 
@@ -31,6 +41,9 @@ module.exports = {
   DEFAULT_CARD_FONT_SIZE,
   DEFAULT_CARD_FONT_FAMILY,
   CARD_FONT_FAMILY_IDS,
+  DEFAULT_CARD_OPEN_AT,
+  CARD_OPEN_AT_IDS,
+  normalizeCardOpenAt,
   normalizeCardFontSize,
   normalizeCardFontFamily,
   normalizeCardDisplayConfig,

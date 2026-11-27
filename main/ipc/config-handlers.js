@@ -123,6 +123,7 @@ function toEditableConfig(config) {
     uiCodeFoldThreshold: Number.isFinite(config.uiCodeFoldThreshold) ? config.uiCodeFoldThreshold : 30,
     cardFontSize: normalizeCardFontSize(config.cardFontSize),
     cardFontFamily: normalizeCardFontFamily(config.cardFontFamily),
+    cardOpenAt: require('../../core/card-display-config').normalizeCardOpenAt(config.cardOpenAt),
     notificationEnabled: notifications.enabled,
     notificationIncludePreview: notifications.includePreview,
     notificationNotifyGroupChats: notifications.notifyGroupChats,
@@ -369,6 +370,8 @@ function buildConfigJsonUpdate(existing, newConfig) {
       card_font_family: H('cardFontFamily')
         ? normalizeCardFontFamily(newConfig.cardFontFamily)
         : normalizeCardFontFamily(existing.ui?.card_font_family),
+      card_open_at: require('../../core/card-display-config').normalizeCardOpenAt(
+        H('cardOpenAt') ? newConfig.cardOpenAt : existing.ui?.card_open_at),
     },
     ...(hasNotificationUpdate ? {
       notifications: buildNotificationJsonUpdate(existing.notifications, newConfig, H),
@@ -447,6 +450,13 @@ function registerConfigIpc(ipcMain, deps) {
   ipcMain.handle('feature-agents:custom-model', async (_event, request = {}) => {
     try {
       const dir = featureDataDir(), feature = request.feature || 'assistant';
+      // 问问 Hub / PPT 库地图 / 进展卡摘要选 CodeAgent 时手填模型：按真实单次执行试跑一句，通了才选用（core/feature-agent-choice.js，R53）。
+      if (request.backend === 'codeagent') {
+        const r = await featureAgents.customCodeAgentModel(dir, feature, request.model);
+        if (!r.ok) return { ok: false, code: r.code, error: r.error };
+        deps.sendToRenderer?.('feature-agents:changed', { feature, checked: true });
+        return { ...featureAgents.state(dir), checked: { model: r.model, firstMs: r.firstMs || null, already: !!r.already } };
+      }
       // 先挡住：功能不支持部门 key、或还没存 key 时不试跑、不往网关配置里记手填模型。
       if (!featureAgents.FEATURES.find(f => f.id === feature)?.kinds.includes(featureAgents.GATEWAY)) return { ok: false, error: '这个功能不支持部门 API key（网关）' };
       const available = require('../../core/assistant-gateway-route').availability(dir);
@@ -456,7 +466,7 @@ function registerConfigIpc(ipcMain, deps) {
       // 先记下选型（反代据此决定要不要常驻），再把新模型表交给本机反代；反代没收到时不吞：照样选用（已测通），但告诉用户要重启 Hub 才生效。
       featureAgents.set(dir, feature, { kind: featureAgents.GATEWAY, model: r.model });
       const applied = await Promise.resolve(deps.companyProxyService?.applyGatewayChange?.()).catch(() => ({ gatewayStale: true }));
-      deps.sendToRenderer?.('feature-agents:changed', { feature });
+      deps.sendToRenderer?.('feature-agents:changed', { feature, checked: true });
       return { ...featureAgents.state(dir), checked: { model: r.model, firstMs: r.firstMs || null, already: !!r.already },
         ...(applied?.gatewayStale ? { warning: '已连通，但本机反代的模型表没刷新，重启 Hub 后生效' } : {}) };
     } catch (error) { return { ok: false, error: error.message }; }

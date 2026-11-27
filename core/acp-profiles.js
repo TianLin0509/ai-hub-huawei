@@ -8,7 +8,8 @@ const PLAN_BASE_URL = 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatibl
 const { HARNESS_LABELS: LABELS } = require('./ai-kinds');
 // 终端里跑、由 Hub 观察扩展报状态的 provider CLI（不走 ACP 协议，但会话记录、恢复、卡片走同一套 acpSid / cliRuntime 管道）。
 // pi（r39）：core/pi-cli-session.js。ACP_KINDS 仍只列有 ACP 设置页的三家。
-const PROVIDER_CLI_KINDS = ['pi'];
+// opencode（2026-11-26）：core/opencode-cli-session.js，经它自带的本机服务收发。
+const PROVIDER_CLI_KINDS = ['pi', 'opencode'];
 function isAcpKind(kind) { const base = String(kind).replace(/-resume$/, ''); return ACP_KINDS.includes(base) || PROVIDER_CLI_KINDS.includes(base); }
 function isPiKind(kind) { return String(kind || '').replace(/-resume$/, '') === 'pi'; }
 // Windows 上新建目录链接偶尔遇到 EBUSY/EPERM（杀毒或索引正占着刚建的目录）；短暂等一下重试，最多 5 次。

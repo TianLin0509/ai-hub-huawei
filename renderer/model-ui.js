@@ -228,6 +228,7 @@ function createModelUiController({
   switchTimeoutMs = 7000,
   setTimeoutFn = setTimeout,
   repaintActiveComposer = () => {},
+  openBackstage = null,
 }) {
   if (!document) throw new Error('document is required');
   if (!ipcRenderer) throw new Error('ipcRenderer is required');
@@ -404,6 +405,8 @@ function createModelUiController({
     } else if (strategy === 'acp-native' && /^pi(?:-resume)?$/.test(String(kind || ''))) {
       // pi 的模型来自好几条线路（DeepSeek API、Token Plan、公司模型），每项后面已写线路，这里不再统一说成套餐（r39 审查）。
       menuNote(menu,'模型后面写着线路：DeepSeek API 按量计费，Token Plan 消耗套餐额度 · 选择后由 pi 确认，再更新显示。');
+    } else if (strategy === 'acp-native' && /^opencode(?:-resume)?$/.test(String(kind || ''))) {
+      menuNote(menu,'模型后面写着线路 · 选择后从下一条消息起生效；在 opencode 终端里 /models 换的也会跟着更新。');
     } else if (strategy === 'acp-native') {
       menuNote(menu,'阿里云套餐模型 · 选择后由原生 Harness 确认，再更新显示。');
     } else if (strategy === 'codeagent-picker') {
@@ -769,7 +772,7 @@ function createModelUiController({
         const result = await ipcRenderer.invoke('codeagent:switch-model', { sessionId, modelId: option.id,
           ...(session._codeagentModelRecovery ? { recovery: true } : {}),
           ...(option.provider ? { provider: option.provider, providerLabel: option.providerLabel, menuLabel: option.menuLabel } : {}) });
-        if (!result || result.ok !== true) throw new Error(result && result.message || 'CodeAgent 没能切换模型');
+        if (!result || result.ok !== true) throw Object.assign(new Error(result && result.message || 'CodeAgent 没能切换模型'), { pickFailure: result && result.pickFailure || '' });
         const current = sessions.get(sessionId) || session;
         current.currentModel = { ...result.model };
         if (option.provider) { current.codeagentModelProvider = option.provider; current.codeagentModelProviderLabel = option.providerLabel || option.provider; }
@@ -856,6 +859,19 @@ function createModelUiController({
           text: `切换失败：${error && error.message ? error.message : String(error)}${cleanupWarning}`,
           state: 'error',
         });
+        // CodeAgent 菜单没对上、或选了没确认（R53）：失败说明下面就地给一步「打开后台」，到终端里手动选；
+        // 菜单里确实没有这个模型时，列表就在下面，直接换一个。
+        if (error && (error.pickFailure === 'mismatch' || error.pickFailure === 'unconfirmed') && typeof openBackstage === 'function') {
+          const note = menu.querySelector('.model-picker-note[data-state="error"]');
+          const go = document.createElement('button');
+          go.type = 'button'; go.className = 'model-picker-item model-picker-backstage'; go.textContent = '打开后台手动选';
+          go.addEventListener('click', async event => {
+            event.stopPropagation();
+            closeModelPicker();
+            try { await openBackstage(sessionId); } catch (openError) { console.warn('[model-switch] open backstage failed:', openError && openError.message); }
+          });
+          if (note && note.nextSibling) menu.insertBefore(go, note.nextSibling); else menu.appendChild(go);
+        }
       }
       return { ok: false, error: error && error.message ? error.message : String(error) };
     } finally { endCommandScreen(sessionId, commandScreen); }

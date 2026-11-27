@@ -49,6 +49,7 @@
   <link rel="stylesheet" href="styles/account-token.css">
   <link rel="stylesheet" href="styles/avatar-page.css">
   <link rel="stylesheet" href="styles/weclaw-page.css">
+  <link rel="stylesheet" href="styles/skill-plaza.css">
   <link rel="stylesheet" href="styles/pet-settings-tab.css">
   <link rel="stylesheet" href="styles/web-sessions.css">
   <link rel="stylesheet" href="file-manager-panel.css">
@@ -192,10 +193,12 @@
            所以 renderer.js / rules.js / hub-workspaces.js 里的 getElementById 仍然命中同一批节点。
            悬停展开、定位与键盘操作见 renderer/rail-groups.js。 -->
       <div class="rail-group" id="rail-group-rules" data-rail-group="rules">
-        <button type="button" class="btn-shell-nav rail-group-trigger" id="btn-rail-group-rules" data-rail-group-trigger="rules" aria-haspopup="true" aria-expanded="false" aria-controls="rail-group-rules-menu" aria-label="规则 · 资源、账号、回顾" title="规则 · 资源、账号、回顾；悬停展开"><span class="btn-icon" aria-hidden="true"><img class="rail-artwork" src="assets/navigation/sticker-v2/rules.png" alt="" aria-hidden="true" /></span><span class="btn-label">规则</span></button>
+        <button type="button" class="btn-shell-nav rail-group-trigger" id="btn-rail-group-rules" data-rail-group-trigger="rules" aria-haspopup="true" aria-expanded="false" aria-controls="rail-group-rules-menu" aria-label="规则 · 广场、资源、账号、回顾" title="规则 · 广场、资源、账号、回顾；悬停展开"><span class="btn-icon" aria-hidden="true"><img class="rail-artwork" src="assets/navigation/sticker-v2/rules.png" alt="" aria-hidden="true" /></span><span class="btn-label">规则</span></button>
         <div class="rail-group-menu" id="rail-group-rules-menu" role="group" aria-labelledby="btn-rail-group-rules" hidden>
           <!-- 规则 Tab（2026-10-12）：Hub 里的 Agent 默认带上的规则。公开版、公司版都有。 -->
           <button type="button" class="btn-shell-nav" id="btn-rules" data-rules-entry title="规则 · Agent 默认带上的规则" aria-label="规则"><span class="btn-icon" aria-hidden="true"><img class="rail-artwork" src="assets/navigation/sticker-v2/rules.png" alt="" aria-hidden="true" /></span><span class="btn-label">规则</span></button>
+          <!-- 技能广场（2026-11-27）：员工助手、AgentCenter、本机五家的技能一处找、一处装。公开版、公司版都有。 -->
+          <button type="button" class="btn-shell-nav" id="btn-skill-plaza" title="广场 · 员工助手、AgentCenter 和本机各家 AI 的技能" aria-label="技能广场" aria-controls="skill-plaza-page"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16l1.5 4.5a3 3 0 0 1-5.5 1.6 3 3 0 0 1-4 1.2 3 3 0 0 1-4-1.2 3 3 0 0 1-5.5-1.6z"/><path d="M5 12v8h14v-8M10 20v-5h4v5"/></svg></span><span class="btn-label">广场</span></button>
           <button type="button" class="btn-shell-nav" id="btn-rail-capabilities" data-action="open-capabilities" title="资源 · 工具与记忆" aria-label="资源" aria-expanded="false" aria-controls="hub-workspace"><span class="btn-icon" aria-hidden="true"><img class="rail-artwork" src="assets/navigation/sticker-v2/resources.png" alt="" aria-hidden="true" /></span><span class="btn-label">资源</span></button>
           <button type="button" class="btn-shell-nav" id="btn-rail-accounts" title="账号 · 登录状态与接入配置" aria-label="账号" aria-expanded="false" aria-controls="account-page"><span class="btn-icon" aria-hidden="true"><img class="rail-artwork" src="assets/navigation/sticker-v2/accounts.png" alt="" aria-hidden="true" /></span><span class="btn-label">账号</span><b id="accounts-attention" hidden></b></button>
           <button type="button" class="btn-shell-nav" id="btn-rail-memo" data-action="open-review" title="回顾 · 备忘与昨日之我" aria-label="回顾" aria-expanded="false" aria-controls="hub-workspace"><span class="btn-icon" aria-hidden="true"><img class="rail-artwork" src="assets/navigation/sticker-v2/review.png" alt="" aria-hidden="true" /></span><span class="btn-label">回顾</span></button>
@@ -268,12 +271,14 @@
                       <button class="new-session-option" data-kind="qwen" aria-pressed="false"><span class="ai-logo logo-qwen"></span>千问 · Qwen Code</button>
                       <button class="new-session-option" data-kind="glm" aria-pressed="false"><span class="ai-logo logo-glm"></span>智谱 · ZCode</button>
                       <button class="new-session-option" data-kind="pi" aria-pressed="false" title="开源终端编码 Agent pi：用 Hub 已有的 DeepSeek / 套餐 / 公司模型钥匙，或 pi 自己的登录"><span class="ai-logo logo-pi"></span>pi · 终端 Agent</button>
+                      <button class="new-session-option" data-kind="opencode" aria-pressed="false" title="开源终端编码 Agent opencode：用 Hub 已有的公司模型 / DeepSeek / 套餐钥匙，或 opencode 自己的配置"><span class="ai-logo logo-opencode"></span>opencode · 终端 Agent</button>
                       <button class="new-session-option" data-kind="codeagent" aria-pressed="false"><span class="ai-logo logo-codeagent"></span>CodeAgent · 公司内网</button>
                       <button class="new-session-option" data-kind="codeagent-lite" aria-pressed="false" title="轻量共享模式：与 CodeAgent 共用账号与权限，多会话共用一个后台进程，大幅降低内存占用"><span class="ai-logo logo-codeagent"></span>CodeAgent-Lite · 省内存</button>
                       <button class="new-session-option" data-kind="gemini" aria-pressed="false"><span class="ai-logo logo-gemini"></span>Antigravity CLI</button>
                       <button class="new-session-option" data-kind="powershell" aria-pressed="false"><span class="ai-logo logo-powershell"></span>PowerShell</button>
                     </div>
                     <div class="session-tuning-note" id="new-session-pi-note" role="status" hidden><span id="new-session-pi-note-text"></span> <button type="button" class="tuning-default-btn" id="new-session-pi-install" hidden>一键安装 pi</button></div>
+                    <div class="session-tuning-note" id="new-session-opencode-note" role="status" hidden><span id="new-session-opencode-note-text"></span> <button type="button" class="tuning-default-btn" id="new-session-opencode-install" hidden>一键安装 opencode</button></div>
                     <section class="session-config-section" id="new-session-config-section" aria-labelledby="new-session-tuning-label">
                     <div class="session-config-heading"><div><strong id="new-session-tuning-label">启动配置</strong><span id="new-session-default-status" role="status">新建会话将沿用这组配置</span></div><button type="button" id="new-session-model-default" class="tuning-default-btn" hidden></button></div>
                     <label class="session-tuning-field" id="new-session-deepseek-route-field" hidden><span>消费通道</span><select id="new-session-deepseek-route" aria-describedby="new-session-deepseek-route-note"><option value="tokenplan">Token Plan 套餐</option><option value="api">DeepSeek 官方 API</option></select></label>
@@ -1011,6 +1016,9 @@
             </div>
           </div>
           <p class="config-reading-note">默认已从 13px 调到 15px；代码块用等宽字体，字号跟着正文字号和 Ctrl+滚轮一起缩放。公式由本地 KaTeX 离线渲染。</p>
+          <div class="config-check-grid config-card-open-at">
+            <label for="cfg-card-open-at-question" title="打开或切换会话时，把最新一条提问放到页面最上方，从回答开头往下读；回答不足一屏时仍停在最底下。关掉后打开会话直接滚到底。"><input type="checkbox" id="cfg-card-open-at-question" checked> 打开会话时定位到最新提问（关掉则滚到最底下）</label>
+          </div>
           <div class="config-field" id="cfg-composer-enter-field">
             <label for="cfg-composer-enter">回车键</label>
             <select id="cfg-composer-enter">

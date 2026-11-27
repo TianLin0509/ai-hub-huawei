@@ -74,6 +74,7 @@ function createConfigModalController({
     return normalizeCardDisplayConfig({
       cardFontSize: configEl('cfg-card-font-size')?.value,
       cardFontFamily: configEl('cfg-card-font-family')?.value,
+      cardOpenAt: configEl('cfg-card-open-at-question') && !configEl('cfg-card-open-at-question').checked ? 'bottom' : 'question',
     });
   }
 
@@ -82,6 +83,7 @@ function createConfigModalController({
     if (configEl('cfg-card-font-size')) configEl('cfg-card-font-size').value = String(normalized.cardFontSize);
     if (configEl('cfg-card-font-size-value')) configEl('cfg-card-font-size-value').textContent = `${normalized.cardFontSize}px`;
     if (configEl('cfg-card-font-family')) configEl('cfg-card-font-family').value = normalized.cardFontFamily;
+    if (configEl('cfg-card-open-at-question')) configEl('cfg-card-open-at-question').checked = normalized.cardOpenAt !== 'bottom';
     if (apply) applyCardDisplaySettings(normalized);
     return normalized;
   }

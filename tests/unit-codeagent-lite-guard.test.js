@@ -503,7 +503,8 @@ test('设置页：一键按钮和分类标签同一行，不可用 / 全是 Lite
   assert.match(src, /本机 CodeAgent-Lite 暂不可用/);
   assert.match(src, /原先单独指定的模型也一并恢复为默认/);
   assert.match(src, /if \(tab\) \{ group = tab\.dataset\.faGroup; presetNote = '';/);
-  assert.match(src, /if \(!detail\?\.preset\) presetNote = '';/);
+  // 手填模型检测结果的广播（checked）同样不冲掉回执（R53）。
+  assert.match(src, /if \(!detail\?\.preset && !detail\?\.checked\) presetNote = '';/);
   assert.match(src, /presetNote = '';\n    if \(!model\)/);
   assert.match(src, /可切换的功能都已是 CodeAgent-Lite/);
 });

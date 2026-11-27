@@ -139,10 +139,25 @@ function lastSaturday(year, monthIndex) {
   return dateKey(d);
 }
 
-/* 日子类型：工作日 / 周末 / 月末周六 / 节假日。holidays、extraWorkdays 为 { 'YYYY-MM-DD': true } */
+/* 法定调休补班日（落在周末、但要上班的日子），内置静态表，不在线拉取。
+ * 公司假期日历只列休息日、不列补班日，补班的周六周日以前被当成周末、全天算加班（2026-11-27 用户反馈 9/20、10/10）。
+ * 来源：国务院办公厅关于部分节假日安排的通知——
+ *   2026 年：国办发明电〔2025〕7号（2025-11-04），https://www.gov.cn/zhengce/content/202511/content_7047090.htm
+ *   2027 年：国办发明电〔2026〕10号（2026-11-05），https://www.gov.cn/zhengce/zhengceku/202611/content_7085102.htm
+ * 每年 11 月前后国务院公布下一年安排，照通知里「X月X日（周X）上班」补一行即可。 */
+const CN_MAKEUP_WORKDAYS = Object.freeze({
+  '2026-01-04': '元旦调休', '2026-02-14': '春节调休', '2026-02-28': '春节调休', '2026-05-09': '劳动节调休',
+  '2026-09-20': '国庆调休', '2026-10-10': '国庆调休',
+  '2027-01-31': '春节调休', '2027-02-14': '春节调休', '2027-05-08': '劳动节调休',
+  '2027-09-26': '国庆调休', '2027-10-09': '国庆调休',
+});
+
+/* 日子类型：工作日 / 周末 / 月末周六 / 节假日。holidays、extraWorkdays 为 { 'YYYY-MM-DD': true }；
+ * 内置补班表 CN_MAKEUP_WORKDAYS 总是生效。 */
 function dayKind(k, opts = {}) {
   const rules = { ...DEFAULT_RULES, ...(opts.rules || {}) };
   if (opts.extraWorkdays && opts.extraWorkdays[k]) return 'workday';
+  if (CN_MAKEUP_WORKDAYS[k]) return 'workday';
   const d = parseDate(k);
   const w = d.getDay();
   // 公司假期日历把周末也列成休息日（11-08 真机：31 条里含 11/07 周六）。周末一律按周末 / 月末周六规则算，
@@ -365,7 +380,7 @@ function fmtClock(min) {
 }
 
 module.exports = {
-  DEFAULT_RULES, DEFAULT_WORK_TIME, DEFAULT_FLEX, normalizeWorkTime, normalizeFlex, rulesFromWorkTime, calcRules, countedMinutes, leaveAfterCounted, WEEK, toMinutes, parseDate, dateKey, shiftDay, lastSaturday, dayKind, isWorkKind,
+  DEFAULT_RULES, DEFAULT_WORK_TIME, DEFAULT_FLEX, normalizeWorkTime, normalizeFlex, rulesFromWorkTime, calcRules, countedMinutes, leaveAfterCounted, WEEK, toMinutes, parseDate, dateKey, shiftDay, lastSaturday, dayKind, isWorkKind, CN_MAKEUP_WORKDAYS,
   normalizeRecord, mergeRecords, buildDays, monthWorkdays, remainingWorkdays, completedDays, summarize,
   monthReport, yearReport, fmtHours, fmtHm, fmtClock,
 };

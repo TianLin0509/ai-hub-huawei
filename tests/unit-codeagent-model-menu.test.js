@@ -1046,7 +1046,7 @@ test('a config-only model passes an old GLM-only permission snapshot, but a miss
     } }, sid: 'synthetic', kind: 'codeagent', modelId: IDS[2], allowedModels: allowed, dataDir: dir });
     assert.equal(result.ok, present);
     if (present) assert.equal(currentModel, IDS[2]);
-    else { assert.equal(result.message, `这个账号在 CodeAgent 模型菜单里选不了 ${IDS[2]}`); assert.match(result.technicalReason, /模型菜单里没有 DeepSeek/); assert.equal(currentModel, IDS[0]); assert.equal(result.inputReady, true); assert.deepEqual(writes, ['\x1b[B', '\x1b']); }
+    else { assert.equal(result.message, `CodeAgent 模型菜单里没有 ${IDS[2]}，这个账号可能没开通它；请换一个菜单里有的模型`); assert.equal(result.pickFailure, 'absent'); assert.match(result.technicalReason, /模型菜单里没有 DeepSeek/); assert.equal(currentModel, IDS[0]); assert.equal(result.inputReady, true); assert.deepEqual(writes, ['\x1b[B', '\x1b']); }
   }
 });
 
@@ -1128,7 +1128,7 @@ for (const scenario of ['existing', 'concurrent', 'concurrent-after-write', 'abs
   const handlers = new Map();
   context.module.exports.registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, { sessionManager: manager, sendToRenderer() {} });
   const result = await handlers.get('codeagent:switch-model')(null, { sessionId: sid, modelId: IDS[2] });
-  assert.equal(result.ok, scenario !== 'absent'); assert.equal(result.message, `这个账号在 CodeAgent 模型菜单里选不了 ${IDS[2]}`);
+  assert.equal(result.ok, scenario !== 'absent'); assert.equal(result.message, `CodeAgent 模型菜单里没有 ${IDS[2]}，这个账号可能没开通它；请换一个菜单里有的模型`);
   assert.equal(current.currentModel.id, scenario === 'absent' ? IDS[0] : IDS[2]); assert.equal(closed, true);
   assert.equal(require('../core/codeagent-launch-model').lastModel(dir, 'personal'), IDS[0], 'settings-only changes this session, not future sessions');
   if (scenario !== 'absent') {
@@ -1276,14 +1276,14 @@ test('an ineffective search is cleared before scrolling three delayed model fram
 
 for (const wrap of [false, true]) test(`a missing model is rejected after reaching the end or wrapping (${wrap})`, async t => {
   const f = scrollingPicker(t, { ids: ['GLM-5.2-WX-Auto', 'MiniMax-M2.7', 'GLM-5.2'], wrap }), result = await f.run();
-  assert.equal(result.ok, false); assert.equal(result.message, `这个账号在 CodeAgent 模型菜单里选不了 ${SCROLL_TARGET}`); assert.match(result.technicalReason, /模型菜单里没有/);
+  assert.equal(result.ok, false); assert.equal(result.message, `CodeAgent 模型菜单里没有 ${SCROLL_TARGET}，这个账号可能没开通它；请换一个菜单里有的模型`); assert.match(result.technicalReason, /模型菜单里没有/);
   assert.equal(f.selected(), null); assert.equal(f.writes.some(([key]) => key === '\r'), false);
   assert.equal(f.writes.filter(([key]) => key === '\x1b[B').length, 3);
 });
 
 test('a final cursor read refuses a drifted row instead of submitting the wrong model', async t => {
   const f = scrollingPicker(t, { searchWorks: true, drift: true }), result = await f.run();
-  assert.equal(result.ok, false); assert.equal(result.message, `这个账号在 CodeAgent 模型菜单里选不了 ${SCROLL_TARGET}`); assert.match(result.technicalReason, /未确认光标已移到/);
+  assert.equal(result.ok, false); assert.match(result.message, /菜单没对上，不一定是账号没有这个模型.*打开后台/); assert.equal(result.pickFailure, 'mismatch'); assert.match(result.technicalReason, /未确认光标已移到/);
   assert.equal(f.selected(), null); assert.equal(f.writes.some(([key]) => key === '\r'), false);
 });
 
@@ -1360,7 +1360,7 @@ test('an intermediate cursor-only frame settles through the delayed move before 
 test('a menu which never exposes a selected row is not submitted', async t => {
   const f = scrollingPicker(t, { hideCursor: true, focusWorks: false });
   const result = await f.run();
-  assert.equal(result.ok, false); assert.equal(result.message, `这个账号在 CodeAgent 模型菜单里选不了 ${SCROLL_TARGET}`);
+  assert.equal(result.ok, false); assert.match(result.message, /菜单没对上.*打开后台/); assert.equal(result.pickFailure, 'mismatch');
   assert.match(result.technicalReason, /无法确认模型列表的选中项/);
   assert.equal(f.selected(), null); assert.ok(!f.writes.some(([key]) => key === '\r'));
 });

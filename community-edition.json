@@ -28,6 +28,7 @@
     "codex",
     "deepseek-acp",
     "pi",
+    "opencode",
     "powershell"
   ],
   "productName": "AI HUB-Huawei",
@@ -37,9 +38,9 @@
     "sources": []
   },
   "releaseNotes": [
-    "员工助手页改版：「在员工助手里新建对话」做成顶部大按钮；左侧栏员工助手入口排到分身后面"
+    "新增「技能广场」Beta（左栏规则组）：员工助手里装好的技能、本机各家 AI 已装技能和 AgentCenter 汇到一处；员工助手技能按直接用、需改写、交员工助手执行分档，可一键导入到 CodeAgent、Claude、Codex 并随时移除；不联网、不上传"
   ],
-  "version": "5.6.130",
+  "version": "5.6.131",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

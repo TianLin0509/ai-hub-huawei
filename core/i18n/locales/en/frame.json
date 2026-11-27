@@ -81,6 +81,7 @@
   "打开专用网页窗口与高级设置": "Open the dedicated web window and advanced settings",
   "进入“浏览器”查看真实网页会话；自动/手动模式及更大上下文在专用设置中调整。": "Go to \"Browser\" to see the real web session; Auto/Manual mode and larger context are set in the dedicated settings.",
   "模型后面写着线路：DeepSeek API 按量计费，Token Plan 消耗套餐额度 · 选择后由 pi 确认，再更新显示。": "The route is shown after each model: DeepSeek API is pay-as-you-go, Token Plan uses plan quota · After you choose, pi confirms, then the display updates.",
+  "模型后面写着线路 · 选择后从下一条消息起生效；在 opencode 终端里 /models 换的也会跟着更新。": "The route is shown after each model · takes effect from the next message; switching with /models in the opencode terminal is picked up too.",
   "阿里云套餐模型 · 选择后由原生 Harness 确认，再更新显示。": "Alibaba Cloud plan models · After you choose, the native Harness confirms, then the display updates.",
   "当前 Google 账号的 Antigravity 模型 · 在 CLI 内原地切换，收到“Model set to”回执后更新显示。": "Antigravity models for the current Google account · Switched in place inside the CLI; the display updates after the \"Model set to\" reply.",
   "当前账号实时目录": "Live list for current account",
@@ -386,6 +387,7 @@
   "选项：": "Options:",
   "请在终端回答问题": "Answer the question in the terminal",
   "打开后台": "Open background",
+  "打开后台手动选": "Open background to pick manually",
   "换一个": "Pick another",
   "模型选择还没准备好": "Model picker is not ready yet",
   "会话已关闭": "Session closed",
@@ -790,5 +792,6 @@
   "这个 API 账号还没有可选的模型。": "This API account has no models to choose from yet.",
   "本机 CLI 配置里还没有可选的模型。": "The local CLI configuration has no models to choose from yet.",
   "自有 API 账号的模型 · 支持会话内切换；换线路请新建会话。": "Own API account models · switchable in this session; start a new session to change route.",
-  "本机 CLI 配置里的模型 · 支持会话内切换；换线路请新建会话。": "Local CLI configuration models · switchable in this session; start a new session to change route."
+  "本机 CLI 配置里的模型 · 支持会话内切换；换线路请新建会话。": "Local CLI configuration models · switchable in this session; start a new session to change route.",
+  "技能广场": "Skill Plaza"
 }
