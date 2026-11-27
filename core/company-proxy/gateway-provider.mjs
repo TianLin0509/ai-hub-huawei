@@ -39,6 +39,8 @@ const object = value => value !== null && typeof value === 'object' && !Array.is
 const systemText = content => (typeof content === 'string' ? content : Array.isArray(content)
   ? content.map(part => (typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : '')).filter(Boolean).join('\n')
   : content == null ? '' : String(content));
+const SERVER_RETRIES = 3; // 网关偶发 5xx / 429 的自动重试次数
+
 export function systemFirst(messages) {
   const system = [], rest = [];
   for (const m of messages) (object(m) && (m.role === 'system' || m.role === 'developer') ? system : rest).push(m);
@@ -180,10 +182,36 @@ export function createGatewayProvider({ baseURL, apiKey, fetchImpl = globalThis.
       const wait = track ? onWait : () => {};
       wait({ request, sessionTag, waiting: true, since: started, attempt: 1 });
       try {
-        let result;
+        let result, serverRetries = 0;
         for (let n = 1; n <= 1 + retries; n++) {
-          if (n > 1) { log(`gateway retry ${n - 1} after ${result.failed} (${Date.now() - started}ms)`); wait({ request, sessionTag, waiting: true, since: started, attempt: n }); }
+          if (n > 1 && result.failed) { log(`gateway retry ${n - 1} after ${result.failed} (${Date.now() - started}ms)`); wait({ request, sessionTag, waiting: true, since: started, attempt: n }); }
           result = await attempt(serialized, signal, waitMs, requestedModel, target);
+          // 网关偶发 5xx / 限流 429（还没给客户端输出任何东西）：自动重试。Codex、DSH 的网关路线客户端重试是 0 次，
+          // 2026-11-27 黄区实测网关 GLM 渠道间歇 500，一次抖动就让整轮任务失败；Claude Code 自己会重试，这里先挡一次。
+          // 只重试网关自己说「可重试」的（分类见 core/api-gateway-errors.js：服务端错误、限流）；key、额度、模型不存在这类不重试。
+          // 11-28 夜里实测 GLM 渠道约 3 成请求 500：一轮任务约 15 次请求，只重试 1 次整轮仍多半失败，所以单独给 3 次、退避 1.5/3/6 秒（不占排队超时的重试次数）。
+          const status = result.response && !result.response.ok ? result.response.status : 0;
+          if (status && serverRetries < SERVER_RETRIES && (status >= 500 || status === 429)) {
+            const ra = String(result.response.headers.get('retry-after') || '').trim();
+            const raSec = /^\d+$/.test(ra) ? Number(ra) : (Date.parse(ra) - Date.now()) / 1000;
+            const retryAfter = Math.min(30, Math.ceil(raSec > 0 ? raSec : 0));
+            const text = await result.response.text().catch(() => '');
+            const e = explainGatewayError(status, text, { model: requestedModel, usable: models, group });
+            if (!e.retry || !['server', 'rate_limited'].includes(e.kind)) {
+              log(`gateway HTTP ${status} -> ${e.code}`);
+              return ownError(e.status, e.message, e.status === 429 ? { 'retry-after': String(retryAfter || 30) } : {});
+            }
+            serverRetries++;
+            log(`gateway retry ${serverRetries}/${SERVER_RETRIES} after HTTP ${status} (${Date.now() - started}ms)`);
+            n--; // 服务端错误的重试单独计数，不占排队超时的次数
+            if (signal?.aborted) throw signal.reason || new Error('aborted');
+            await new Promise((resolve, reject) => {
+              const onAbort = () => { clearTimeout(timer); reject(signal.reason || new Error('aborted')); };
+              const timer = setTimeout(() => { signal?.removeEventListener?.('abort', onAbort); resolve(); }, status === 429 ? Math.max(2, retryAfter) * 1000 : 1500 * 2 ** (serverRetries - 1));
+              signal?.addEventListener?.('abort', onAbort, { once: true });
+            });
+            continue;
+          }
           if (result.response) break;
         }
         if (!result.response) {
@@ -196,7 +224,7 @@ export function createGatewayProvider({ baseURL, apiKey, fetchImpl = globalThis.
           const text = await response.text().catch(() => '');
           const e = explainGatewayError(response.status, text, { model: requestedModel, usable: models, group });
           log(`gateway HTTP ${response.status} -> ${e.code}`);
-          return ownError(e.status, e.message, e.status === 429 ? { 'retry-after': response.headers.get('retry-after') || '30' } : {});
+          return ownError(e.status, e.message, e.status === 429 ? { 'retry-after': String(Math.min(30, Number(response.headers.get('retry-after')) || 30)) } : {});
         }
         if (!response.body) return response;
         // 直通：网关回的就是 Anthropic 流，原样交回（模型名、思考块 Claude Code 自己认）。

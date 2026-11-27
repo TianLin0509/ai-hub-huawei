@@ -12,6 +12,7 @@ import { main, gatewayFromEnv } from '../core/company-proxy/server.mjs';
 
 const require = createRequire(import.meta.url);
 const GOOD_KEY = 'sk-test-gateway-key';
+const gwFlaky = { hit: 0 };
 const MODELS = ['deepseek-v4.1-flash', 'glm-5.3-flash'];
 
 function sse(res, frames, named = false) {
@@ -48,6 +49,8 @@ async function startGateway() {
         { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 } },
         { type: 'message_stop' }], true);
     }
+    if (body.model === 'flaky' && gwFlaky.hit < 2) { gwFlaky.hit++; res.writeHead(500, { 'content-type': 'application/json' }); return res.end('{"error":{"message":"openai_error","type":"bad_response_status_code"}}'); }
+    if (body.model === 'gone') { res.writeHead(503, { 'content-type': 'application/json' }); return res.end('{"error":{"code":"model_not_found","message":"No available channel for model gone","type":"new_api_error"}}'); }
     const id = 'c1';
     sse(res, [
       { id, model: 'x', choices: [{ index: 0, delta: { role: 'assistant', content: 'CHAT' } }] },
@@ -61,7 +64,7 @@ async function startProxy(t, gatewayOrigin, extraEnv = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'gw-native-'));
   const key = 'b'.repeat(48);
   const env = { AI_HUB_COMPANY_PROXY_KEY: key, AI_HUB_API_GATEWAY_URL: gatewayOrigin + '/v1', AI_HUB_API_GATEWAY_KEY: GOOD_KEY,
-    AI_HUB_API_GATEWAY_MODELS: [...MODELS, 'quota-out', 'html-page', 'crlf-model'].join(','), AI_HUB_API_GATEWAY_MODEL: 'deepseek-v4.1-flash',
+    AI_HUB_API_GATEWAY_MODELS: [...MODELS, 'quota-out', 'html-page', 'crlf-model', 'flaky', 'gone'].join(','), AI_HUB_API_GATEWAY_MODEL: 'deepseek-v4.1-flash',
     AI_HUB_API_GATEWAY_NATIVE: 'glm-5.3-flash,quota-out,html-page,crlf-model', ...extraEnv };
   const running = main(['--data-dir', dataDir, '--port', '0', '--mock-upstream'], { env });
   const stateFile = join(dataDir, 'company-model-proxy', 'proxy-state.json');
@@ -174,4 +177,22 @@ test('审查修复：非流式收包合并用量、认 \r\n 分帧和 [DONE]；�
   const html = await claudeAsk(p, 'u1', { model: 'html-page', max_tokens: 64, stream: true, messages: [{ role: 'user', content: 'x' }] });
   assert.ok(html.status >= 500, 'HTML 回包按上游协议错误处理，状态 ' + html.status);
   await html.text();
+});
+
+test('网关偶发 500：反代自动重试一次，客户端拿到正常回答；模型不存在（503 model_not_found）不重试', async t => {
+  const gw = await startGateway(); t.after(() => gw.server.close());
+  const p = await startProxy(t, gw.origin);
+  gwFlaky.hit = 0;
+  const ask = model => fetch(p.origin + '/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${p.key}.r1__gw` },
+    body: JSON.stringify({ model, stream: true, messages: [{ role: 'user', content: 'hi' }] }) });
+  const before = gw.seen.length;
+  const ok = await ask('flaky');
+  assert.equal(ok.status, 200);
+  assert.match(await ok.text(), /CHAT/);
+  assert.equal(gw.seen.length - before, 3, '连续两次 500 之后第三次成功');
+  const mid = gw.seen.length;
+  const gone = await ask('gone');
+  assert.equal(gone.status, 400);
+  await gone.text();
+  assert.equal(gw.seen.length - mid, 1, '模型不存在不重试');
 });

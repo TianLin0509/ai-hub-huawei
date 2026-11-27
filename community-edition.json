@@ -38,14 +38,9 @@
     "sources": []
   },
   "releaseNotes": [
-    "Claude Code 经 Hub 使用公司模型时，正确显示缓存命中（以前一直显示 0，实际约 65%）",
-    "Claude Code / DSH 里选的思考档位（low / medium）现在真正传给公司模型，选低档更省",
-    "Codex 使用公司模型时按模型真实上下文长度工作，不再提前压缩历史",
-    "急修：公司内源版本列表 11-27 起要求登录，检查更新、组件下载、版本回退改读内源上的版本索引（hub-index），不再依赖匿名列表；内源要求登录时如实提示，不再说连不上网络",
-    "分身选型收尾：分身可用个人账号的全部模型（R53b）",
-    "CodeAgent 方向键授权菜单可在 Hub 卡片里点选（R52c）"
+    "网关偶发 500/503/429 时，反代自动重试最多 3 次（退避 1.5/3/6 秒），Codex、DSH 走网关不再一次抖动就整轮失败"
   ],
-  "version": "5.6.135",
+  "version": "5.6.136",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false
