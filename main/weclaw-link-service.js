@@ -139,9 +139,10 @@ class WeclawLinkService {
     if (error) throw new Error(`打不开员工助手：${error}`);
     return { ok: true };
   }
+  // 走员工助手注册的协议，不依赖安装路径（装在非标准位置但开着也能用）；协议没注册时 openExternal 会失败。
   async newChat() {
-    if (!this.findInstall()) throw new Error('这台电脑上没找到员工助手');
-    await this.openExternal('weclaw://home/chat');
+    try { await this.openExternal('weclaw://home/chat'); }
+    catch { throw new Error(this.findInstall() ? '员工助手没响应，先点「打开员工助手」再试' : '这台电脑上没找到员工助手'); }
     return { ok: true };
   }
 

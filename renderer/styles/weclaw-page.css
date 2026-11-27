@@ -11,9 +11,21 @@
 .wcx-beta{padding:0 6px;border-radius:5px;background:var(--bs);color:var(--b);font:600 12px/18px "Segoe UI",sans-serif}
 .wcx-ch{padding:0 10px;border-radius:999px;background:var(--sf3);color:var(--t2);font-size:12.5px;line-height:22px;white-space:nowrap}
 .wcx-ch.g{background:var(--gs);color:var(--g)}.wcx-ch.b{background:var(--bs);color:var(--b)}
-.wcx-body{flex:1;min-height:0;overflow:hidden;display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:16px;padding:16px 18px;align-items:start}
-.wcx-steps{display:grid;gap:10px;min-width:0}
-.wcx-step{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:14px;align-items:center;background:var(--sf);border:1px solid var(--ln);border-radius:12px;padding:12px 16px}
+.wcx-main{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:14px;padding:16px 18px}
+.wcx-hero{flex:none;display:flex;align-items:center;gap:20px;padding:20px 24px;border-radius:14px;background:var(--bs);border:1px solid color-mix(in srgb,var(--b) 22%,var(--ln))}
+.wcx-ht{flex:1;min-width:0;display:grid;gap:4px}
+.wcx-ht b{font-size:17px;color:var(--hw-text-1)}
+.wcx-ht span{font-size:13px;color:var(--t2)}
+.wcx-ha{display:flex;align-items:center;gap:10px;flex:none}
+.wcx-go{display:inline-flex;align-items:center;gap:9px;height:48px;padding:0 26px;border:0;border-radius:12px;background:var(--b);color:var(--hw-text-on);font:inherit;font-size:16px;font-weight:600;white-space:nowrap;cursor:pointer;box-shadow:0 6px 16px color-mix(in srgb,var(--b) 28%,transparent)}
+.wcx-go:hover{background:var(--bh)}
+.wcx-go:disabled{opacity:.5;cursor:default;box-shadow:none}
+.wcx-go:focus-visible{outline:2px solid var(--b);outline-offset:2px}
+.wcx-ha .wcx-btn{height:48px;padding:0 18px;border-radius:12px;font-size:14px}
+.wcx-body{flex:1;min-height:0;overflow:hidden;display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:16px;align-items:start;padding:4px;margin:-4px}
+.wcx-steps{display:grid;gap:8px;min-width:0}
+.wcx-sh{display:flex;align-items:center;gap:10px;margin:0 0 2px;font-size:14px;color:var(--t2);font-weight:600}
+.wcx-step{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:14px;align-items:center;background:var(--sf);border:1px solid var(--ln);border-radius:12px;padding:9px 16px}
 .wcx-step.b{border-color:color-mix(in srgb,var(--b) 45%,var(--ln));box-shadow:0 0 0 3px color-mix(in srgb,var(--b) 10%,transparent)}
 .wcx-n{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:700 13px/1 "Segoe UI",sans-serif;background:var(--sf3);color:var(--t2)}
 .wcx-n.g{background:var(--gs);color:var(--g)}.wcx-n.b{background:var(--b);color:var(--hw-text-on)}.wcx-n.w{background:var(--ws);color:var(--w)}.wcx-n.r{background:var(--rs);color:var(--r)}

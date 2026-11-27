@@ -40,7 +40,7 @@ function steps(s) {
   if (!s.running) out.push({ state: s.installed ? 'todo' : 'bad', title: '已打开并登录', detail: '员工助手没打开', action: s.installed ? { op: 'open', label: '打开员工助手', primary: true } : null });
   else if (s.online?.loggedIn && !s.online?.healthy) out.push({ state: 'todo', title: '已打开并登录', detail: '员工助手的本机服务没有正常响应，试试重新打开员工助手', action: { op: 'open', label: '打开员工助手', primary: true } });
   else if (!s.online?.loggedIn) out.push({ state: 'todo', title: '已打开并登录', detail: '员工助手已打开，但还没登录（刚打开的话等几秒）', action: { op: 'open', label: '去登录', primary: true } });
-  else out.push({ state: 'done', title: '已打开并登录', detail: '在线 · 已登录 · 引擎正常', action: { op: 'open', label: '打开员工助手' } });
+  else out.push({ state: 'done', title: '已打开并登录', detail: '在线 · 已登录 · 引擎正常' });
   // 3 接入
   const [tone, word, hint] = describe(s).linked;
   if (tone === 'g') out.push({ state: 'done', title: '已接入 HUB-H', detail: hint, action: { op: 'disconnect', label: '断开', danger: true } });
@@ -130,21 +130,35 @@ function createWeclawPage({ document, window, ipcRenderer, closeOtherPanels = ()
     return `<div class="wcx-dd">${group(pending ? 'AI HUB-H（接入后出现）' : 'AI HUB-H（CodeAgent 公司模型）', mine, pending ? 'off' : '')}`
       + (p.others || []).map(o => group(o.name, o.models, 'x')).join('') + '</div>';
   }
+  // 主入口（2026-11-27 改版）：「在员工助手里新建对话」做成页面最显眼的大按钮，四步清单退到下面当「准备工作」。
+  function hero(list, doneCount) {
+    const linked = describe(data).linked;
+    const t = data.lastTest;
+    const ready = doneCount === list.length;
+    const line = !data.installed && !data.running ? '这台电脑上还没装员工助手'
+      : ready ? `已接入 HUB-H${t?.ok ? ` · 上次首字 ${secs(t.firstTokenMs)} 秒` : ''}，在员工助手的模型下拉里选「HUB-H · …」`
+      : linked[0] === 'g' || data.enabled ? '已接入 HUB-H，下面的准备工作还有没做完的' : '还没接入 HUB-H 也能用，会用员工助手自带的模型';
+    const label = busy === 'new-chat' ? '正在打开…' : '在员工助手里新建对话';
+    const have = data.installed || data.running;
+    return `<section class="wcx-hero"><div class="wcx-ht"><b>用员工助手办公司的事</b><span>${esc(line)}</span></div>`
+      + `<div class="wcx-ha"><button type="button" class="wcx-go" data-wc="new-chat"${busy || !have ? ' disabled' : ''}>`
+      + `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M12 8.5v7M8.5 12h7"/></svg>${label}</button>`
+      + `${button({ op: 'open', label: '打开员工助手', disabled: !data.installed })}</div></section>`;
+  }
   function render() {
     if (!root) return;
     const list = data ? steps(data) : [];
     const doneCount = list.filter(s => s.state === 'done').length;
     const current = list.findIndex(s => s.state !== 'done');
-    const head = `<header class="wcx-head"><h1>员工助手<span class="wcx-beta">Beta</span></h1><p>让员工助手用 HUB-H 的公司模型，四步全绿就能用</p>`
-      + (data ? `<span class="wcx-ch ${doneCount === 4 ? 'g' : 'b'}">${doneCount} / 4 完成</span>` : '')
+    const head = `<header class="wcx-head"><h1>员工助手<span class="wcx-beta">Beta</span></h1><p>让员工助手用 HUB-H 的公司模型</p>`
       + `<button type="button" class="wcx-btn s" data-wc="refresh"${busy ? ' disabled' : ''}>刷新</button></header>`;
-    if (!data) { root.innerHTML = head + '<div class="wcx-body"><p class="wcx-note">正在检查…</p></div>'; return; }
+    if (!data) { root.innerHTML = head + '<div class="wcx-main"><p class="wcx-note">正在检查…</p></div>'; return; }
     const err = error ? `<div class="wcx-err">${esc(error)}</div>` : '';
-    root.innerHTML = head + `<div class="wcx-body"><section class="wcx-steps">${list.map((s, i) => stepHtml(s, i, current)).join('')}${err}</section>
-      <section class="wcx-card"><h2>接入后在员工助手里</h2>${preview()}
-        <div class="wcx-actions">${button({ op: 'new-chat', label: '在员工助手里新建对话', disabled: !data.installed })}
-        <label class="wcx-pool" title="默认只用你本人的 CodeAgent 账号；勾上后，本人额度不够时可用号池里的账号"><input type="checkbox" data-wc-pool${data.allowPool ? ' checked' : ''}${busy ? ' disabled' : ''}> 本人额度不够时允许用号池</label></div>
-        <p class="wcx-note">在员工助手的模型下拉里选「HUB-H · …」就用上了；想用回原来的，选回「体验模型」，不用重启。数据只在本机和公司 CodeAgent 之间流动。</p></section></div>`;
+    root.innerHTML = head + `<div class="wcx-main">${hero(list, doneCount)}<div class="wcx-body"><section class="wcx-steps">`
+      + `<h2 class="wcx-sh">准备工作<span class="wcx-ch ${doneCount === 4 ? 'g' : 'b'}">${doneCount} / 4 完成</span></h2>${list.map((s, i) => stepHtml(s, i, current)).join('')}${err}</section>
+      <section class="wcx-card"><h2>接入后员工助手的模型下拉</h2>${preview()}
+        <label class="wcx-pool" title="默认只用你本人的 CodeAgent 账号；勾上后，本人额度不够时可用号池里的账号"><input type="checkbox" data-wc-pool${data.allowPool ? ' checked' : ''}${busy ? ' disabled' : ''}> 本人额度不够时允许用号池</label>
+        <p class="wcx-note">选「HUB-H · …」就用上了；想用回原来的，选回「体验模型」，不用重启。数据只在本机和公司 CodeAgent 之间流动。</p></section></div></div>`;
   }
 
   function open() {

@@ -66,7 +66,6 @@
 :root[data-hw-shell] body #app-body #scene-rail #btn-rail-accounts { order: 2; }
 :root[data-hw-shell] body #app-body #scene-rail #btn-company-assistant { order: 3; }
 :root[data-hw-shell] body #app-body #scene-rail #btn-company-meeting { order: 4; }
-:root[data-hw-shell] body #app-body #scene-rail #btn-weclaw { order: 5; }
 :root[data-hw-shell] body #app-body #scene-rail #btn-progress { order: 5; }
 :root[data-hw-shell] body #app-body #scene-rail .hw-nav-cap[data-cap="tools"] { order: 10; }
 :root[data-hw-shell] body #app-body #scene-rail #btn-company-ppt { order: 11; }
@@ -76,7 +75,7 @@
 :root[data-hw-shell] body #app-body #scene-rail .hw-nav-cap[data-cap="community"] { order: 20; }
 :root[data-hw-shell] body #app-body #scene-rail #btn-company-forum { order: 21; }
 :root[data-hw-shell] body #app-body #scene-rail #rail-group-rules { order: 22; }
-:root[data-hw-shell] body #app-body #scene-rail .rail-navigation > :not(.hw-nav-cap):not(#btn-home):not(#btn-rail-accounts):not(#btn-company-assistant):not(#btn-company-meeting):not(#btn-progress):not(#btn-weclaw):not(#btn-company-ppt):not(#btn-company-rooms):not(#btn-company-forum):not(#btn-community):not(#btn-company-attendance):not(#btn-company-w3):not(#rail-group-rules) { order: 30; }
+:root[data-hw-shell] body #app-body #scene-rail .rail-navigation > :not(.hw-nav-cap):not(#btn-home):not(#btn-rail-accounts):not(#btn-company-assistant):not(#btn-company-meeting):not(#btn-progress):not(#btn-company-ppt):not(#btn-company-rooms):not(#btn-company-forum):not(#btn-community):not(#btn-company-attendance):not(#btn-company-w3):not(#rail-group-rules) { order: 30; }
 
 /* 导航行：图标方块 + 文字；选中 = 浅蓝底 + 蓝字，图标方块填模块色 */
 :root[data-hw-shell] body #app-body #scene-rail .btn-shell-nav,
