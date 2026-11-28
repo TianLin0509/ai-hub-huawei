@@ -10,6 +10,7 @@
 import json
 import math
 import os
+import re
 import threading
 import time
 from urllib.parse import urlparse
@@ -43,6 +44,18 @@ JS_SET_DATE = """(v) => {
   input.dispatchEvent(new Event('change', { bubbles: true }));
   return input.value;
 }"""
+
+JS_FORM_DATE = """() => {
+  const v = document.querySelector('input.ev_datepicker_input')?.value;
+  return typeof v === 'string' ? v.trim().slice(0, 40) : null;
+}"""
+
+
+def parse_form_date(value):
+    """从「2026/12/05」「2026-12-5」或带星期等后缀的文字里取出 (年, 月, 日)；取不出返回 None。"""
+    m = re.search(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})", str(value or ""))
+    return tuple(int(x) for x in m.groups()) if m else None
+
 
 JS_LEAF_CLICK = """(t) => {
   const all = document.querySelectorAll('*');
@@ -785,6 +798,17 @@ class Booker:
         bad = [f"{s}（应为 {w}）" for w, s in zip(want, shown) if s is not None and w not in s]
         return "、".join(bad)
 
+    def check_form_date(self, date_slash):
+        """选完会议室后核对表单日期仍是目标日期。日期是直接写进日期框的（不翻日历），
+        网页不接受（例如超出可订天数）或选格子时被改回别的日子，这里就对不上。
+        返回表单上显示的日期；一致、读不到或认不出格式时返回空串，不拦提交。"""
+        try:
+            shown = self.page.evaluate(JS_FORM_DATE)
+        except Exception:
+            return ""
+        got, want = parse_form_date(shown), parse_form_date(date_slash)
+        return shown if got and want and got != want else ""
+
     def slot_xs(self, start, total_min):
         h, m = map(int, start.split(":"))
         first = int(((h + m / 60) - self.grid_start_h) * 2)
@@ -837,6 +861,12 @@ class Booker:
             if st == "free":
                 self.log(f"选中会议室：{room}（{len(xs)} 个半小时格子都空闲）")
                 self.pick_cells(xs, y)
+                shown = self.check_form_date(date_slash)
+                if shown:
+                    self.shot("date_mismatch")
+                    raise RuntimeError(f"预订网页没有接受目标日期 {date_slash}（表单上显示的是 {shown}），"
+                                       "多半超出了该园区预订系统可订的天数范围；本次未提交，以免订错日期。"
+                                       "请在「设置 · 抢订节奏」把提前天数改小后重试（截图 screenshots/date_mismatch.png）")
                 bad = self.check_form_time(cfg["开始时间"], cfg["时长小时"], cfg["时长分钟"])
                 if bad:
                     self.shot("time_mismatch")

@@ -221,7 +221,7 @@ function createCrew({ host, ipcRenderer, toast, onSnapshot = () => {} }) {
         `<div class="cc-sec">邀请同事</div>
         <div style="display:flex;gap:6px"><input class="cc-in" data-slot="invname" placeholder="名字" maxlength="24" style="width:90px"><input class="cc-in" data-slot="invip" placeholder="对方 IP（建议填）" style="flex:1;font-family:Consolas,monospace"><button class="cc-btn pri" data-cc="invite">生成邀请</button></div>
         ${inviteOut ? `<div class="cc-recv"><div class="cc-note">把这段话用 WeLink 发给对方（7 天内有效）：</div><div data-i18n-skip style="white-space:pre-wrap">${esc(inviteOut.message)}</div><div class="cc-ops"><button class="cc-btn" data-cc="copy" data-text="${esc(inviteOut.message)}">复制</button></div></div>` : ''}
-        ${c.invites.length ? `<div class="cc-note" style="margin-top:6px">等对方加入：${c.invites.map(v => `<span data-i18n-skip>${esc(v.forName || v.ip || '同事')}</span>`).join('、')}</div>` : ''}
+        ${c.invites.length ? `<div class="cc-note" style="margin-top:6px"><span>有效邀请（7 天内可多人用）：</span>${c.invites.map(v => `<span data-i18n-skip>${esc(v.forName || v.ip || '同事')}</span>${v.joined ? `<span>（已加入 ${v.joined} 人）</span>` : ''}`).join('、')}</div><div class="cc-note">同事加入后约半分钟出现在这里；久等不到时填上对方 IP 再生成一次邀请。</div>` : ''}
         <div class="cc-ops" style="margin-top:16px"><button class="cc-btn ghost" data-cc="leave">离开这个团队</button></div>
         <p class="cc-note">IP 直接改就生效，改完会自动去敲一下门确认连通。</p>`;
       return;
@@ -235,8 +235,16 @@ function createCrew({ host, ipcRenderer, toast, onSnapshot = () => {} }) {
         <div class="cc-row"><div class="grow"><div class="sm" data-i18n-skip>${esc(snap.answerDir || '（未设置：所有来信都先起草，等你确认）')}</div></div><button class="cc-btn" data-cc="pickdir">选择文件夹</button>${snap.answerDir ? '<button class="cc-btn ghost" data-cc="cleardir">清除</button>' : ''}</div>
         <p class="cc-note">放进去的 .md / .txt 是「可以直接告诉同事」的口径和说明。自动作答只读这些，不读你的会话、文件和聊天。</p>
         <div class="cc-sec">团队信箱</div>
-        <div class="cc-row"><div class="grow"><div><span>共享文件夹</span> <b data-i18n-skip>${esc(snap.share ? snap.share.name : '未设置')}</b></div><div class="sm" data-i18n-skip>${esc(snap.share ? snap.share.path : '')}</div></div><button class="cc-btn" data-cc="redetect">重新检测</button></div>`;
+        <div class="cc-row"><div class="grow"><div><span>共享文件夹</span> <b data-i18n-skip>${esc(snap.share ? snap.share.name : '未设置')}</b></div><div class="sm" data-i18n-skip>${esc(snap.share ? snap.share.path : '')}</div>${shareScopeLine(snap)}</div><button class="cc-btn" data-cc="redetect">重新检测</button></div>`;
     }
+  }
+
+  // 团队信箱所在共享给了谁（R66-5）：所有人能打开时标出来并说明怎么收窄；内容本来就加密，看得到的只是文件名和大小。
+  function shareScopeLine(snap) {
+    const sc = snap && snap.share && snap.shareScope;
+    if (!sc) return snap && snap.share ? '<div class="sm">谁能打开：查询中…</div>' : '';
+    if (sc.level === 'everyone') return `<div class="sm"><span class="cc-err">谁能打开：${esc(sc.label)}</span>。信件和文件都加密，别人只看得到文件名和大小；想收窄可在资源管理器里右键该文件夹 → 属性 → 共享 → 高级共享 → 权限，把 Everyone 换成 Authenticated Users，或改用一个只给同事的共享后点「重新检测」</div>`;
+    return `<div class="sm">谁能打开：${esc(sc.label)}（信件和文件都加密）</div>`;
   }
 
   // ---------- 小屋里的桌宠 ----------
@@ -385,7 +393,7 @@ function createCrew({ host, ipcRenderer, toast, onSnapshot = () => {} }) {
       if (!r || r.ok === false) return toast((r && r.error) || '没生成邀请');
       inviteOut = r; paintBody(); return;
     }
-    if (act === 'leave') { if (!window.confirm(`离开「${c.name}」？你的信箱里这个团队的内容会删掉，别人那边不受影响。`)) return; await invoke('leave', { crewId: c.id }); cur = ''; await load(true); return; }
+    if (act === 'leave') { if (!window.confirm(`离开「${c.name}」？你的信箱里这个团队的内容会删掉，其他成员那边也会把你移出名单。`)) return; await invoke('leave', { crewId: c.id }); cur = ''; await load(true); return; }
     if (act === 'pickdir') { const r = await invoke('pick-dir'); if (r && r.ok) { const s = await invoke('set-settings', { answerDir: r.path }); if (s && s.ok === false) toast(s.error); reload(); } return; }
     if (act === 'cleardir') { await invoke('set-settings', { answerDir: '' }); reload(); return; }
     if (act === 'redetect') { const r = await invoke('detect-share'); toast(r && r.ok ? `信箱：${r.share.name}` : (r && r.error) || '没找到'); reload(); }

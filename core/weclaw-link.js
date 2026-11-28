@@ -19,11 +19,85 @@ const PIN_PERSONAL = '__pin_personal';
 
 function installPaths(env = process.env) {
   const roots = [env['ProgramFiles(x86)'], env.ProgramFiles, env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs')].filter(Boolean);
-  return roots.map(root => path.join(root, 'UniAssistant', 'WeClaw Desktop.exe'));
+  // 不少同事把软件装在 D 盘（11-28 反馈人的 CodeAgent 就在 D:\Program Files\CodeAgentCLI），这几处顺手先看一眼
+  if (env['ProgramFiles(x86)'] || env.ProgramFiles) for (const drive of ['D:', 'E:']) roots.push(`${drive}\\Program Files (x86)`, `${drive}\\Program Files`, `${drive}\\`);
+  return [...new Set(roots)].map(root => path.join(root, 'UniAssistant', 'WeClaw Desktop.exe'));
 }
+const EXE_NAME = 'WeClaw Desktop.exe';
+// 默认三处之外逐级找到的安装位置（本进程内记住；见 locateInstall）。
+let located = { file: '', via: '', at: 0 };
 function findInstall({ env = process.env, exists = fs.existsSync } = {}) {
-  return installPaths(env).find(file => { try { return exists(file); } catch { return false; } }) || '';
+  const ok = file => { try { return !!file && exists(file); } catch { return false; } };
+  return installPaths(env).find(ok) || (ok(located.file) ? located.file : '');
 }
+
+// 安装位置逐级兜底（2026-11-28 反馈：装了员工助手、也接上了，技能广场却说「没找到」）。
+// 默认三处之外，员工助手装到 D 盘等自选目录时，只有下面几处记着真实位置：
+// ① 卸载登记（HKCU / HKLM / WOW6432Node，按键名或显示名认）的 InstallLocation、DisplayIcon、UninstallString 所在目录；
+// ② weclaw:// / uniassistant:// 协议登记的启动命令；③ 正在运行的 WeClaw Desktop 进程路径。
+// 一次 PowerShell（隐藏窗口、不读用户配置）查完三处，只回路径；没找到时 2 分钟内不重查（force 例外）。
+const LOCATE_SCRIPT = [
+  "$ErrorActionPreference='SilentlyContinue'; $o=@()",
+  "foreach($k in 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'){",
+  "  Get-ItemProperty $k | Where-Object { $_.PSChildName -match 'UniAssistant|WeClaw' -or $_.DisplayName -match 'WeClaw|UniAssistant|\\u5458\\u5de5\\u52a9\\u624b' } | ForEach-Object {",
+  "    if($_.InstallLocation){$o+='dir|'+$_.InstallLocation}; if($_.DisplayIcon){$o+='file|'+$_.DisplayIcon}; if($_.UninstallString){$o+='file|'+$_.UninstallString} } }",
+  "foreach($p in 'weclaw','uniassistant'){ foreach($r in \"HKCU:\\Software\\Classes\\$p\\shell\\open\\command\",\"HKLM:\\SOFTWARE\\Classes\\$p\\shell\\open\\command\"){ $v=(Get-ItemProperty -LiteralPath $r).'(default)'; if($v){$o+='file|'+$v} } }",
+  "Get-Process -Name 'WeClaw Desktop' | ForEach-Object { if($_.Path){$o+='file|'+$_.Path} }",
+  '[Console]::OutputEncoding=[Text.Encoding]::UTF8; [Console]::Out.Write(($o | Select-Object -Unique) -join "`n")',
+].join('\n');
+const LOCATE_RETRY_MS = 2 * 60 * 1000;
+
+/** PowerShell 回的每一行（dir|路径 或 file|命令行）→ 候选的主程序路径。纯函数，单测用。 */
+function installCandidates(lines) {
+  const out = [];
+  for (const line of String(lines || '').split(/\r?\n/)) {
+    const i = line.indexOf('|');
+    if (i < 0) continue;
+    const kind = line.slice(0, i), raw = line.slice(i + 1).trim();
+    if (!raw) continue;
+    if (kind === 'dir') { out.push(path.join(raw.replace(/^"|"$/g, ''), EXE_NAME)); continue; }
+    // 命令行：取开头那段路径（带引号取引号内；不带引号取到 .exe 为止），图标路径去掉末尾的 ,0
+    const m = /^"([^"]+)"/.exec(raw) || /^(.+?\.exe)\b/i.exec(raw);
+    const file = (m ? m[1] : raw).replace(/,\s*-?\d+$/, '').trim();
+    if (!/\.exe$/i.test(file)) continue;
+    out.push(path.basename(file).toLowerCase() === EXE_NAME.toLowerCase() ? file : path.join(path.dirname(file), EXE_NAME));
+  }
+  return [...new Set(out)];
+}
+
+function runLocateScript(execFile = require('node:child_process').execFile) {
+  return new Promise(resolve => {
+    try {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', LOCATE_SCRIPT],
+        { windowsHide: true, timeout: 15000, encoding: 'utf8' }, (_error, stdout) => resolve(String(stdout || '')));
+    } catch { resolve(''); }
+  });
+}
+
+/**
+ * 找员工助手主程序：默认三处 → 卸载登记 → 协议登记 → 运行中的进程。返回 { file, via }，没找到 file 为空串。
+ * 非 Windows 直接只看默认位置。
+ */
+let locating = null;
+async function locateInstall({ force = false, env = process.env, exists = fs.existsSync, platform = process.platform, query = runLocateScript, now = Date.now } = {}) {
+  const ok = file => { try { return !!file && exists(file); } catch { return false; } };
+  const fixed = installPaths(env).find(ok);
+  if (fixed) return { file: fixed, via: 'default' };
+  if (ok(located.file)) return { file: located.file, via: located.via };
+  if (platform !== 'win32') return { file: '', via: '' };
+  if (!force && located.at && now() - located.at < LOCATE_RETRY_MS) return { file: '', via: '' };
+  if (!locating) {
+    locating = Promise.resolve().then(() => query()).then(text => {
+      const file = installCandidates(text).find(ok) || '';
+      located = { file, via: file ? 'registry-or-process' : '', at: now() };
+      return { file, via: located.via };
+    }).catch(() => { located = { file: '', via: '', at: now() }; return { file: '', via: '' }; })
+      .finally(() => { locating = null; });
+  }
+  return locating;
+}
+/** 测试用：清掉记住的位置。 */
+function resetLocated() { located = { file: '', via: '', at: 0 }; locating = null; }
 
 function statePath(dataDir) { return path.join(dataDir, STATE_FILE); }
 function readState(dataDir) {
@@ -215,6 +289,6 @@ async function probeModel({ fetchImpl = fetch, port, key, model, now = () => Dat
   } finally { clearTimeout(timer); }
 }
 
-module.exports = { PROVIDER_ID, PROVIDER_NAME, PIN_PERSONAL, installPaths, findInstall, readState, writeState, statePath,
+module.exports = { PROVIDER_ID, PROVIDER_NAME, PIN_PERSONAL, installPaths, findInstall, locateInstall, installCandidates, resetLocated, EXE_NAME, LOCATE_SCRIPT, readState, writeState, statePath,
   apiKey, providerModels, buildProvider, findAgentBase, describeLinked, readLinked, readProvider, matchesExpected, applyProvider, toggleProvider, removeProvider,
   readModels, readHealth, compareVersions, upgradeCacheDir, findDownloadedInstaller, readInstalledVersion, probeModel };

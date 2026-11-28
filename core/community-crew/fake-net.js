@@ -16,6 +16,8 @@ function fakeNet(file) {
       createShare: async () => { throw new Error('测试环境不建共享'); },
       boxDir: s => path.join(s.path, 'ai-hub-community'),
       peerBoxDir: (ip, share) => { const n = net[ip]; return n && n.name === share ? path.join(n.path, 'ai-hub-community') : path.join(path.dirname(file), 'unreachable', ip); },
+      // 测试网里其他「电脑」都视为正连着本机的共享。
+      inboundSmbPeers: async () => Object.keys(net).filter(ip => ip !== cfg.self),
       powershell: async script => { const m = String(script).match(/net view \\+([\d.]+)/); const n = m && net[m[1]]; return n ? `${n.name}   Disk\r\n` : ''; },
     },
   };

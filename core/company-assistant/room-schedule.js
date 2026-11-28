@@ -6,7 +6,11 @@
 
 const DEFAULT_ADVANCE_DAYS = 7;
 const DEFAULT_OPEN_TIME = '12:00:00';
-const MIN_DAYS = 1, MAX_DAYS = 14;
+// 提前天数上限（2026-11-28 放宽到 120，约 4 个月）：Hub 里唯一的取值来源，界面输入框的上限由状态带过去；
+// 会议室组件 hub_control.py 里的 ADVANCE_DAYS_MAX 必须与它一致（单测核对）。
+const MIN_DAYS = 1, MAX_DAYS = 120;
+// 只报「advance-days」、没报自己上限的旧组件（2.1.6 及以前）只认 1–14 天。
+const LEGACY_COMPONENT_MAX_DAYS = 14;
 // 已知园区规则；没列出的园区按默认 7 天、沿用组件里的开放时刻。
 const CAMPUS_RULES = [
   { id: 'chengdu', name: '成都', advanceDays: 3, openTime: '08:30:00', match: /成都|chengdu/i },
@@ -87,5 +91,5 @@ function describe(schedule) {
   return `${who}：每天 ${open} 放号，抢 ${schedule.advanceDays} 天后的会议室`;
 }
 
-module.exports = { DEFAULT_ADVANCE_DAYS, DEFAULT_OPEN_TIME, MIN_DAYS, MAX_DAYS, CAMPUS_RULES,
+module.exports = { DEFAULT_ADVANCE_DAYS, DEFAULT_OPEN_TIME, MIN_DAYS, MAX_DAYS, LEGACY_COMPONENT_MAX_DAYS, CAMPUS_RULES,
   normalizeOpenTime, validDays, inferCampus, resolveSchedule, nextOpenAt, targetDateFor, autoStartWindow, describe };

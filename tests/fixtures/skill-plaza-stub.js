@@ -29,11 +29,13 @@ function stub() {
     { id: 'claude', label: 'Claude', dir: 'C:/fake/.claude/skills', present: true },
     { id: 'agents', label: 'Codex · DSH · pi', dir: 'C:/fake/.agents/skills', present: false },
   ];
-  const state = { weclawPresent: true, calls: [], imported: {} };
+  const state = { weclawPresent: true, calls: [], imported: {}, fail: {} }; // fail.local / fail.agentcenter：模拟那一路读失败
   window.__spzStub = state;
   const view = () => {
-    const list = items.filter(i => state.weclawPresent || i.source !== 'weclaw').map(i => (state.imported[i.id] ? { ...i, use: 'installed', installedIn: state.imported[i.id] } : i));
-    return { items: list, targets, scannedAt: Date.now(), sources: { weclaw: { present: state.weclawPresent, roots: state.weclawPresent ? ['C:/fake/weclaw/skills'] : [], count: list.filter(i => i.source === 'weclaw').length }, local: { count: 3 }, agentcenter: { present: true, count: 2 } } };
+    const list = items.filter(i => (state.weclawPresent || i.source !== 'weclaw') && !state.fail[i.source]).map(i => (state.imported[i.id] ? { ...i, use: 'installed', installedIn: state.imported[i.id] } : i));
+    const n = src => list.filter(i => i.source === src).length;
+    const err = src => (state.fail[src] ? { error: state.fail[src] } : {});
+    return { items: list, targets, scannedAt: Date.now(), sources: { weclaw: { present: state.weclawPresent, roots: state.weclawPresent ? ['C:/fake/weclaw/skills'] : [], count: n('weclaw') }, local: { count: n('local'), ...err('local') }, agentcenter: { present: true, count: n('agentcenter'), ...err('agentcenter') } } };
   };
   const ok = data => ({ ok: true, data }), bad = error => ({ ok: false, error });
   const handlers = {

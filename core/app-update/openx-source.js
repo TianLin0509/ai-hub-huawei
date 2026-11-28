@@ -58,7 +58,63 @@ const UNKNOWN_BUDGET_MS = REACH_TIMEOUT_MS;
 let state = freshState();
 function freshState() {
   return { unreachableUntil: 0, list: null, listAt: 0, listing: null, head: null, headTotal: 0, headAt: 0, heading: null, okAt: 0, listPartialReason: '',
-    projectName: '', details: new Map(), bad: new Set(), lastReason: '', indexMode: false, indexId: indexOverrideFromEnv() ?? INDEX_RELEASE_ID, localVersion: '' };
+    projectName: '', details: new Map(), bad: new Set(), lastReason: '', indexMode: false, indexId: indexOverrideFromEnv() ?? INDEX_RELEASE_ID, localVersion: '',
+    loginMode: false, loginTry: null, loginInfo: null };
+}
+
+// R63（2026-11-28）：第三条路——版本索引读不到（或过期）、匿名列表又要求登录时，借本人 Edge 的登录查一次版本列表。
+// 真正开无头 Edge 的实现在 main/openx-login-list.js（Hub 主进程注入，见 setLoginLister）；这里只管什么时候用、结果怎么并进现有的列表处理。
+// 平时不开 Edge；同一轮检查只开一次（loginTry 共用一个结果）：查到了的 10 分钟（LIST_TTL_MS）、没查到的 LOGIN_REUSE_MS 内复用，
+// 用户手动「检查更新」时（clearDown({ relogin:true })）作废已结束的那次、真的再试；本机没有 Edge 这类重试也没用的失败，一直复用到下次手动检查。
+const LOGIN_REUSE_MS = 2 * 60 * 1000;
+const LOGIN_BUDGET_MS = 15000;
+const LOGIN_TAIL_MS = 5000;
+let loginLister = null;
+function setLoginLister(fn) { loginLister = typeof fn === 'function' ? fn : null; }
+function listViaLogin({ projectId, onLogin, now = Date.now }) {
+  const t = state.loginTry;
+  // 审查 P2：查到了的按列表缓存时长（10 分钟）复用，查到新版后过几分钟再点下载不用再开一次；没查到的 2 分钟。
+  const reusable = !!t && (!t.settled || t.permanent || now() - t.at <= (t.ok ? LIST_TTL_MS : LOGIN_REUSE_MS));
+  if (!reusable && !loginLister) return Promise.resolve({ ok: false, reason: '没有可用的 Edge 登录查询' });
+  // 要等登录这一步（新开或在途）时告诉调用方加预算；已有结果直接复用，不加。
+  if (!(reusable && t.settled) && typeof onLogin === 'function') { try { onLogin(LOGIN_BUDGET_MS); } catch (_) {} }
+  if (reusable) return t.promise;
+  const lister = loginLister;
+  const startedAt = now();
+  const entry = { at: startedAt, settled: false, ok: false, permanent: false, promise: null };
+  entry.promise = Promise.resolve()
+    .then(() => lister({ projectId, timeoutMs: LOGIN_BUDGET_MS }))
+    .then(normalizeLoginResult, error => ({ ok: false, reason: errText(error) || '借 Edge 登录查询出错' }))
+    .then(r => {
+      entry.settled = true; entry.at = now(); entry.ok = !!r.ok; entry.permanent = !r.ok && !!r.permanent;
+      state.loginInfo = { ok: r.ok, at: new Date(now()).toISOString(), tookMs: now() - startedAt, records: r.ok ? r.records.length : 0, reason: r.ok ? '' : r.reason };
+      return r;
+    });
+  state.loginTry = entry;
+  return entry.promise;
+}
+function normalizeLoginResult(r) {
+  if (!r || !r.ok) return { ok: false, reason: String((r && r.reason) || '没查到').slice(0, 120), permanent: !!(r && r.permanent) };
+  const records = (Array.isArray(r.records) ? r.records : []).filter(x => x && x.id != null)
+    .map(x => ({ id: x.id, version: String(x.version || ''), releaseTime: String(x.releaseTime || '') }));
+  if (!records.length) return { ok: false, reason: '登录后的版本列表是空的' };
+  const details = (Array.isArray(r.details) ? r.details : []).filter(d => d && d.id != null && Array.isArray(d.binaryPackages));
+  return { ok: true, records, details, name: typeof r.name === 'string' ? r.name.trim() : '' };
+}
+// 登录查到的列表当全量用（一次取够，像版本索引一样之后不再翻页）；顺带取回的版本详情放进详情缓存，by_id 也被收紧时照样能找附件。
+function useLoginList(r) {
+  state.loginMode = true; state.indexMode = false;
+  if (r.name) state.projectName = r.name; else if (!state.projectName) state.projectName = projectSlugFromConfig();
+  for (const d of r.details) {
+    const rec = r.records.find(x => String(x.id) === String(d.id));
+    state.details.set(rec ? rec.id : d.id, packagesOf(d, rec || d));
+  }
+  return { records: r.records, total: r.records.length, login: true };
+}
+function loginFailedError(base, reason) {
+  const error = new Error(`${errText(base)}；借 Edge 登录也没查到：${reason}`);
+  error.authRequired = true; error.loginTried = true;
+  return error;
 }
 
 // 2026-11-18 用户定：成员版下载组件也优先走内源（只下载、按 sha256 核对，不上传任何东西）。
@@ -82,7 +138,12 @@ const AUTH_TEXT = what => `公司内源的版本查询接口现在要求登录�
 function userReason(reason, { file = '', what = '' } = {}) {
   const raw = String(reason || '').trim();
   if (/已取消/.test(raw)) return '已取消';
-  if (/要求登录|未认证/.test(raw)) return AUTH_TEXT(what || (file === '版本清单' ? '新版本' : file ? `「${file}」` : '这个包'));
+  if (/要求登录|未认证/.test(raw)) {
+    const base = AUTH_TEXT(what || (file === '版本清单' ? '新版本' : file ? `「${file}」` : '这个包'));
+    // R63：借 Edge 登录也试过了还没查到——补一句用户下一步能做的事。
+    const m = /借 Edge 登录也没查到：(.+)$/.exec(raw);
+    return m ? `${base}。Hub 也试过借本机 Edge 的登录去查，没成（${m[1].replace(/（5 分钟内自动重试）$/, '')}）：请在 Edge 里登录一次内源（打开内源项目页能看到自己的名字即可），再点「检查更新」` : base;
+  }
   // 清单读到了但签名缺失 / 不对 / 版本对不上：内源是连着的，不提示查网络（R29 审查 #3）。
   if (/没有签名|签名不对|没有通过签名校验|附带的清单|主版本跳得太多/.test(raw)) return `公司内源上的版本清单还在同步签名或没通过校验（${raw}），请稍后再试，或点下方「下载完整安装包」；一直如此请点「一键反馈」`;
   if (/未启用|已关闭/.test(raw)) return '公司内源已关闭（排查开关 AI_HUB_OPENX=0），去掉这个开关后重启 Hub 再试';
@@ -289,8 +350,8 @@ function indexLooksStale(records) {
 function projectSlugFromConfig() {
   try { return decodeURIComponent(new URL(CONFIG.projectPage).pathname.split('/').filter(Boolean)[0] || ''); } catch (_) { return ''; }
 }
-async function listPage({ fetchImpl, api, projectId, page, timeoutMs, signal = null, indexId = state.indexId }) {
-  if (state.indexMode && page > 1) return { records: [], total: 0 };
+async function listPage({ fetchImpl, api, projectId, page, timeoutMs, signal = null, indexId = state.indexId, onLogin = null, now = Date.now }) {
+  if ((state.indexMode || state.loginMode) && page > 1) return { records: [], total: 0 };
   let indexError = null;
   if (page === 1 && indexId) {
     try {
@@ -301,7 +362,16 @@ async function listPage({ fetchImpl, api, projectId, page, timeoutMs, signal = n
         return { records, total: records.length, index: true };
       };
       if (!indexLooksStale(records)) return useIndex();
-      try { return await listOnly({ fetchImpl, api, projectId, page, timeoutMs, signal }); } catch (_) { return useIndex(); }
+      try { return await listOnly({ fetchImpl, api, projectId, page, timeoutMs, signal }); }
+      catch (error) {
+        // R63：索引里一个程序版本都没有（明显不对）、列表又要求登录 → 借 Edge 登录查一次；没查到就以索引为准。
+        // 审查 P1：索引里有程序版本、只是不比本机新（本机已是最新版的常态）时不开 Edge，直接以索引为准。
+        if (isAuthError(error) && !records.some(appVersionOf) && !(signal && signal.aborted) && (loginLister || state.loginTry)) {
+          const r = await listViaLogin({ projectId, onLogin, now });
+          if (r.ok) return useLoginList(r);
+        }
+        return useIndex();
+      }
     } catch (error) {
       // 审查 P1-3 ②：外部取消、离线（域名解析不到、连接被拒等）、超时都直接按原样报，不再向同一个站点请求列表（免得等两遍）。
       if ((signal && signal.aborted) || isOfflineError(error) || isTimeoutError(error) || (error && error.name === 'AbortError')) throw error;
@@ -310,13 +380,19 @@ async function listPage({ fetchImpl, api, projectId, page, timeoutMs, signal = n
   }
   try { return await listOnly({ fetchImpl, api, projectId, page, timeoutMs, signal }); }
   catch (error) {
-    if (indexError && isAuthError(error) && !isAuthError(indexError)) throw authError('401', `未认证的请求；版本索引也没读到：${errText(indexError)}`);
-    throw error;
+    const base = indexError && isAuthError(error) && !isAuthError(indexError) ? authError('401', `未认证的请求；版本索引也没读到：${errText(indexError)}`) : error;
+    // R63：索引读不到、匿名列表要求登录 → 第三步借 Edge 登录查列表（没注入时，如纯 Node 单测与脚本，照旧报原因）。
+    if (page === 1 && isAuthError(error) && !(signal && signal.aborted) && (loginLister || state.loginTry)) {
+      const r = await listViaLogin({ projectId, onLogin, now });
+      if (r.ok) return useLoginList(r);
+      throw loginFailedError(base, r.reason);
+    }
+    throw base;
   }
 }
 async function listOnly({ fetchImpl, api, projectId, page, timeoutMs, signal }) {
   const data = await getJson(fetchImpl, `${api}by_project_id?projectId=${projectId}&currentPage=${page}&pageSize=${LIST_PAGE_SIZE}`, signal, timeoutMs);
-  if (page === 1) state.indexMode = false;
+  if (page === 1) { state.indexMode = false; state.loginMode = false; }
   if (!Array.isArray(data.records)) throw new Error('openx 版本列表格式不对');
   if (typeof data.name === 'string' && data.name.trim()) state.projectName = data.name.trim();
   return { records: data.records.filter(r => r && r.id != null), total: Number(data.total) || 0 };
@@ -332,7 +408,7 @@ async function loadHead({ fetchImpl, api, projectId, timeoutMs, now }) {
   if (state.list && now() - state.listAt <= LIST_TTL_MS) return state.list;
   if (state.head && now() - state.headAt <= LIST_TTL_MS) return state.head;
   if (!state.heading) {
-    state.heading = listPage({ fetchImpl, api, projectId, page: 1, timeoutMs }).then(p => keepHead(p, now))
+    state.heading = listPage({ fetchImpl, api, projectId, page: 1, timeoutMs, now }).then(p => keepHead(p, now))
       .finally(() => { state.heading = null; });
   }
   return state.heading;
@@ -347,10 +423,10 @@ async function loadList({ fetchImpl, api, projectId, timeoutMs, now }) {
   if (!state.listing) {
     state.listing = (async () => {
       const first = state.head && now() - state.headAt <= LIST_TTL_MS ? state.head
-        : keepHead(await listPage({ fetchImpl, api, projectId, page: 1, timeoutMs }), now);
+        : keepHead(await listPage({ fetchImpl, api, projectId, page: 1, timeoutMs, now }), now);
       const got = new Map();
       let partial = '';
-      if (state.indexMode) { /* 版本索引一次就是全量（R55），不再翻页 */ }
+      if (state.indexMode || state.loginMode) { /* 版本索引、借 Edge 登录查到的列表一次就是全量（R55 / R63），不再翻页 */ }
       else if (state.headTotal) {
         const pages = Math.min(LIST_MAX_PAGES, Math.ceil(state.headTotal / LIST_PAGE_SIZE));
         const queue = Array.from({ length: Math.max(0, pages - 1) }, (_, i) => i + 2);
@@ -417,11 +493,15 @@ function downText() {
 // 排错信息（给界面「复制排错信息」用）：状态、最近一次失败原因和时间。不含地址与凭据。
 function diagnostics({ now = Date.now } = {}) {
   return { reachability: reachability({ now }), down: state.down || null,
-    listAgeSec: state.okAt ? Math.round((now() - state.okAt) / 1000) : null, lastReason: state.lastReason || '' };
+    listAgeSec: state.okAt ? Math.round((now() - state.okAt) / 1000) : null, lastReason: state.lastReason || '', login: state.loginInfo || null };
 }
 // 用户点「重测」：清掉「5 分钟内不再试」和「这个文件上次校验没过」的标记，马上真的去连一次。
 // 2026-11-25：用户手动「检查更新」时同时作废版本列表缓存（原先要等 10 分钟，补传清单后仍查不到新版）。
-function clearDown() { state.unreachableUntil = 0; state.bad.clear(); state.listAt = 0; state.headAt = 0; state.okAt = 0; }
+// R63：relogin（用户手动检查更新）时也作废已结束的那次 Edge 登录查询、真的再试；在途的那次不打断，接着用它的结果。
+function clearDown({ relogin = false } = {}) {
+  state.unreachableUntil = 0; state.bad.clear(); state.listAt = 0; state.headAt = 0; state.okAt = 0;
+  if (relogin && state.loginTry && state.loginTry.settled) state.loginTry = null;
+}
 
 // 内源现在的状态：up（10 分钟内连上过）/ down（5 分钟内连不上过）/ unknown（还没探测）。
 function reachability({ now = Date.now } = {}) {
@@ -546,12 +626,22 @@ async function fetchManifest({ fetchImpl, validate, signal, currentVersion, publ
   const slow = () => result(false, { reason: `${budget / 1000} 秒内没读完内源版本清单`, slow: true });
   if (budget <= 0) return result(false, { reason: '没有剩余时间读内源版本清单' });
   const { compareVersions } = require('./manifest');
-  const deadline = startedAt + budget;
+  let deadline = startedAt + budget;
   const left = () => Math.max(1, deadline - now());
   // 总预算：到点或外部取消时一起中断所有在途请求。
   const ac = new AbortController();
   let timer, stop;
   const overBudget = new Promise(resolve => { stop = resolve; timer = setTimeout(() => { ac.abort(); resolve('timeout'); }, budget); });
+  // R63：走到「借 Edge 登录查列表」时，在剩余预算上再加登录这一步的时间（只加一次），不让后台 8 秒预算把登录截断。
+  let extended = false;
+  // 审查 P2：从现在起算，登录预算取 AI_HUB_OPENX_LOGIN_MS 与默认值的较大者，再留 5 秒给关 Edge 和读清单、验签。
+  const extend = ms => {
+    if (extended || ac.signal.aborted) return;
+    extended = true;
+    deadline = Math.max(deadline, now() + Math.max(ms, Number(env.AI_HUB_OPENX_LOGIN_MS) || 0) + LOGIN_TAIL_MS);
+    clearTimeout(timer);
+    timer = setTimeout(() => { ac.abort(); stop('timeout'); }, Math.max(1, deadline - now()));
+  };
   // 外部取消（用户点了取消、体检到点）：立刻返回，不等列表请求自己超时。
   const onAbort = () => { ac.abort(); stop('cancel'); };
   if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
@@ -568,7 +658,7 @@ async function fetchManifest({ fetchImpl, validate, signal, currentVersion, publ
       // 10 分钟内的完整列表或第 1 页缓存能用就用；否则只取第 1 页。
       if (state.list && now() - state.listAt <= LIST_TTL_MS) list = state.list;
       else if (state.head && now() - state.headAt <= LIST_TTL_MS) list = state.head;
-      else list = keepHead(await listPage({ fetchImpl, api, projectId, page: 1, timeoutMs: left() + 1000, signal: ac.signal }), now);
+      else list = keepHead(await listPage({ fetchImpl, api, projectId, page: 1, timeoutMs: left() + 1000, signal: ac.signal, onLogin: extend, now }), now);
     }
     catch (error) {
       // 外部取消（用户点取消、体检到点）不算连不上，不标 down（R44 审查 P1-3）。
@@ -805,9 +895,10 @@ async function resolveDownloadPageUrl({ fetchImpl, api = DEFAULT_API, projectId 
 
 function _reset({ indexId, localVersion } = {}) {
   state = freshState();
+  loginLister = null;
   if (indexId !== undefined) state.indexId = Number(indexId) || 0;
   if (localVersion !== undefined) state.localVersion = normVersion(localVersion);
   verifiedReleases.clear();
 }
 
-module.exports = { isAuthError, parseIndex, INDEX_MARK, INDEX_RELEASE_ID, indexIdFromEnv, indexOverrideFromEnv, loadIndex, setLocalVersion, AUTH_TEXT, active, userReason, NETWORK_HINT, findLatestFull, listAppReleases, RELEASES_MAX, fetchManifest, MANIFEST_BUDGET_MS, MANUAL_MANIFEST_BUDGET_MS, OFFLINE_TEXT, OFFLINE_PROXY_TEXT, slowText, isOfflineError, isProxyError, diagnostics, clearDown, EDITION_ON, releaseName, memberReleaseName, isMemberRelease, find, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, projectName, downloadPageUrl, resolveDownloadPageUrl, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS, LIST_TIMEOUT_MS, LIST_PAGE_SIZE };
+module.exports = { setLoginLister, LOGIN_BUDGET_MS, LOGIN_REUSE_MS, isAuthError, parseIndex, INDEX_MARK, INDEX_RELEASE_ID, indexIdFromEnv, indexOverrideFromEnv, loadIndex, setLocalVersion, AUTH_TEXT, active, userReason, NETWORK_HINT, findLatestFull, listAppReleases, RELEASES_MAX, fetchManifest, MANIFEST_BUDGET_MS, MANUAL_MANIFEST_BUDGET_MS, OFFLINE_TEXT, OFFLINE_PROXY_TEXT, slowText, isOfflineError, isProxyError, diagnostics, clearDown, EDITION_ON, releaseName, memberReleaseName, isMemberRelease, find, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, projectName, downloadPageUrl, resolveDownloadPageUrl, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS, LIST_TIMEOUT_MS, LIST_PAGE_SIZE };

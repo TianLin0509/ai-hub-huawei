@@ -26,3 +26,15 @@ test('分类、来源勾选、搜索三者叠加筛选', () => {
   assert.deepEqual(filterItems(items, { query: 'B-PPT' }).map(i => i.id), [2]);
   assert.deepEqual(filterItems(items, { category: 'office', query: '仿真' }), []);
 });
+
+test('来源状态行：没装、某一路失败、员工助手没技能，各给一行原因和重试', () => {
+  const { sourceNotices } = require('../renderer/skill-plaza-page');
+  assert.deepEqual(sourceNotices({ weclaw: { present: true, count: 3 }, local: { count: 2 }, agentcenter: { present: false, reason: 'x' } }), [], '都好、只是没装 CodeAgent：不打扰');
+  const none = sourceNotices({ weclaw: { present: false } });
+  assert.equal(none.length, 1);
+  assert.equal(none[0].retry, '重新查找');
+  const bad = sourceNotices({ weclaw: { present: true, error: '超时' }, local: { error: '没读完' }, agentcenter: { present: true, error: '坏了' } });
+  assert.deepEqual(bad.map(b => [b.key, b.bad]), [['weclaw', true], ['local', true], ['agentcenter', true]]);
+  assert.match(bad[0].text, /超时/);
+  assert.equal(sourceNotices({ weclaw: { present: true, count: 0, reason: '登录一次' } })[0].bad, false);
+});

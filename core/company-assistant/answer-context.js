@@ -123,7 +123,7 @@ function looksLike(text) {
 // 2026-11-12 排序改为 群里 @我 > 私聊超过 2 小时没回 > 其他私聊：100 天真实数据里私聊回复中位 0.4 分钟，群 @我 94 次只有 41 次 30 分钟内跟进，漏点在群 @。
 function awaitingBlock(snapshot, { now, settings, priority }) {
   const all = D.awaiting(snapshot, settings).map(m => {
-    const list = (snapshot.messages || {})[m.conv] || [], i = list.findIndex(x => x.sourceId === m.sourceId);
+    const list = D.convRows(snapshot, settings, m.conv), i = list.findIndex(x => x.sourceId === m.sourceId);
     const repliedLater = m.group && list.slice(i + 1).some(x => x.mine), tag = looksLike(m.text);
     return { m, list, i, repliedLater, tag, score: priority(m) * 4 + (m.group ? (m.atMe ? 3 : 0) : 1 + (now - (m.since || now) > 2 * 3600000 ? 1 : 0)) + Math.min(3, (now - (m.since || now)) / (6 * 3600000)) - (repliedLater ? 5 : 0) - (tag === '像是已了结' ? 8 : 0) };
   }).sort((a, b) => b.score - a.score);

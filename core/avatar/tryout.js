@@ -101,9 +101,19 @@ class Tryouts {
       const file = 'task-' + token + '.json'; fs.writeFileSync(path.join(dir, file), JSON.stringify(material, null, 1), 'utf8');
       const deps = f.sessions.d;
       runner = new AgentSessions({ ...deps, createSession: (kind, options) => { sessionId = options.id; return deps.createSession(kind, options); } });
-      session = await runner.ensure({ ...av, id: av.id + ':tryout:' + token, name: av.name + ' [试答，不发送]' }, null, dir);
+      const askOnce = async () => {
+        session = await runner.ensure({ ...av, id: av.id + ':tryout:' + token, name: av.name + ' [试答，不发送]' }, null, dir, { runCwd: f.runCwd(owner, dir) });
+        check();
+        return runner.ask(session, file, { isCurrent: current, dir });
+      };
+      let started = f.now(), raw;
+      // 新建后先试答、巡检还没被拦过时，试答也可能先撞上外部模型管控：和巡检一样沿用主页的代码仓库，换目录重答一次（R64 审查 P1）。
+      try { raw = await askOnce(); } catch (e) {
+        if (e.code !== 'AVATAR_DIR_POLICY' || e.inRepo || !f.adoptTrustedCwd(owner)) throw e;
+        if (sessionId) { const old = sessionId; sessionId = ''; await runner.close(old); }
+        check(); started = f.now(); raw = await askOnce();
+      }
       check();
-      const started = f.now(), raw = await runner.ask(session, file, { isCurrent: current }); check();
       if ((f.find(owner, av.id).av.rulesVersion || 0) !== (av.rulesVersion || 0)) throw invalid('纠错口径已更新，请用新口径再试答一次');
       const result = F.parseResults(raw).get(item.id);
       if (!result || !['draft', 'remind', 'skip'].includes(result.action)) throw new Error('模型没有返回有效试答，请重试或检查模型');

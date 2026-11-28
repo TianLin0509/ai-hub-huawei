@@ -29,7 +29,8 @@ test('1 守护独立于助理启动，暂停助理保留已启用的守护，定
   }
   for (const enabled of [false, true]) {
     let closed = 0;
-    CompanyAssistant.prototype.pause.call({ started: true, stopTimers() {}, meetings: {}, phone: { close() {} }, rooms: { settings: () => ({ enabled }), close() { closed++; } }, lanes: { ppt: { queue: [] } } });
+    CompanyAssistant.prototype.pause.call({ started: true, stopTimers() {}, meetings: {}, phone: { close() {} }, rooms: { settings: () => ({ enabled }), close() { closed++; } }, lanes: { ppt: { queue: [] } },
+      archive: { stop() {} }, stopPausableJobs() {}, retirePausedSessions() {}, lanesIdle: () => true });
     assert.equal(closed, enabled ? 0 : 1);
   }
   let intervals = 0;
@@ -203,7 +204,7 @@ test('8 桌宠提示开启后复用按钮，点确认才开启并发送原问题
   assert.deepEqual(sent[1], { text: '原问题', enable: true });
   const ask = section('main.js', '        askAssistant: (text,', '        getPages:');
   let enabled = false; const called = [];
-  const callbacks = vm.runInNewContext(`({ ${ask} })`, { companyAssistantService: { start() { called.push('start'); }, ask(text) { called.push(text); } }, optionalFeatures: { get: () => enabled, set(_key, value) { enabled = value; } }, sendToRenderer() {}, optionalFeatureList: () => [] });
+  const callbacks = vm.runInNewContext(`({ ${ask} })`, { companyAssistantService: { start() { called.push('start'); }, ask(text) { called.push(text); } }, optionalFeatures: { get: () => enabled, set(_key, value) { enabled = value; } }, sendToRenderer() {}, broadcastOptionalFeatures() {}, optionalFeatureList: () => [] });
   assert.throws(() => callbacks.askAssistant('原问题'), error => error.code === 'ASSISTANT_DISABLED'); assert.equal(enabled, false);
   callbacks.askAssistant('原问题', { enableAssistant: true }); assert.equal(enabled, true); assert.deepEqual(called, ['start', '原问题']);
   const replies = [];

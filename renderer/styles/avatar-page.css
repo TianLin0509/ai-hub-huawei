@@ -160,3 +160,5 @@ button.avx-ch{border:0;cursor:pointer;font:inherit;font-size:12px}
 .avx-t tr.off td{color:var(--t3)}
 .avx-t td small{color:var(--t3);font-size:11.5px}
 .avx-learn-foot{flex:none;margin:0;color:var(--t3);font-size:12px;text-align:right}
+/* R64：群和人的搜索多选——名字过长截断，附注（私聊、@我 次数）用浅色小字。 */
+.avx-pk{max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.avx-pk small{color:var(--t3);font-size:11px;margin-left:4px}.avx-pk.on small{color:inherit;opacity:.75}

@@ -59,7 +59,10 @@ function dueNotices({ snapshot, settings, now, commitments = [], sessionId = nul
   // 4. 等你回复太久（上班时间里才提醒）
   const waitMs = (Number(settings.waitHours) || 4) * 3600000;
   if (!(Number(settings.digestHours) > 0) && minute >= 9 * 60 && minute < 20 * 60) {
+    const selfIds = D.snapshotSelfIds(snapshot, settings);
     for (const m of D.awaiting(snapshot, settings, { now })) {
+      // 群里 @我 之后我已经在群里接过话：今天栏照样列着待核对，不再弹提醒（R66）。
+      if (m.group && D.repliedAfter(D.markSelf((snapshot.messages || {})[m.conv] || [], selfIds), m)) continue;
       if (m.level === 'settled' || done.has(m.sourceId) || !Number.isFinite(m.since) || now - m.since < waitMs) continue;
       add({ id: `await:${m.conv}:${m.key}`, kind: 'awaiting-reply', title: `${D.short(m.sender, 12)} ${m.needsReplyReview ? '@你的消息已过' : '等你回复'} ${Math.round((now - m.since) / 3600000)} 小时`,
         text: `${m.group ? '群「' + m.convName + '」' : '私聊'} ${D.clock(m.since)}：${D.short(m.text, 120)}${m.aiReason ? '\nAI：' + m.aiReason : m.needsReplyReview ? '\n回复关联不明确，请核对是否已处理。' : ''}`, detail: { source: m.sourceId } });

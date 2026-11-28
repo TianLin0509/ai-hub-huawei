@@ -94,6 +94,13 @@ function registerAvatarIpc(ipcMain, getService, { dialog = null, getWindow = () 
     relogin: (s, r) => s.recheckLogin({ retryTick: r?.retryTick === true, avatarId: id(r), itemId: item(r) }),
     recheck: (s, r) => s.recheckLogin({ retryTick: r?.retryTick === true, avatarId: id(r), itemId: item(r) }),
     session: (s, r) => s.sessionOf(id(r)),
+    // 分身会话的启动目录（R64）：选一个公司代码仓库，或恢复默认（r.reset）。
+    'work-cwd': async (s, r) => {
+      if (r?.reset) return s.setWorkCwd('');
+      const got = await dialog.showOpenDialog(getWindow(), { title: '选一个公司代码仓库目录（你在主页用 CodeAgent 打开过的就行）', properties: ['openDirectory'] });
+      if (got.canceled || !got.filePaths?.[0]) return { ...s.status(), canceled: true };
+      return s.setWorkCwd(got.filePaths[0]);
+    },
     'pick-source': async (s, r) => {
       const dir = r?.type === 'dir', got = await dialog.showOpenDialog(getWindow(), { title: dir ? '选择资料文件夹' : '选择资料文件', properties: [dir ? 'openDirectory' : 'openFile'] });
       if (got.canceled || !got.filePaths?.[0]) return { ok: true, source: null };

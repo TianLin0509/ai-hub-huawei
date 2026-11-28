@@ -109,7 +109,14 @@ class RoomBooking {
     const componentOpenTime = helper?.preferences?.['抢订设置']?.['开放时间'] || helper?.rules?.['抢订设置']?.['开放时间'] || null;
     const schedule = S.resolveSchedule({ saved: this.settings().schedule, inferred, componentOpenTime });
     const caps = Array.isArray(helper?.capabilities) ? helper.capabilities : [];
-    return { ...schedule, componentOpenTime: S.normalizeOpenTime(componentOpenTime), advanceDaysSupported: caps.includes('advance-days') };
+    const advanceDaysSupported = caps.includes('advance-days');
+    // 组件能抢的最大天数：不认提前天数的组件只抢 7 天；认但没报上限的旧组件是 14 天；新组件自己报 advanceDaysMax。
+    const reported = helper?.advanceDaysMax;
+    const componentMaxDays = !advanceDaysSupported ? S.DEFAULT_ADVANCE_DAYS
+      : Number.isInteger(reported) && reported >= S.MIN_DAYS ? Math.min(reported, S.MAX_DAYS) : S.LEGACY_COMPONENT_MAX_DAYS;
+    const componentOk = advanceDaysSupported ? schedule.advanceDays <= componentMaxDays : schedule.advanceDays === S.DEFAULT_ADVANCE_DAYS;
+    return { ...schedule, componentOpenTime: S.normalizeOpenTime(componentOpenTime), advanceDaysSupported, componentMaxDays, componentOk,
+      minDays: S.MIN_DAYS, maxDays: S.MAX_DAYS };
   }
   scheduleState(helper) {
     const schedule = this.schedule(helper), openAt = S.nextOpenAt(this.a.now(), schedule.openTime);
@@ -128,9 +135,11 @@ class RoomBooking {
   // 规则不是 7 天而组件只会抢 7 天：启动守护、立即抢一次都会白跑，在准备组件之前就拒绝。测试填表不提交，照常放行。
   checkSchedule(op) {
     const s = this.schedule();
-    if (['start', 'once'].includes(op) && s.advanceDays !== S.DEFAULT_ADVANCE_DAYS && !s.advanceDaysSupported) {
+    if (['start', 'once'].includes(op) && !s.componentOk) {
       const who = s.source === 'campus' ? `${s.campus}园区是提前 ${s.advanceDays} 天放号` : `你设置的是提前 ${s.advanceDays} 天`;
-      throw new Error(`${who}，当前会议室组件只会抢 7 天后的会议室，按这个规则抢不到；需要更新会议室组件后才能按 ${s.advanceDays} 天抢。本次未启动，可在「设置 · 抢订节奏」改回 7 天`);
+      const can = s.advanceDaysSupported ? `最多只能抢 ${s.componentMaxDays} 天后的会议室` : '只会抢 7 天后的会议室';
+      const back = s.advanceDaysSupported ? `改成 ${s.componentMaxDays} 天以内` : '改回 7 天';
+      throw new Error(`${who}，当前会议室组件${can}，按这个规则抢不到；需要更新会议室组件后才能按 ${s.advanceDays} 天抢。本次未启动，可在「设置 · 抢订节奏」${back}`);
     }
     return s;
   }
@@ -139,7 +148,8 @@ class RoomBooking {
     const patch = {};
     // 组件开放时刻已知且不同，或不知道组件当前值而规则来自园区/用户设置时才下发；默认规则不动组件原设置。
     if (s.componentOpenTime ? s.componentOpenTime !== s.openTime : s.source !== 'default') patch['开放时间'] = s.openTime;
-    if (s.advanceDaysSupported) patch['提前天数'] = s.advanceDays;
+    // 超出组件上限的天数不下发：旧组件会整条拒收；启动与立即抢一次已在 checkSchedule 拦下。
+    if (s.advanceDaysSupported && s.componentOk) patch['提前天数'] = s.advanceDays;
     if (Object.keys(patch).length) await this.command('configure', { '抢订设置': patch }, { user: true, internal: true });
   }
   details() {

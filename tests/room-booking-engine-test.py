@@ -50,7 +50,10 @@ class BookingTests(unittest.TestCase):
             def reload(self, **kwargs):
                 self.round += 1
                 self.reloads += 1
-            def evaluate(self, script, arg):
+            form_date = None
+            def evaluate(self, script, arg=None):
+                if script == getattr(engine, 'JS_FORM_DATE', None):
+                    return self.form_date
                 if script == engine.JS_ROOM_Y:
                     self.state = rounds[self.round][ROOMS.index(arg)]
                     return None if self.state == 'missing' else 100
@@ -136,7 +139,7 @@ class BookingTests(unittest.TestCase):
             qt_modules = {'PyQt5': qt, 'PyQt5.QtCore': qt.QtCore}
         with patch.dict(sys.modules, qt_modules):
             adapter = source_module('hub_control')
-            for days in (7, 3):
+            for days in (7, 3, 120):
                 with self.subTest(days=days), patch.object(jobs, 'timedelta', timedelta):
                     b, runner, _, _ = self.rig([('free', 'free')])
                     if days != 7:
@@ -146,6 +149,47 @@ class BookingTests(unittest.TestCase):
                     runner.grab = Mock()
                     runner.run_once(test=True)
                     self.assertEqual(runner.grab.call_args.args[1], date(2026, 11, 16) + timedelta(days=days))
+
+    def test_target_date_120_days_ahead_crosses_months_and_year(self):
+        qt_modules = {}
+        try:
+            import PyQt5
+        except ImportError:
+            qt = ModuleType('PyQt5')
+            qt.QtCore = ModuleType('PyQt5.QtCore')
+            qt.QtCore.QTimer = Mock()
+            qt_modules = {'PyQt5': qt, 'PyQt5.QtCore': qt.QtCore}
+        with patch.dict(sys.modules, qt_modules), patch.object(jobs, 'timedelta', timedelta):
+            adapter = source_module('hub_control')
+            b, runner, _, _ = self.rig([('free', 'free')])
+            b.cfg['抢订设置']['提前天数'] = 120
+            adapter.install_advance_days(SimpleNamespace(cfg=b.cfg))
+            runner.clock = SimpleNamespace(now=lambda: datetime(2026, 11, 28, 15))
+            runner.grab = Mock()
+            runner.run_once(test=True)
+            self.assertEqual(runner.grab.call_args.args[1], date(2027, 3, 28))
+
+    def test_form_date_rejected_by_site_stops_before_submit(self):
+        b, runner, logs, _ = self.rig([('free', 'free')])
+        b.page.form_date = '2026/11/21'
+        submitted = []
+        b.submit = lambda *args: submitted.append(args) or ('success', '预定成功')
+        with patch.object(jobs, 'Booker', return_value=b), patch.object(C, 'add_history'):
+            result = runner.grab(None, date(2026, 11, 20), test=False)
+        self.assertEqual(result['status'], '错误')
+        self.assertIn('没有接受目标日期 2026/11/20', result['note'])
+        self.assertIn('提前天数', result['note'])
+        self.assertEqual(submitted, [])
+
+    def test_form_date_matching_or_unreadable_still_books(self):
+        for shown in ('2026/11/20', '2026-11-20', '2026/11/20 周五', None, '', '明天'):
+            with self.subTest(shown=shown):
+                b, runner, _, _ = self.rig([('free', 'free')])
+                b.page.form_date = shown
+                b.submit = lambda *args: ('success', '预定成功')
+                with patch.object(jobs, 'Booker', return_value=b), patch.object(C, 'add_history'):
+                    result = runner.grab(None, date(2026, 11, 20), test=False)
+                self.assertEqual((result['status'], result['room']), ('成功', ROOMS[0]))
 
     def test_diagnostic_is_bounded_and_preserves_missing_reason(self):
         result, logs, _ = self.run_booking([('missing', 'taken')])

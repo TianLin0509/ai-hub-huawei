@@ -25,6 +25,7 @@ function machine(name, ip, net, options = {}) {
     createShare: async () => { throw new Error('不该被调用'); },
     boxDir: s => path.join(s.path, 'ai-hub-community'),
     peerBoxDir: (peerIp, share) => { const n = net[peerIp]; if (!n || n.name !== share) return path.join(os.tmpdir(), 'no-such-host-' + peerIp); return path.join(n.path, 'ai-hub-community'); },
+    inboundSmbPeers: async () => (options.inbound ? options.inbound() : []),
     powershell: async script => { const m = script.match(/net view \\\\\\\\([\d.]+)|net view \\\\([\d.]+)/); const host = m && (m[1] || m[2]); return host && net[host] ? `共享名  类型\r\n${net[host].name}   Disk\r\n命令成功完成。` : ''; },
   };
   const events = [], notices = [], prompts = [], warnings = [];
@@ -235,7 +236,7 @@ test('固定根校验：恶意邀请、成员及分享标识和路径被拒绝�
   assert.ok(B.warnings.length >= shares.length);
 });
 
-test('邀请：12 位随机码、8 位旧格式解析，已使用和过期的密文实际删除', async () => {
+test('邀请：12 位随机码、8 位旧格式解析，用过的仍可多人用，过期的密文实际删除', async () => {
   const net = {}, A = machine('邀请端', '10.3.1.1', net), B = machine('入队端', '10.3.1.2', net);
   await A.h['detect-share'](); await B.h['detect-share']();
   const { crew } = await A.h['new-crew']({ name: '邀请测试' });
@@ -251,7 +252,8 @@ test('邀请：12 位随机码、8 位旧格式解析，已使用和过期的密
   await B.h.join({ text: `地址 \\\\10.3.1.1\\S_邀请端 邀请码 ${seal.prettyCode(oldCode)}` });
   await turn();
   await A.svc.pollOnce();
-  assert.equal(fs.existsSync(file), false, '发现入队后删除邀请密文');
+  assert.ok(A.svc._state().crews[0].members.some(m => m.id === B.svc._state().me.id), '按邀请填的 IP 找到入队的人');
+  assert.equal(fs.existsSync(file), true, '一条邀请到期前可多人使用');
   const expired = await A.h.invite({ crewId: crew.id });
   const expiredFile = path.join(path.dirname(file), seal.inviteId(expired.code) + '.bin');
   assert.equal(fs.existsSync(expiredFile), true);
@@ -551,7 +553,9 @@ test('多团队邀请分别节流，过期分享撤回落盘并发布', async ()
   for (const name of ['团队一', '团队二']) {
     await A.h['new-crew']({ name }); const crew = A.svc._state().crews.at(-1); crews.push(crew);
     crew.invites.push({ inviteId: require('node:crypto').randomBytes(16).toString('hex'), ip: '10.6.1.2', share: 'S_成员端', at: Date.now() });
-    fs.mkdirSync(path.join(B.shareDir, 'ai-hub-community', 'crews', crew.id, B.svc._state().me.id), { recursive: true });
+    const dir = path.join(B.shareDir, 'ai-hub-community', 'crews', crew.id, B.svc._state().me.id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'card.bin'), seal.sealJson(crew.key, { v: 1, id: B.svc._state().me.id, nick: '成员端' }));
   }
   await A.svc.pollOnce();
   assert.ok(crews.every(c => c.members.some(m => m.id === B.svc._state().me.id)));
@@ -599,4 +603,151 @@ test('自动重绘保留焦点、已失焦修改和未提交回信草稿', () =>
   input.value = '未提交的签名'; assert.equal(hasPendingEdits(root), true);
   input.defaultValue = input.value; assert.equal(hasPendingEdits(root), false);
   input.dataset.slot = 'draft'; assert.equal(hasPendingEdits(root), true);
+});
+
+// 2026-11-28 用户反馈：建团队后几个人加入了，队长一个都看不到（新成员看得到老成员，反过来看不到）。
+// 实际用法是一条邀请发到群里、不填 IP；队长只能靠「谁正连着我的共享」认出入队的人。
+test('一条邀请多人加入、不填 IP：队长和老成员都能看到每个新成员', async () => {
+  const net = {};
+  const joinerIps = ['10.9.1.2', '10.9.1.3', '10.9.1.4'];
+  const A = machine('队长', '10.9.1.1', net, { inbound: () => joinerIps });
+  const Js = joinerIps.map((ip, i) => machine('队员' + (i + 1), ip, net));
+  await A.h['detect-share'](); for (const J of Js) await J.h['detect-share']();
+  const { crew } = await A.h['new-crew']({ name: '一条邀请' });
+  const inv = await A.h.invite({ crewId: crew.id }); // 不填名字和 IP，发到群里
+  for (const J of Js) await J.h.join({ text: inv.message });
+  await A.svc.pollOnce();
+  const snapA = A.svc.snapshot().crews[0];
+  assert.deepEqual(snapA.members.filter(m => !m.me).map(m => m.nick).sort(), ['队员1', '队员2', '队员3']);
+  // 老成员（先入队的队员1）也能经队长的名单看到后来的人
+  await Js[0].svc.pollOnce(); await Js[0].svc.pollOnce();
+  assert.equal(Js[0].svc.snapshot().crews[0].members.length, 4);
+  // 名片读到后在线
+  await A.svc.pollOnce();
+  assert.ok(A.svc.snapshot().crews[0].members.filter(m => !m.me).every(m => m.online));
+});
+
+test('发现入队：别的电脑伪造的目录（解不开名片）不会被当成成员', async () => {
+  const net = {};
+  const A = machine('队长二', '10.9.2.1', net, { inbound: () => ['10.9.2.9'] });
+  const X = machine('路人', '10.9.2.9', net);
+  await A.h['detect-share'](); await X.h['detect-share']();
+  const { crew } = await A.h['new-crew']({ name: '防伪造' });
+  await A.h.invite({ crewId: crew.id });
+  const fake = path.join(X.shareDir, 'ai-hub-community', 'crews', crew.id, 'abcdef0123456789');
+  fs.mkdirSync(fake, { recursive: true });
+  fs.writeFileSync(path.join(fake, 'card.bin'), seal.sealJson(seal.newKey(), { v: 1, id: 'abcdef0123456789', nick: '冒充' }));
+  await A.svc.pollOnce();
+  assert.equal(A.svc.snapshot().crews[0].members.length, 1);
+});
+
+test('退出：其他人读到退出名片后都把他移出，别人名单里的旧记录不会再拉回来', async () => {
+  const net = {}, ips = ['10.9.3.2', '10.9.3.3'];
+  const A = machine('队长三', '10.9.3.1', net, { inbound: () => ips });
+  const [B, C] = ips.map((ip, i) => machine('成员' + (i + 1), ip, net));
+  for (const M of [A, B, C]) await M.h['detect-share']();
+  const { crew } = await A.h['new-crew']({ name: '退出测试' });
+  const inv = await A.h.invite({ crewId: crew.id });
+  await B.h.join({ text: inv.message }); await C.h.join({ text: inv.message });
+  await A.svc.pollOnce();
+  for (const M of [B, C]) { await M.svc.pollOnce(); await M.svc.pollOnce(); }
+  assert.equal(B.svc.snapshot().crews[0].members.length, 3);
+  await C.h.leave({ crewId: crew.id });
+  await A.svc.pollOnce(); await B.svc.pollOnce(); await B.svc.pollOnce();
+  const cId = C.svc._state().me.id;
+  for (const M of [A, B]) assert.ok(!M.svc.snapshot().crews[0].members.some(m => m.id === cId));
+  assert.equal(fs.existsSync(path.join(mailbox(C, crew.id), 'feed.bin')), false, '退出后信件删掉，只留退出名片');
+});
+
+test('在线：对方电脑时钟慢 10 分钟，名片照常读到仍显示在线', async () => {
+  const { A, B } = await pair();
+  B.advance(-10 * 60000); await B.svc.publishAll();
+  await A.svc.pollOnce();
+  assert.equal(A.svc.snapshot().crews[0].members.find(m => !m.me).online, true);
+});
+
+test('退出不复活：退出前生成的邀请里还有他，后来的人入队也不会把他拉回任何人的名单', async () => {
+  const net = {}, ips = ['10.9.4.2', '10.9.4.3', '10.9.4.4'];
+  const A = machine('队长四', '10.9.4.1', net, { inbound: () => ips });
+  const [B, C, D] = ips.map((ip, i) => machine('员' + (i + 1), ip, net));
+  for (const M of [A, B, C, D]) await M.h['detect-share']();
+  const { crew } = await A.h['new-crew']({ name: '不复活' });
+  const inv1 = await A.h.invite({ crewId: crew.id });
+  await B.h.join({ text: inv1.message }); await C.h.join({ text: inv1.message });
+  await A.svc.pollOnce();
+  const inv2 = await A.h.invite({ crewId: crew.id }); // 名单里已有 C
+  await C.h.leave({ crewId: crew.id });
+  for (const M of [A, B, C, D]) M.advance(31000); await A.svc.pollOnce(); await B.svc.pollOnce(); await B.svc.pollOnce();
+  delete net['10.9.4.3']; // C 退出后关机：后来的 D 读不到他的退出名片
+  await D.h.join({ text: inv2.message });
+  for (let k = 0; k < 3; k++) { for (const M of [A, B, C, D]) M.advance(31000); for (const M of [A, B, D]) await M.svc.pollOnce(); }
+  const cId = C.svc._state().me.id;
+  for (const M of [A, B, D]) assert.ok(!M.svc.snapshot().crews[0].members.some(m => m.id === cId), '已退出的人不应出现在名单里');
+  assert.equal(A.svc.snapshot().crews[0].members.length, 3);
+});
+
+test('对方有读不了的共享：不退避，接着试后面真正放信箱的共享', async () => {
+  const net = {};
+  const A = machine('队长五', '10.9.5.1', net, { inbound: () => ['10.9.5.2'] });
+  const J = machine('多共享', '10.9.5.2', net);
+  await A.h['detect-share'](); await J.h['detect-share']();
+  const { crew } = await A.h['new-crew']({ name: '多共享' });
+  const inv = await A.h.invite({ crewId: crew.id });
+  await J.h.join({ text: inv.message });
+  const bad = tmp('bad-share'); fs.mkdirSync(path.join(bad, 'ai-hub-community', 'crews'), { recursive: true });
+  fs.writeFileSync(path.join(bad, 'ai-hub-community', 'crews', crew.id), '不是目录');
+  const peerBoxDir = A.shareTools.peerBoxDir;
+  A.shareTools.peerBoxDir = (ip, share) => (share === 'Users' ? path.join(bad, 'ai-hub-community') : peerBoxDir(ip, share));
+  A.shareTools.powershell = async () => 'Users   Disk\r\nS_多共享   Disk\r\n';
+  await A.svc.pollOnce();
+  assert.equal(A.svc.snapshot().crews[0].members.length, 2);
+});
+
+test('老成员换了 IP：队长按入站连接认出同一个人并更新地址', async () => {
+  const net = {}; let inbound = ['10.9.6.2'];
+  const A = machine('队长六', '10.9.6.1', net, { inbound: () => inbound });
+  const B = machine('换网', '10.9.6.2', net);
+  await A.h['detect-share'](); await B.h['detect-share']();
+  const { crew } = await A.h['new-crew']({ name: '换 IP' });
+  await B.h.join({ text: (await A.h.invite({ crewId: crew.id })).message });
+  await A.svc.pollOnce();
+  assert.equal(A.svc.snapshot().crews[0].members.find(m => !m.me).ip, '10.9.6.2');
+  net['10.9.6.22'] = net['10.9.6.2']; delete net['10.9.6.2']; inbound = ['10.9.6.22'];
+  A.advance(31000); await A.svc.pollOnce();
+  const b = A.svc.snapshot().crews[0].members.find(m => !m.me);
+  assert.equal(A.svc.snapshot().crews[0].members.length, 2);
+  assert.equal(b.ip, '10.9.6.22');
+});
+
+test('退出后重新入队：即使队友电脑时钟快 10 分钟，也不会被别人的退出记录再踢出去', async () => {
+  const net = {}, ips = ['10.9.7.2', '10.9.7.3'];
+  const A = machine('队长七', '10.9.7.1', net, { inbound: () => ips });
+  const [B, C] = ips.map((ip, i) => machine('七' + (i + 1), ip, net));
+  for (const M of [A, B, C]) await M.h['detect-share']();
+  B.advance(10 * 60000); // B 的时钟快 10 分钟
+  const { crew } = await A.h['new-crew']({ name: '重入队' });
+  const inv = await A.h.invite({ crewId: crew.id });
+  await B.h.join({ text: inv.message }); await C.h.join({ text: inv.message });
+  const step = async () => { for (const M of [A, B, C]) M.advance(31000); for (const M of [A, B, C]) await M.svc.pollOnce(); };
+  await step(); await step();
+  await C.h.leave({ crewId: crew.id });
+  await step(); await step();
+  const cId = C.svc._state().me.id;
+  assert.ok(!B.svc.snapshot().crews[0].members.some(m => m.id === cId));
+  await C.h.join({ text: inv.message });
+  for (let k = 0; k < 4; k++) await step();
+  for (const M of [A, B]) assert.ok(M.svc.snapshot().crews[0].members.some(m => m.id === cId), '重新入队后应能看到');
+});
+
+test('入站发现：入队者信箱还没写好时先扑空，30 秒后再试就能找到，不被长时间冷却挡住', async () => {
+  const net = {};
+  const A = machine('队长八', '10.9.8.1', net, { inbound: () => ['10.9.8.2'] });
+  const J = machine('晚到', '10.9.8.2', net);
+  await A.h['detect-share'](); await J.h['detect-share']();
+  const { crew } = await A.h['new-crew']({ name: '扑空重试' });
+  const inv = await A.h.invite({ crewId: crew.id });
+  await A.svc.pollOnce(); // 这时对方还没入队：扑空
+  await J.h.join({ text: inv.message });
+  A.advance(31000); await A.svc.pollOnce();
+  assert.equal(A.svc.snapshot().crews[0].members.length, 2);
 });

@@ -115,7 +115,7 @@ test('停止排队中的一问：直接撤下，不影响正在答的和其他�
 test('助理页：等待行有「停止这一问」，已停止的写「已停止这一问」并可重问；主进程有对应入口', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'company-assistant-page.js'), 'utf8');
   assert.match(src, /data-ca="stop:\$\{esc\(id\)\}">停止这一问<\/button>/);
-  assert.match(src, /c\.stopped \? '已停止这一问'/);
+  assert.match(src, /c\.stopped \? esc\(c\.error \|\| '已停止这一问'\)/);
   assert.match(src, /call\('stop-chat', \{ id: arg \}\)/);
   const ipc = fs.readFileSync(path.join(__dirname, '..', 'main', 'ipc', 'company-assistant-handlers.js'), 'utf8');
   assert.match(ipc, /'stop-chat': async request => \(\{ ok: true, item: await service\.stopChat\(/);

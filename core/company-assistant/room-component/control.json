@@ -1,15 +1,15 @@
 {
   "app": "mishu-terminator",
-  "version": "2.1.6",
+  "version": "2.1.7",
   "shell": 1,
-  "date": "2026-11-22",
+  "date": "2026-11-28",
   "notes": [
-    "修复地域模糊匹配歧义及同城筛选遗留楼宇"
+    "提前抢订天数放宽到 1–120 天，提交前核对表单日期"
   ],
   "code": {
-    "file": "msz-code-2.1.6.zip",
-    "size": 82064,
-    "sha256": "82d377960db29d948eb632b0b04394a28b42e1b3aefebccd3ba8569a54ba16fe"
+    "file": "msz-code-2.1.7.zip",
+    "size": 82842,
+    "sha256": "3e98ef231882e4b1fb21cf3b0d2550187db0556512c46f7ed1f041670f071ed2"
   },
-  "signature": "6a2839c575412d478741dea2949550d191e951e139d344cd4a9ebd4a029150ec0509dcbb925b11d14a7cffaa02be49eb6f9a79f78231696326f15587a3a91000"
+  "signature": "7dcb9ffaf0add65a55cf4d1eea90c8370f1a99086b46562d41a9bb37e3d4e63e8864768b78424ec02b887a363609931ded2be19898a404b74c7c87197dd3c30a"
 }

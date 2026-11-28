@@ -123,8 +123,11 @@ from the WeLink CLI login. Rewriting the engine in JavaScript is a different
 project; this integration does not claim that migration or a real-company
 booking acceptance test.
 
-Advance days default to seven for existing settings and support 1–14 days when
-Hub supplies a site-specific rule. The adapter applies this to scheduling,
+Advance days default to seven for existing settings and support 1–120 days when
+Hub supplies a site-specific rule (components up to 2.1.6 accept 1–14; newer ones
+report `advanceDaysMax` and Hub refuses to start a rule beyond it). Before
+submitting, the engine checks the form still shows the target date, so a date the
+booking site will not accept stops with a clear message instead of booking another day. The adapter applies this to scheduling,
 immediate booking and room discovery without changing the standalone helper.
 
 Regression entry points: `tests/room-next-room-test.py` (also in `npm test`),

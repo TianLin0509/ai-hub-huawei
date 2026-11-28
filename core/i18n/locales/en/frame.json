@@ -847,5 +847,12 @@
   "已归档的会话请到下方“查看归档”找回": "Archived sessions are under View archive below",
   "团队 ·": "Team ·",
   "归档时长须在 1 小时到 365 天之间": "Idle time must be between 1 hour and 365 days",
-  "归档正在由其他窗口保存或存储不可写，请稍后重试": "Archive data is being saved by another window or storage is not writable; please retry shortly"
+  "归档正在由其他窗口保存或存储不可写，请稍后重试": "Archive data is being saved by another window or storage is not writable; please retry shortly",
+  "谁能打开：查询中…": "Who can open it: checking…",
+  "谁能打开：{0}": "Who can open it: {0}",
+  "。信件和文件都加密，别人只看得到文件名和大小；想收窄可在资源管理器里右键该文件夹 → 属性 → 共享 → 高级共享 → 权限，把 Everyone 换成 Authenticated Users，或改用一个只给同事的共享后点「重新检测」": ". Letters and files are encrypted, so others only see file names and sizes. To narrow it, right-click the folder in File Explorer → Properties → Sharing → Advanced Sharing → Permissions and replace Everyone with Authenticated Users, or switch to a share for colleagues only and click Re-detect",
+  "谁能打开：{0}（信件和文件都加密）": "Who can open it: {0} (letters and files are encrypted)",
+  "所有人（Everyone）都能打开": "anyone (Everyone)",
+  "已登录的同事能打开": "signed-in colleagues",
+  "没读到": "unknown"
 }

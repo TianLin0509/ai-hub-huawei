@@ -77,7 +77,11 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
   let schedDraft = { advanceDays: 7 }, schedChanged = false, pendingOp = '';
   const sched = () => state.schedule || { advanceDays: 7, openTime: draft.抢订设置.开放时间 || '12:00:00', source: 'default', text: '' };
   // 现有组件只抢 7 天后；规则不是 7 天且组件不支持时，按 Hub 算出的开抢时刻和目标日期显示，不拿组件的 7 天结果误导。
-  const schedBlocked = () => sched().advanceDays !== 7 && !sched().advanceDaysSupported;
+  // 当前组件能不能按这个提前天数抢：Hub 算好 componentOk；老 Hub 状态里没有就按旧规则（只认 7 天）。
+  const schedBlocked = () => typeof sched().componentOk === 'boolean' ? !sched().componentOk : sched().advanceDays !== 7 && !sched().advanceDaysSupported;
+  // 提前天数输入框的上限跟着 Hub（room-schedule.js MAX_DAYS）走，状态还没到时用同一个值兜底。
+  const maxDays = () => Number.isInteger(sched().maxDays) ? sched().maxDays : 120;
+  const componentLimit = () => sched().advanceDaysSupported ? `最多只能抢 ${sched().componentMaxDays || 14} 天后的会议室` : '只会抢 7 天后的会议室';
   const componentAgrees = () => !schedBlocked() && (!sched().componentOpenTime || sched().componentOpenTime === sched().openTime);
   const effOpen = () => componentAgrees() && state.nextOpen ? state.nextOpen : sched().hubNextOpen;
   const effTarget = () => componentAgrees() && state.targetDate ? state.targetDate : sched().hubTargetDate;
@@ -211,7 +215,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       <section>${head('待执行', '<span class="cr-n cr-num" data-cr-slot="pending-n"></span>')}<div class="cr-items" data-cr-slot="pending"></div><p class="cr-hint">关闭页面后仍会继续执行；电脑关机错过的提醒会自动作废。</p></section>`;
   }
   function settings() {
-    return `<nav class="cr-seg cr-settings-tabs" aria-label="会议室设置分类">${[['booking', '抢订节奏'], ['computer', '电脑'], ['page', '页面适配'], ['data', '本机数据']].map(([id, label]) => `<button type="button" data-cr-settings-tab="${id}" aria-pressed="${settingsTab === id}">${label}</button>`).join('')}</nav><section data-cr-settings-panel="booking">${head('抢订节奏')}<div class="cr-sets">${setRow('开放时间', escape('预订系统每天放号的时刻 · ' + sourceLabel()), input('抢订设置.开放时间', '开放时间', 'time', 'step="1"'))}${setRow('提前天数', escape('抢几天后的会议室 · ' + sourceLabel()), `<input class="cr-input" data-cr-sched-field="advanceDays" type="number" min="1" max="14" step="1" value="${escape(schedDraft.advanceDays)}" aria-label="提前天数">`)}${setRow('提前填表 · 秒', '开放前把表单填好，只差提交', input('抢订设置.提前填表秒数', '提前填表秒数', 'number', 'min="5" max="600"'))}${setRow('整点连点', '开放那一刻连续提交：次数 / 间隔毫秒', `${input('抢订设置.最大重试次数', '整点连点次数', 'number', 'min="1" max="30"')}${input('抢订设置.重试间隔毫秒', '连点间隔毫秒', 'number', 'min="50" max="3000" step="50"')}`)}${setRow('登录预检 · 提前分钟', '发现登录过期会提醒你', input('抢订设置.登录预检提前分钟', '登录预检提前分钟', 'number', 'min="0" max="180"'))}${setRow('按 WeLink 服务器时间对齐整点', '本机时间不准也不影响', toggle('抢订设置.校准服务器时间', '按 WeLink 服务器时间对齐整点'))}</div></section>
+    return `<nav class="cr-seg cr-settings-tabs" aria-label="会议室设置分类">${[['booking', '抢订节奏'], ['computer', '电脑'], ['page', '页面适配'], ['data', '本机数据']].map(([id, label]) => `<button type="button" data-cr-settings-tab="${id}" aria-pressed="${settingsTab === id}">${label}</button>`).join('')}</nav><section data-cr-settings-panel="booking">${head('抢订节奏')}<div class="cr-sets">${setRow('开放时间', escape('预订系统每天放号的时刻 · ' + sourceLabel()), input('抢订设置.开放时间', '开放时间', 'time', 'step="1"'))}${setRow('提前天数', escape('抢几天后的会议室 · ' + sourceLabel()), `<input class="cr-input" data-cr-sched-field="advanceDays" type="number" min="1" max="${maxDays()}" step="1" value="${escape(schedDraft.advanceDays)}" aria-label="提前天数">`)}${setRow('提前填表 · 秒', '开放前把表单填好，只差提交', input('抢订设置.提前填表秒数', '提前填表秒数', 'number', 'min="5" max="600"'))}${setRow('整点连点', '开放那一刻连续提交：次数 / 间隔毫秒', `${input('抢订设置.最大重试次数', '整点连点次数', 'number', 'min="1" max="30"')}${input('抢订设置.重试间隔毫秒', '连点间隔毫秒', 'number', 'min="50" max="3000" step="50"')}`)}${setRow('登录预检 · 提前分钟', '发现登录过期会提醒你', input('抢订设置.登录预检提前分钟', '登录预检提前分钟', 'number', 'min="0" max="180"'))}${setRow('按 WeLink 服务器时间对齐整点', '本机时间不准也不影响', toggle('抢订设置.校准服务器时间', '按 WeLink 服务器时间对齐整点'))}</div></section>
       <section data-cr-settings-panel="computer">${head('电脑')}<div class="cr-sets">${setRow('守护期间阻止电脑自动睡眠', '合上笔记本仍可能睡眠', toggle('系统.守护时阻止睡眠', '守护期间阻止电脑自动睡眠'))}</div><p class="cr-hint">启动与更新由 AI Hub 统一管理，会议室组件不另设开机启动和自动更新。</p></section>
       <section data-cr-settings-panel="page">${head('页面适配')}<p class="cr-hint cr-hint-top">页面改版时再调整；先用总览里的「测试填表」核对。</p><div class="cr-sets">${setRow('预订页地址', '', input('高级.网址', '预订页地址', 'url'), true)}${setRow('浏览器', '', choice('高级.浏览器', '浏览器', ['自动', 'Edge', 'Chrome', '内置Chromium']))}${setRow('welink-cli 路径', '留空自动查找', input('高级.welink-cli路径', 'welink-cli 路径'), true)}${setRow('自动标定时间网格', '关闭后使用下面的手动标定', toggle('高级.自动标定网格', '自动标定时间网格'))}${setRow('手动标定', '起点 X / 格子宽度 / 首格时间', `${input('高级.网格起点X', '手动标定起点 X', 'number', 'min="0" max="3000"')}${input('高级.格子宽度', '格子宽度', 'number', 'min="10" max="100"')}${input('高级.网格起始时间', '首格时间', 'time')}`, true)}</div></section>
       <section data-cr-settings-panel="data">${head('本机数据')}<div class="cr-sets">${setRow('数据目录', `<span class="cr-path">${escape(state.home || '')}</span>`, button('folder-data', icon('folder', 14) + '打开数据目录', 'sec', 'cr-btn-sm'))}</div><p class="cr-hint">配置、历史和登录资料保留在本机。组件随 Hub 更新。</p></section>`;
@@ -459,7 +463,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     if (op === 'find-cli') { await findCli(); return; }
     if (op === 'sched-save') { await saveSchedCard(); return; }
     // 认不出园区、也没确认过节奏：开抢前先在旁边就地确认两项，点「保存并继续」接着做刚才那一步。
-    if (['start', 'once'].includes(op) && schedBlocked()) { updateSchedCard(true); slot('message').textContent = `按现在的规则要抢 ${sched().advanceDays} 天后的会议室，当前会议室组件只会抢 7 天后，本次未启动；原因见右侧`; return; }
+    if (['start', 'once'].includes(op) && schedBlocked()) { updateSchedCard(true); slot('message').textContent = `按现在的规则要抢 ${sched().advanceDays} 天后的会议室，当前会议室组件${componentLimit()}，本次未启动；原因见右侧`; return; }
     if (['start', 'once', 'test'].includes(op) && sched().needsConfirm) {
       pendingOp = op; updateSchedCard(true);
       slot('message').textContent = '先确认抢订节奏：提前几天、几点开放，点「保存并继续」后接着' + ({ start: '启动守护', once: '立即抢一次', test: '测试填表' })[op];
@@ -508,13 +512,13 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     const mode = s.needsConfirm ? 'confirm' : schedBlocked() ? 'blocked' : '';
     // 节奏卡出现时右栏只留规则一句，保证一屏放下。
     text.textContent = (s.text || `每天 ${hm(s.openTime)} 放号，抢 ${s.advanceDays} 天后的会议室`) + (mode ? '。' : '。立即抢一次会真实提交；尚未开放时等到今天的开放时刻。');
-    const sig = JSON.stringify([mode, s.advanceDays, s.openTime, s.campus, pendingOp]);
+    const sig = JSON.stringify([mode, s.advanceDays, s.openTime, s.campus, pendingOp, s.advanceDaysSupported, s.componentMaxDays]);
     if (!force && card.dataset.sig === sig) return;
     card.dataset.sig = sig; card.hidden = !mode;
     if (mode === 'confirm') card.innerHTML = `<b>确认抢订节奏</b><p>没从会议室名称和日程地点认出所在园区。各园区放号规则不同，核对后保存一次。</p>
-      <div class="cr-sched-row"><label>提前<input class="cr-input" data-cr-sched-input="advanceDays" type="number" min="1" max="14" step="1" value="${escape(s.advanceDays)}" aria-label="提前几天">天</label><label>每天<input class="cr-input" data-cr-sched-input="openTime" type="time" step="60" value="${escape(hm(s.openTime))}" aria-label="几点开放">开放</label></div>
+      <div class="cr-sched-row"><label>提前<input class="cr-input" data-cr-sched-input="advanceDays" type="number" min="1" max="${maxDays()}" step="1" value="${escape(s.advanceDays)}" aria-label="提前几天">天</label><label>每天<input class="cr-input" data-cr-sched-input="openTime" type="time" step="60" value="${escape(hm(s.openTime))}" aria-label="几点开放">开放</label></div>
       ${button('sched-save', pendingOp ? '保存并继续' : '保存', 'pri', 'cr-btn-sm')}`;
-    else if (mode === 'blocked') card.innerHTML = `<b>${escape(s.source === 'campus' ? `${s.campus}园区提前 ${s.advanceDays} 天放号` : `提前 ${s.advanceDays} 天放号`)}</b><p class="cr-error">当前会议室组件只会抢 7 天后的会议室，按这个规则抢不到，暂不启动；更新会议室组件后自动按 ${s.advanceDays} 天抢。开放时刻 ${escape(hm(s.openTime))} 已按规则设置。</p>`;
+    else if (mode === 'blocked') card.innerHTML = `<b>${escape(s.source === 'campus' ? `${s.campus}园区提前 ${s.advanceDays} 天放号` : `提前 ${s.advanceDays} 天放号`)}</b><p class="cr-error">当前会议室组件${componentLimit()}，按这个规则抢不到，暂不启动；更新会议室组件后自动按 ${s.advanceDays} 天抢。开放时刻 ${escape(hm(s.openTime))} 已按规则设置。</p>`;
     else card.innerHTML = '';
   }
   async function saveSchedCard() {

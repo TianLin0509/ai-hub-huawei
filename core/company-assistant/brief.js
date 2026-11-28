@@ -46,7 +46,7 @@ function fallbackBrief(snapshot, { day, now = Date.now(), settings = {}, commitm
     const hours = Number.isFinite(m.since) ? Math.max(1, Math.round((now - m.since) / 3600000)) : null;
     const elapsed = hours ? `已过 ${hours} 小时` : '时间待核对';
     // 像是已经说完的（对方最后只回了「好的」「收到」）、群里 @我 之后我在群里说过话的：照样列出，但排到这一栏最后（2026-11-07）。
-    const list = (snapshot.messages || {})[m.conv] || [], at = list.findIndex(x => x.sourceId === m.sourceId);
+    const list = D.convRows(snapshot, settings, m.conv), at = list.findIndex(x => x.sourceId === m.sourceId);
     // 2026-11-16：AI 复核判「不用回」、规则判已说完的，都按「像是已说完」排到最后；AI 理由附在正文后
     const settledLabel = m.aiVerdict === 'no' ? 'AI：不用回' : m.level === 'settled' || looksLike(m.text) === '像是已了结' ? '像是已说完'
       : m.group && !m.aiVerdict && at >= 0 && list.slice(at + 1).some(x => x.mine) ? '你之后在群里说过话' : '';

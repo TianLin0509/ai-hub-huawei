@@ -389,10 +389,12 @@ class PhoneChannel {
     return this.outbox;
   }
   // 手机问的那句答完（或没答上）：把回答发回群里。
-  settle(item) {
+  // silent：关助理时停下的这一问只撤掉待回、不往手机发（R66）。
+  settle(item, { silent = false } = {}) {
     const p = item && this.state().pending[item.id];
     if (!p) return;
     this.update(cur => { const pending = { ...cur.pending }; delete pending[item.id]; return { pending }; });
+    if (silent) return;
     const text = item.state === 'done' ? item.phoneText || item.a : '这句没答上：' + short(item.error || '原因不明', 120) + '。可以再说一次。';
     const kind = item.state === 'done' ? 'answer' : 'error';
     // 私聊里问的只回私聊：答完前改回了专用群，这条不往群里发（群里的人看不到上下文，也可能不止本人），只记一行。

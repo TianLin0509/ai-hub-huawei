@@ -50,10 +50,10 @@ function stageInstaller(file, dataDir) {
 }
 
 class WeclawLinkService {
-  constructor({ dataDir, proxy, readEndpoint, listModels, fetchImpl = (...args) => fetch(...args), onChanged = () => {}, findInstall = link.findInstall, log = console,
+  constructor({ dataDir, proxy, readEndpoint, listModels, fetchImpl = (...args) => fetch(...args), onChanged = () => {}, findInstall = link.findInstall, locateInstall = opts => link.locateInstall(opts), log = console,
     openPath = async () => '不支持', openExternal = async () => {}, readVersion = () => link.readInstalledVersion(), findInstaller = () => link.findDownloadedInstaller(),
     verifySignature = verifySameSigner, runInstaller = runSilentInstaller, stage = stageInstaller, probe = link.probeModel, relaunchDelayMs = 3000 }) {
-    Object.assign(this, { dataDir, proxy, readEndpoint, listModels, fetchImpl, onChanged, findInstall, log, openPath, openExternal, readVersion, findInstaller, verifySignature, runInstaller, stage, probe, relaunchDelayMs });
+    Object.assign(this, { dataDir, proxy, readEndpoint, listModels, fetchImpl, onChanged, findInstall, locateInstall, log, openPath, openExternal, readVersion, findInstaller, verifySignature, runInstaller, stage, probe, relaunchDelayMs });
     this.upgrading = null; this.lastUpgrade = null; this.lastTest = null; this.testing = false; this.upgradeDone = null;
     // 测试用：AI_HUB_WECLAW_BASE 指向假的员工助手本机服务（tests/e2e-weclaw-page-cdp.js）。
     this.base = process.env.AI_HUB_WECLAW_BASE || '';
@@ -72,6 +72,8 @@ class WeclawLinkService {
     this.timer.unref?.();
     const state = link.readState(this.dataDir);
     if (state.enabled || state.pendingRemove) setTimeout(() => { void this.sync(); }, 15000).unref?.();
+    // 默认位置没有员工助手时，启动后在后台逐级找一次（隐藏窗口，约 2 秒），论坛取数、技能广场等同步判断都能认得自选目录
+    setTimeout(() => { try { if (!this.findInstall()) void Promise.resolve(this.locateInstall()).catch(() => {}); } catch { /* 找不到下次打开页面再找 */ } }, 20000).unref?.();
   }
   stop() { clearInterval(this.timer); this.timer = null; }
 
@@ -106,6 +108,8 @@ class WeclawLinkService {
   // 给页面看的状态：只给「对不对得上」的结论，不把钥匙送到页面。
   async status() {
     const state = link.readState(this.dataDir);
+    // 默认位置找不到时逐级查卸载登记、协议登记和运行中的进程（装在 D 盘等自选目录也认得出）
+    if (!this.findInstall()) await Promise.resolve(this.locateInstall()).catch(() => {});
     const install = this.findInstall();
     const base = await this.locate();
     const proxy = await this.proxyEndpoint();
@@ -133,6 +137,7 @@ class WeclawLinkService {
 
   // ---- 跳转：打开员工助手（开着就切到前台）、在员工助手里新建对话（它自己注册的 weclaw:// 协议）
   async open() {
+    if (!this.findInstall()) await Promise.resolve(this.locateInstall({ force: true })).catch(() => {});
     const exe = this.findInstall();
     if (!exe) throw new Error('这台电脑上没找到员工助手');
     const error = await this.openPath(exe);

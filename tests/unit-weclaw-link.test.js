@@ -330,3 +330,59 @@ test('四步：旧的测试结果在端口变了或代理没跑时不算全绿�
   assert.equal(steps({ ...base, online: { healthy: false, loggedIn: true } })[1].state, 'todo');
   assert.match(steps(base)[0].detail, /没有待安装的新版/);
 });
+
+// ---- 安装位置逐级兜底（2026-11-28 反馈：装了员工助手却「没找到」）
+test('installCandidates：卸载登记目录、图标/卸载命令、协议命令、进程路径都换算成主程序路径', () => {
+  const lines = [
+    'dir|D:/Apps/UniAssistant',
+    'file|"D:/Apps/UniAssistant/uninstall.exe"',
+    'file|D:/Apps/UniAssistant/app.ico,0',
+    'file|"E:/WC/WeClaw Desktop.exe" "%1"',
+    'file|"C:/Program Files (x86)/UniAssistant/MyAgent.exe" "--url=%1"',
+    'file|F:/x/WeClaw Desktop.exe',
+    'junk',
+  ].join('\n');
+  const c = link.installCandidates(lines);
+  assert.equal(c[0], path.join('D:/Apps/UniAssistant', 'WeClaw Desktop.exe'));
+  assert.ok(c.includes('E:/WC/WeClaw Desktop.exe'));
+  assert.ok(c.includes(path.join('C:/Program Files (x86)/UniAssistant', 'WeClaw Desktop.exe')));
+  assert.ok(c.includes('F:/x/WeClaw Desktop.exe'));
+  assert.equal(new Set(c).size, c.length, '去重');
+  assert.ok(!c.some(f => /app\.ico/.test(f)), '图标不是 exe 时不当主程序');
+});
+
+test('locateInstall：默认位置没有时查登记，找到就记住；没找到 2 分钟内不重查，force 例外', async () => {
+  link.resetLocated();
+  const env = { ProgramFiles: 'C:/PF', LOCALAPPDATA: 'C:/LA' };
+  const real = path.join('D:/Apps/UniAssistant', 'WeClaw Desktop.exe');
+  let queries = 0, t = 1000;
+  const exists = f => f === real;
+  const query = async () => { queries++; return 'dir|D:/Apps/UniAssistant'; };
+  const r = await link.locateInstall({ env, exists, platform: 'win32', query, now: () => t });
+  assert.equal(r.file, real);
+  assert.equal(link.findInstall({ env, exists }), real, '同步的 findInstall 也认得记住的位置');
+  await link.locateInstall({ env, exists, platform: 'win32', query, now: () => t });
+  assert.equal(queries, 1, '记住了就不再起 PowerShell');
+  link.resetLocated();
+  const none = async () => { queries++; return ''; };
+  queries = 0;
+  assert.equal((await link.locateInstall({ env, exists: () => false, platform: 'win32', query: none, now: () => t })).file, '');
+  t += 1000;
+  await link.locateInstall({ env, exists: () => false, platform: 'win32', query: none, now: () => t });
+  assert.equal(queries, 1, '没找到时 2 分钟内不重查');
+  await link.locateInstall({ env, exists: () => false, platform: 'win32', query: none, now: () => t, force: true });
+  assert.equal(queries, 2, 'force 时立刻重查');
+  assert.equal((await link.locateInstall({ env, exists: () => false, platform: 'linux', query: none, force: true })).file, '');
+  link.resetLocated();
+});
+
+test('员工助手页状态：默认位置认不出时先逐级查，查到算已装', async () => {
+  let found = '';
+  const service = new WeclawLinkService({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'weclaw-loc-')),
+    proxy: { status: () => ({ state: 'stopped' }), ensureReady: async () => ({}) }, readEndpoint: () => ({}), listModels: () => [],
+    fetchImpl: async () => { throw new Error('down'); }, findInstall: () => found, locateInstall: async () => { found = 'D:/Apps/UniAssistant/WeClaw Desktop.exe'; return { file: found }; },
+    readVersion: async () => '7.11.100-1130', findInstaller: () => null, log: { info() {} } });
+  const s = await service.status();
+  assert.equal(s.installed, true);
+  assert.equal(s.version.installed, '7.11.100-1130');
+});

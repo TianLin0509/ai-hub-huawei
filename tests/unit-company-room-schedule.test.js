@@ -41,6 +41,18 @@ test('开抢时刻与目标日期：开放前是今天、过了是明天；按�
   assert.equal(S.targetDateFor(new Date(2026, 11, 30, 12), 7), '2027-01-06');
   assert.equal(S.targetDateFor(new Date(2028, 1, 27, 12), 3), '2028-03-01'); // 闰年 2 月
 });
+test('提前天数范围 1–120，默认仍 7；120 天跨 4 个月跨年', () => {
+  assert.deepEqual([S.MIN_DAYS, S.MAX_DAYS, S.DEFAULT_ADVANCE_DAYS], [1, 120, 7]);
+  for (const ok of [1, 7, 14, 15, 120]) assert.equal(S.validDays(ok), true, ok);
+  for (const bad of [0, 121, -1, 7.5, '7', null, undefined, NaN]) assert.equal(S.validDays(bad), false, String(bad));
+  assert.equal(S.resolveSchedule({}).advanceDays, 7);
+  const far = S.resolveSchedule({ saved: { advanceDays: 120, openTime: '12:00', confirmed: true } });
+  assert.deepEqual([far.advanceDays, far.source], [120, 'manual']);
+  assert.equal(S.resolveSchedule({ saved: { advanceDays: 121, openTime: '12:00', confirmed: true } }).source, 'default');
+  assert.equal(S.targetDateFor(new Date(2026, 10, 28, 12), 120), '2027-03-28');
+  assert.equal(S.targetDateFor(new Date(2026, 10, 28, 12), 34), '2027-01-01');
+  assert.equal(S.targetDateFor(new Date(2027, 11, 1, 12), 90), '2028-02-29'); // 跨年落在闰日
+});
 test('自动拉起时间窗跟着开放时刻走：12:00 是 11:30–12:00，08:30 是 08:00–08:30', () => {
   assert.deepEqual(S.autoStartWindow('12:00:00'), { from: 690, to: 720 });
   assert.deepEqual(S.autoStartWindow('08:30:00'), { from: 480, to: 510 });
@@ -85,6 +97,36 @@ test('接入抢订：认出非成都园区按 7 天，开放时刻一致时不�
   await a.rooms.applySchedule();
   assert.deepEqual(calls, []);
   assert.equal(a.rooms.status().schedule.needsConfirm, false);
+});
+test('提前天数超过组件上限：旧组件（没报上限）最多 14 天，超出拒绝启动且不下发；新组件按自报上限放行', async t => {
+  const saved = { advanceDays: 30, openTime: '12:00:00', confirmed: true, at: 1 };
+  const legacy = rig(t, { helper: { capabilities: ['full-ui', 'advance-days'], rules: { 优先会议室: ['上海研究所 H3-1'] } } });
+  legacy.a.setSettings({ rooms: { schedule: saved } });
+  const st = legacy.a.rooms.status().schedule;
+  assert.deepEqual([st.advanceDays, st.componentMaxDays, st.componentOk, st.maxDays], [30, 14, false, 120]);
+  let prepared = 0; legacy.a.rooms.ensure = async () => { prepared++; return {}; };
+  await assert.rejects(legacy.a.rooms.command('start', {}, { user: true }), /你设置的是提前 30 天.*最多只能抢 14 天后.*本次未启动.*14 天以内/);
+  await assert.rejects(legacy.a.rooms.command('once', {}, { user: true }), /本次未启动/);
+  assert.equal(prepared, 0);
+  const calls = [];
+  legacy.a.rooms.command = async (op, args) => { calls.push([op, args]); return {}; };
+  await legacy.a.rooms.applySchedule();
+  assert.deepEqual(calls, []); // 30 天不下发给只认 14 天的组件；开放时刻一致也不多发
+  const fresh = rig(t, { helper: { capabilities: ['full-ui', 'advance-days'], advanceDaysMax: 120, rules: { 优先会议室: ['上海研究所 H3-1'] } } });
+  fresh.a.setSettings({ rooms: { schedule: { ...saved, advanceDays: 120 } } });
+  const ok = fresh.a.rooms.status().schedule;
+  assert.deepEqual([ok.componentMaxDays, ok.componentOk], [120, true]);
+  assert.equal(fresh.a.rooms.checkSchedule('start').advanceDays, 120);
+  const sent = [];
+  fresh.a.rooms.command = async (op, args) => { sent.push([op, args]); return {}; };
+  await fresh.a.rooms.applySchedule();
+  assert.deepEqual(sent, [['configure', { 抢订设置: { 提前天数: 120 } }]]);
+});
+test('保存提前天数：120 合法、121 和 0 拒绝并提示 1–120', t => {
+  const { a } = rig(t);
+  assert.throws(() => a.rooms.saveSchedule({ advanceDays: 121, openTime: '12:00' }), /提前天数请填 1–120 的整数/);
+  assert.throws(() => a.rooms.saveSchedule({ advanceDays: 0, openTime: '12:00' }), /提前天数请填 1–120 的整数/);
+  assert.equal(a.rooms.saveSchedule({ advanceDays: 120, openTime: '12:00' }).schedule.advanceDays, 120);
 });
 test('就地确认：保存后按用户的两项生效，非法值拒绝', t => {
   const { a } = rig(t);

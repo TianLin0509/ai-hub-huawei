@@ -96,7 +96,7 @@ async function run() {
     await A.click('#community-page [data-cc="create"]');
     await A.wait(`!!document.querySelector('#community-page [data-slot="invname"]')`, 'members tab');
     await A.type('#community-page [data-slot="invname"]', '乙');
-    await A.type('#community-page [data-slot="invip"]', '10.1.1.2');
+    // 不填 IP：实际用法是一条邀请发到群里（「队长看不到新成员」就出在这条路）。
     await A.click('#community-page [data-cc="invite"]');
     const message = await A.wait(`(()=>{const e=document.querySelector('#community-page .cc-recv [data-i18n-skip]');return e&&e.textContent})()`, 'invite message');
     evidence.checks.invite = message;
@@ -112,7 +112,7 @@ async function run() {
     await B.click('#community-page [data-cc="dojoin"]');
     await B.wait(`document.querySelectorAll('#community-page .cmy-sub[data-sub="crew"] .cc-pet').length>=2`, 'B joined');
 
-    // 甲发现乙（邀请时填的 IP → 去乙的共享里找）
+    // 甲发现乙（没填 IP：按「谁正连着我的共享」去对方共享里找）
     for (let k = 0; k < 8; k++) { await A.ipc('community-crew:poll-now'); await B.ipc('community-crew:poll-now'); if (await A.c.eval(`document.querySelectorAll('#community-page .cmy-sub[data-sub="crew"] .cc-pet').length>=2`)) break; await sleep(3000); }
     await A.wait(`document.querySelectorAll('#community-page .cmy-sub[data-sub="crew"] .cc-pet').length>=2`, 'A sees B', 60000);
     await A.ipc('community-crew:poll-now'); await B.ipc('community-crew:poll-now');

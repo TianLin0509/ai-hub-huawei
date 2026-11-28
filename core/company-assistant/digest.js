@@ -14,7 +14,7 @@ function digestItems(snapshot, { settings, now, commitments = [], done = new Set
   for (const message of D.awaiting(snapshot, settings, { now })) {
     if (message.level === 'settled') continue;         // 2026-11-16：像是已说完 / AI 判不用回的不进汇总（公司版口径：可能要回照常列）
     if (message.group) {
-      const rows = snapshot.messages?.[message.conv] || [];
+      const rows = D.convRows(snapshot, settings, message.conv);
       const index = rows.findIndex(row => row.sourceId === message.sourceId);
       if (index < 0 || rows.slice(index + 1).some(row => row.mine)) continue;
     } else if (!Number.isFinite(message.since) || now - message.since <= PRIVATE_WAIT_MS) continue;

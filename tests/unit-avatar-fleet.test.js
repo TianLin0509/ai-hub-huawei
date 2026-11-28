@@ -61,7 +61,7 @@ function harness({ reply } = {}) {
 const group = (extra = {}) => ({ tpl: 'qa', targets: [{ id: G.id, name: G.name, type: 'group' }], ...extra });
 
 test('路由：指定的人优先于指定的群，指定的优先于全部；只听和不看生效', () => {
-  const all = F.newAvatar({ id: 'a', tpl: 'watch', now: 1 });
+  const all = F.newAvatar({ id: 'a', tpl: 'watch', now: 1 }, { kind: 'all' }); // 升级前建的「全部会话」盯消息分身
   const pick = F.newAvatar({ id: 'b', tpl: 'qa', now: 2 }, { targets: [{ id: 'g1', name: '群', type: 'group' }] });
   const person = F.newAvatar({ id: 'c', tpl: 'blank', now: 3 }, { targets: [{ id: 'zhang', name: '张三', type: 'user' }] });
   const list = [all, pick, person];
@@ -265,7 +265,7 @@ test('替身迁移带上未完成事项和暂停状态', () => {
 test('新分身接管范围后，同一消息只留一份待办', async () => {
   const h = harness(); const { service, world } = h;
   try {
-    const { item } = await readyItem(h, { tpl: 'watch' }, '今晚 8 点前请把风险项发我');
+    const { item } = await readyItem(h, { tpl: 'watch', kind: 'all' }, '今晚 8 点前请把风险项发我');
     assert.ok(item); const b = await h.add(group());
     await h.tick(); const rows = service.status().items.filter(i => i.id === item.id);
     assert.equal(rows.length, 1); assert.equal(rows[0].avatarId, b.id); assert.ok(world.prompts.length >= 1);
@@ -552,7 +552,7 @@ test('盯消息：快照和分身增量读到同一条消息只算一条；Hub �
     world.historyRaw = { zhang: raw };
     const p2p = { target_account: 'zhang', native_name: '张三', recent_conversation_type: 'CHAT_TYPE_P2P_MSG' };
     world.recent = [wideConv('g9'), p2p];
-    const av = await h.add({ tpl: 'watch' });
+    const av = await h.add({ tpl: 'watch', kind: 'all' });
     assert.equal(av.kind, 'all');
     world.now += 121000; world.recent = [p2p, wideConv('g9')]; await h.tick();
     assert.ok(world.reads.some(r => r[3] === 'zhang'), '分身自己增量读了这个私聊');
@@ -596,7 +596,7 @@ test('盯消息：升级前存下的四舍五入编号事项自愈，来新消�
     const row = (id, text, at, sender = 'zhang') => `{"at":false,"atAccountList":[],"content":"${text}","contentType":"TEXT_MSG","msgId":${id},"sender":"${sender}","serverSendTime":${at}}`;
     const snap = rows => D.messages(welink.parseJsonBig(`{"respData":{"chatInfo":[${rows.join(',')}]}}`), P, ME);
     world.messages.zhang = snap([row('7100000000000000003', '评审材料能先帮我看一下吗', at1), row('7100000000000000006', '今天下班前要交', at2)]);
-    const av = await h.add({ tpl: 'watch' });
+    const av = await h.add({ tpl: 'watch', kind: 'all' });
     const ROUND = '7100000000000000000', oldId = `zhang:${ROUND}`;
     service.mutate(ME, av.id, st => {
       st.items = { [oldId]: { id: oldId, conv: 'zhang', convName: '张三', group: false, account: 'zhang', who: '张三', firstKey: ROUND, lastKey: ROUND, since: at1, at: at2, count: 3,

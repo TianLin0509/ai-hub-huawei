@@ -91,14 +91,14 @@ function availableRoutes(config = {}, env = process.env, { dataDir, sessionId } 
     if (!baseURL) continue;
     const contextOf = id => r.providerConfig?.models?.find(m => m.id === id)?.contextWindow || 128000;
     routes.push({ id: r.id, provider, keyEnv: r.id === 'company' ? r.keyEnv : 'AI_HUB_OPENCODE_' + r.id.toUpperCase() + '_KEY', key: r.key,
-      gateway: !!r.gateway, baseURL, models: r.models.slice(), defaultModel: r.defaultModel, contextOf });
+      gateway: !!r.gateway, baseURL, models: r.models.slice(), defaultModel: r.defaultModel, contextOf, thinking: r.id === 'company' });
   }
   // 公司版 DSH 选了「自有接口」：同一组地址、Key、模型也给 opencode 用（反代不在时它也能用）。
   if (config.companyCli && config.dshBackend === 'api') {
     try {
       const own = require('./company-model-proxy').dshOwnRoute({ baseURL: config.dshApiBaseUrl, apiKey: config.dshApiKey, model: config.dshApiModel });
       routes.unshift({ id: 'own', provider: ROUTE_PROVIDERS.own, keyEnv: 'AI_HUB_OPENCODE_OWN_KEY', key: own.key, baseURL: own.baseURL,
-        models: [own.model], defaultModel: own.model, contextOf: () => 128000, own: true });
+        models: [own.model], defaultModel: own.model, contextOf: () => 128000, own: true, thinking: true });
     } catch (_) { /* 自有接口没填全：这条线不可用 */ }
   }
   return routes;
@@ -130,6 +130,12 @@ function savedRouteProblem(model, routes) {
   const need = { company: '公司模型接入（设置 → 公司模型）', own: 'DSH 自有接口（设置 → 自有 API → DSH）', deepseek: 'DeepSeek API Key', tokenplan: '阿里云 Token Plan 套餐 Key' }[routeId];
   return { route: routeId, model: String(model), message: `这个 opencode 会话用的是「${ROUTE_LABELS[routeId]}」线路的 ${id}，但 Hub 里没有${need}。补上后再打开这个会话即可；Hub 没有改用别的线路或模型。` };
 }
+
+// 思考开关（2026-11-28 用户反馈「opencode 好像不支持 DeepSeek，GLM 可以」）：opencode 对自定义模型默认什么思考参数都不发，
+// 反代转公司上游时按「请求带了思考开关才开思考」处理（DSH / pi / Claude Code / Codex 都带），于是 opencode 经公司上游一直在不思考档跑，
+// DeepSeek 掉得最明显（黄区测评同题 11 题：opencode 配 DeepSeek 过 7、配 GLM 过 10）。公司线路和自有接口与 DSH 一样默认开到 high：
+// reasoning_effort 由 opencode 内置的 openai-compatible 发出，反代据此给上游开思考；走 API 网关时反代会去掉它，网关的推理模型本来就想。
+const thinkingFields = route => (route.thinking ? { reasoning: true, options: { reasoningEffort: 'high' } } : {});
 
 // 权限模式 → opencode 的 permission 配置（启动中心选的档）。plan 用 opencode 自带的 plan 智能体（只读、出方案）。
 function permissionConfig(mode) {
@@ -170,7 +176,7 @@ function buildOpencodeCliOptions(kind, opts, config = {}, dataDir, baseEnv = pro
     // 单步输出上限：公司线路（公司上游 / API 网关）放到 32768，和 DSH、pi 一致（11-28 黄区实测 16384 会截断长输出；opencode 自己再按 32000 封顶）；
     // 其他线路（自有接口、DeepSeek 官方、Token Plan）的上限各家不同，保持 16384。
     providers[route.provider] = { npm: '@ai-sdk/openai-compatible', name: routeLabel(route), options: { baseURL: route.baseURL, apiKey: `{env:${route.keyEnv}}` },
-      models: Object.fromEntries(route.models.map(m => [m, { name: m, limit: { context: route.contextOf(m), output: route.id === 'company' ? 32768 : 16384 } }])) };
+      models: Object.fromEntries(route.models.map(m => [m, { name: m, limit: { context: route.contextOf(m), output: route.id === 'company' ? 32768 : 16384 }, ...thinkingFields(route) }])) };
     // 公司反代在本机，绕开代理；自有接口沿用系统代理设置（和 DSH 自有接口一致）。
     if (route.id === 'company') { try { require('./company-model-proxy').applyEndpointNoProxy(env, { origin: route.baseURL }); } catch (_) {} }
   }

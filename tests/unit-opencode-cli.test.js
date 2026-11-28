@@ -281,3 +281,29 @@ test('复审二：用 opencode 自己配置时不删用户自己的模型 Key', 
   const o = profile.buildOpencodeCliOptions('opencode', { id: 'n1', cwd: dir }, {}, dir, { AI_HUB_OPENCODE_PATH: fakeBin(dir), PATH: '', ANTHROPIC_API_KEY: 'a1', AI_HUB_CLI_TOOLS_DIR: path.join(dir, 't') });
   assert.equal(o.route, 'native'); assert.equal(o.launch.env.ANTHROPIC_API_KEY, 'a1');
 });
+
+// 2026-11-28 用户反馈「opencode 好像不支持 DeepSeek，GLM 可以」：opencode 对自定义模型默认不发任何思考参数，
+// 反代转公司上游时只有请求带思考开关才开思考，opencode 的 DeepSeek 因此一直在不思考档跑。公司线路与自有接口要像 DSH 一样默认开到 high。
+test('公司线路、自有接口的模型带思考档（reasoningEffort high），反代据此给上游开思考；DeepSeek 与 GLM 一视同仁', () => {
+  const proxy = require('../core/company-model-proxy');
+  const dir = tmp(); proxy.ensureEndpoint(dir);
+  const env = { AI_HUB_OPENCODE_PATH: fakeBin(dir), PATH: '' };
+  const company = profile.buildOpencodeCliOptions('opencode', { id: 'hub-th1', cwd: dir }, { companyCli: true }, dir, env);
+  assert.equal(company.route, 'company');
+  const models = JSON.parse(fs.readFileSync(company.launch.env.OPENCODE_CONFIG, 'utf8')).provider['hub-company'].models;
+  assert.ok(proxy.MODEL_IDS.some(id => /deepseek/i.test(id)) && proxy.MODEL_IDS.some(id => /glm/i.test(id)), '公司模型表里 DeepSeek 与 GLM 都在');
+  for (const id of proxy.MODEL_IDS) {
+    assert.ok(models[id], id + ' 在 opencode 的模型表里');
+    assert.equal(models[id].reasoning, true, id);
+    assert.equal(models[id].options?.reasoningEffort, 'high', id);
+  }
+  const ownConfig = { companyCli: true, dshBackend: 'api', dshApiBaseUrl: 'http://127.0.0.1:9/v1', dshApiKey: 'sk-own', dshApiModel: 'deepseek-v4.1-flash' };
+  const own = profile.buildOpencodeCliOptions('opencode', { id: 'hub-th2', cwd: dir }, ownConfig, dir, env);
+  assert.equal(own.route, 'own');
+  const ownModel = JSON.parse(fs.readFileSync(own.launch.env.OPENCODE_CONFIG, 'utf8')).provider['hub-own'].models['deepseek-v4.1-flash'];
+  assert.equal(ownModel.options?.reasoningEffort, 'high');
+  // DeepSeek 官方 API 默认就是思考模式，不额外加参数（和改动前一致）。
+  const ds = profile.buildOpencodeCliOptions('opencode', { id: 'hub-th3', cwd: dir }, {}, dir, { ...env, DEEPSEEK_API_KEY: 'sk-x' });
+  const dsModels = JSON.parse(fs.readFileSync(ds.launch.env.OPENCODE_CONFIG, 'utf8')).provider['hub-deepseek'].models;
+  assert.equal(dsModels['deepseek-flash'].options, undefined);
+});

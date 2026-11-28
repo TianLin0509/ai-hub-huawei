@@ -159,7 +159,8 @@
  "成员与 IP": "Members and IP",
  "测": "Test",
  "把这段话用 WeLink 发给对方（7 天内有效）：": "Send this to them via WeLink (valid for 7 days):",
- "等对方加入：{0}": "Waiting to join: {0}",
+ "有效邀请（7 天内可多人用）：": "Active invites (multi-use for 7 days): ",
+ "同事加入后约半分钟出现在这里；久等不到时填上对方 IP 再生成一次邀请。": "Members appear here about half a minute after joining; if one does not show up, enter their IP and generate the invite again.",
  "名字": "Name",
  "对方 IP（建议填）": "Their IP (recommended)",
  "邀请同事": "Invite a colleague",
@@ -234,8 +235,9 @@
  "没取回": "Not fetched",
  "✓ 连通 · {0} ms": "✓ Connected · {0} ms",
  "没生成邀请": "Invite not created",
- "离开「{0}」？你的信箱里这个团队的内容会删掉，别人那边不受影响。": "Leave \"{0}\"? This crew's content in your mailbox will be deleted; others are not affected.",
+ "离开「{0}」？你的信箱里这个团队的内容会删掉，其他成员那边也会把你移出名单。": "Leave \"{0}\"? This crew's content in your mailbox will be deleted, and other members will remove you from their lists.",
  "信箱：{0}": "Mailbox: {0}",
  "没找到": "Not found",
- "已改，正在去敲门确认连通": "Updated; checking the connection"
+ "已改，正在去敲门确认连通": "Updated; checking the connection",
+ "（已加入 {0} 人）": " ({0} joined)"
 }

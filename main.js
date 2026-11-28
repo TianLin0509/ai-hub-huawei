@@ -1207,7 +1207,8 @@ require('./core/cli-exit-watch').createCliExitWatch({
 // CodeAgent 在终端里报了会话级错误（如部门模型管控 SessionRequestError），原生记录里没有：结束这一轮并把原文显示出来（core/codeagent-screen-error.js）。
 async function recoverCodeAgentModelRevocation({ sessionId, modelRevoked, message }) {
   const session = sessionManager.getSession(sessionId);
-  if (!session || !modelRevoked || typeof sessionOperations?.confirmSessionModel !== 'function') return;
+  // 分身后台会话自己处理（换代码仓库目录或就地报错，core/avatar/agent-session.js），不弹前台的选模型确认、不挂常驻横幅（R64 审查 P2）。
+  if (!session || session.purpose === 'avatar-agent' || !modelRevoked || typeof sessionOperations?.confirmSessionModel !== 'function') return;
   const model = session.fixedModel || session.currentModel?.id || modelRevoked.model || '';
   const reason = modelRevoked.reason || '当前模型已不可用';
   const error = Object.assign(require('./core/session-model-pin').unavailableError(model, reason, []), { modelRevoked: true });
@@ -1229,6 +1230,8 @@ async function recoverCodeAgentModelRevocation({ sessionId, modelRevoked, messag
   }
 }
 
+// 最近一次屏幕报错按会话记一份：后台功能（分身）不看界面事件，靠它及时认出「外部模型管控 / 不在可信仓」（R64）。
+const codeagentScreenErrors = new Map();
 require('./core/codeagent-screen-error').createScreenErrorWatch({
   manager: sessionManager,
   readScreen: id => {
@@ -1239,6 +1242,9 @@ require('./core/codeagent-screen-error').createScreenErrorWatch({
   renderRows: raw => require('./core/hub-phone/session-chat').renderRows(raw),
   onError: ({ sessionId, failedAt, kind, message, modelRevoked, trustedRepoRequired }) => {
     const session = sessionManager.getSession(sessionId);
+    codeagentScreenErrors.delete(sessionId);
+    codeagentScreenErrors.set(sessionId, { at: Number(failedAt) || Date.now(), message: String(message || '').slice(0, 400), trustedRepo: !!trustedRepoRequired, modelRevoked: !!modelRevoked });
+    if (codeagentScreenErrors.size > 64) codeagentScreenErrors.delete(codeagentScreenErrors.keys().next().value);
     if (trustedRepoRequired) {
       // 屏幕报错不进入原生记录；显式结束群聊成员的等待，卡片持久化目录限制原因。
       try { groupChatDispatcher?.getActiveWatchers().get(sessionId)?.markErrored('trusted_repo_required'); }
@@ -1886,7 +1892,7 @@ function createWindow() {
           if (!optionalFeatures.get('assistant')) {
             if (!enableAssistant) throw Object.assign(new Error('助理还没开启。点「开启助理并发送」，会开启助理并发送刚才的问题。'), { code: 'ASSISTANT_DISABLED' });
             optionalFeatures.set('assistant', true); companyAssistantService.start();
-            sendToRenderer('optional-features:changed', optionalFeatureList());
+            broadcastOptionalFeatures(); // 设置「资源与后台」与助理页开关同步（R66）
           }
           return companyAssistantService.ask(text, { via: 'pet' });
         },
@@ -3486,6 +3492,7 @@ try {
     companyAssistantService.rooms.start();
     // start 失败（例如磁盘满）不能连带让下面的 IPC 注册落空，否则助理、会议、会议室、PPT 页全部不可用。
     if (optionalFeatures.get('assistant')) { try { companyAssistantService.start(); } catch (error) { console.error('[company-assistant] 启动出错，继续注册接口：', error && error.message); } }
+    else companyAssistantService.paused = true; // 关着冷启动：预开、起会话按关着守住（R66 审查 P2-1）
     const bridgeMcpPlan = sessionManager.extraMcpProvider;
     // WeLink 私聊助理：系统睡眠唤醒、锁屏解锁时立即重连（睡过觉的长连接多半已断，不等 5 分钟收包超时）。没绑定或没开时 wake 什么都不做。
     // powerMonitor 要在 app ready 之后才能用；挂监听出错也不能影响后面的助理接口注册。
@@ -3557,6 +3564,9 @@ try {
       sendPrompt: (sessionId, text, clientSubmissionId) => promptOperations.submitPrompt(null, { sessionId, text, clientSubmissionId, waitForCliReady: true }),
       lastFinal: id => { const meta = sessionManager.getSession(id); return meta ? require('./core/feature-agent-finals').read({ ...meta, id }, sessionManager, avatarHistory).at(-1) || null : null; },
       readTerminalScreen: id => ({ text: sessionManager.getSessionBuffer(id) || '' }),
+      screenError: id => codeagentScreenErrors.get(id) || null,
+      // 被「外部模型管控 / 不在可信仓」拦下时，沿用本人在主页开过 CodeAgent 的公司代码仓库作启动目录（core/avatar/trusted-cwd.js）。
+      findTrustedCwd: () => require('./core/avatar/trusted-cwd').findTrustedCwd([...sessionManager.getAllSessions(), ...(() => { try { return lastPersistedSessions; } catch { return []; } })()]),
       getSession: id => sessionManager.getSession(id),
       closeSession: id => require('./core/company-ai-tasks').closeOwnedSession(sessionManager, id),
       listBackends: () => avatarIpc.listAvatarBackends({ dataDir: getHubDataDir(), sessionManager }),
@@ -5431,8 +5441,10 @@ let skillPlazaService = null;
 try {
   skillPlazaService = new (require('./core/skill-plaza/service').SkillPlazaService)({
     dataDir: getHubDataDir(), homeDir: capabilityService.homeDir,
-    findInstall: () => (process.env.CLAUDE_HUB_HOME_DIR && process.env.CLAUDE_HUB_SKILL_PLAZA_WECLAW === '1')
-      || require('./core/weclaw-link').findInstall(),
+    findInstall: () => (process.env.CLAUDE_HUB_HOME_DIR ? process.env.CLAUDE_HUB_SKILL_PLAZA_WECLAW === '1'
+      : require('./core/weclaw-link').findInstall()),
+    // 默认位置找不到时逐级查卸载登记、协议登记、运行中的进程；隔离测试里不查本机真实登记
+    locateInstall: opts => (process.env.CLAUDE_HUB_HOME_DIR ? Promise.resolve({ file: '' }) : require('./core/weclaw-link').locateInstall(opts)),
     catalog: refresh => capabilityService.catalog(refresh),
     // 导入、移除改了技能目录：清掉「资源 → 工具」的能力目录缓存（与 codeagent-market 安装后的做法相同）。
     invalidateCatalog: () => { capabilityService.cache = null; capabilityService.catalogGeneration++; },

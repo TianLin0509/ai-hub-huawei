@@ -23,6 +23,7 @@ const STALE_UPGRADE_MS = 10 * 60 * 1000;
 const openxSource = require('../core/app-update/openx-source');
 const catalogLib = require('../core/app-update/version-catalog');
 const { createOpenxDownloadRecorder } = require('./openx-download-recorder');
+const { createOpenxLoginLister, loginListEnabled } = require('./openx-login-list');
 
 function resolveFetch(fetchImpl) {
   if (typeof fetchImpl === 'function') return fetchImpl;
@@ -73,7 +74,10 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   // 本机是不是免安装版（zip 解压即用，目录里没有卸载程序）：完整安装包会装到另一处，原目录仍是旧版（O②）。测试可注入。
   portableCopy = null,
   // 内源无感下载记录器（2026-11-25）：真正下载并校验通过后在后台同步计入内源社区下载量；测试可注入。
-  openxRecorder = null }) {
+  openxRecorder = null,
+  // R63：索引和匿名列表都查不到版本时，借本人 Edge 登录查列表（main/openx-login-list.js）。测试可注入函数；null 表示关掉；
+  // 不传时只在 Hub 程序里默认开（纯 Node 单测不拉起 Edge）。
+  openxLoginLister }) {
   const productName = () => { try { return (config && config.productName) || (isPackaged && app && typeof app.getName === 'function' && app.getName()) || 'AI Hub'; } catch (_) { return 'AI Hub'; } };
   // R29/R35（2026-11-24 用户定）：程序更新只走公司内源，版本清单只从内源读（签名清单，fetchManifest）；
   // 只有测试（纯 Node 单测、AI_HUB_UPDATE_SOURCES 注入本机服务）才用 sources。
@@ -172,6 +176,10 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     logger,
     onChange: applyOpenxRecordChange,
   });
+  // 只在公司版（内源生效）时挂上；每建一个控制器都重设一次，不留上一个的。
+  openxSource.setLoginLister(!only() || openxLoginLister === null ? null
+    : typeof openxLoginLister === 'function' ? openxLoginLister
+      : loginListEnabled(env) ? createOpenxLoginLister({ env, logger }) : null);
   state.openxRecordFeature = !!recorder.isActive();
   state.openxRecordEnabled = !!recorder.isEnabled();
   state.openxRecord = null;
@@ -254,8 +262,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       if (!silent) emit({ phase: 'checking', error: null, errorKind: null });
       const fetchFn = resolveFetch(fetchImpl);
       const checkAbort = myAbort;
-      // 直接读内源上的签名清单；用户点「检查更新」要真的再连一次内源。
-      if (only()) openxSource.clearDown();
+      // 直接读内源上的签名清单；用户点「检查更新」要真的再连一次内源（R63：手动检查时借 Edge 登录那一步也真的再试）。
+      if (only()) openxSource.clearDown({ relogin: !silent });
       let results = only() ? [] : await checkManifests({ sources, fetchImpl: fetchFn, validate: validateManifest, signal: checkAbort.signal });
       if (checkAbort.signal.aborted) return quit();
       // R44：用户手动检查给内源 20 秒；后台检查仍按 8 秒。

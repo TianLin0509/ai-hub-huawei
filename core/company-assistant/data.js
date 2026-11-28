@@ -5,6 +5,7 @@
 
 const { createHash } = require('node:crypto');
 const RJ = require('../reply-judge');
+const WA = require('./welink-account');
 const pad = n => String(n).padStart(2, '0');
 const DISPLAY_ZONE = 'Asia/Shanghai';
 const formatters = new Map();
@@ -265,22 +266,45 @@ const idCmp = (a, b) => { try { const x = BigInt(a), y = BigInt(b); return x < y
 const LONG_ID = /^\d{16,}$/;
 const sameMsgKey = (a, b) => { const s = String(a ?? ''), t = String(b ?? ''); return s === t || (LONG_ID.test(s) && LONG_ID.test(t) && (String(Number(s)) === s || String(Number(t)) === t) && Number(s) === Number(t)); };
 
+// 本人的几个账号（R66，11-27 反馈「有时候把我自己的账号判断为等你回复」）：同一个人的工号有带字母前缀和不带的写法
+// （00200002 / x00200002，welink-account.same），手机设置里还可能加过别的号。以前只按登录 UID 原样比对，
+// 换一种写法发出的（手机、另一台电脑、W3 账号）就被当成别人说的，自己的话成了「等你回复」。
+function selfIdList(me) { return [...new Set((Array.isArray(me) ? me : [me]).map(x => String(x ?? '').trim()).filter(Boolean))]; }
+function isSelfAccount(account, ids) { const a = String(account ?? '').trim(); return !!a && ids.some(id => WA.same(a, id)); }
+// 已经算好的消息行（含沿用的旧缓存）按当前的本人账号重新认一遍「是不是我发的 / 是不是 @我」：只会把漏认的补上，不把已认的改掉。
+function markSelf(rows, me) {
+  const ids = selfIdList(me);
+  if (!ids.length || !Array.isArray(rows)) return rows;
+  return rows.map(m => {
+    if (!m || m.mine) return m;
+    if (isSelfAccount(m.account, ids)) return { ...m, mine: true, atMe: false, atAll: false, sender: '我' };
+    const atList = (m.mentionEvidence && Array.isArray(m.mentionEvidence.atAccountList)) ? m.mentionEvidence.atAccountList : [];
+    if (!m.atMe && atList.some(a => isSelfAccount(a, ids))) return { ...m, atMe: true, atAll: false };
+    return m;
+  });
+}
+// 快照里能认出的本人账号：登录 UID + 手机设置里加的额外工号。
+const snapshotSelfIds = (snapshot, settings) => selfIdList([snapshot && snapshot.login && snapshot.login.uid, ...((settings && settings.phone && settings.phone.extraIds) || [])]);
+// 读某个会话的消息时都走这里（R66 审查 P1-3）：等你回复、复核、汇总、简报、提问材料按同一份「我」判定，锚才对得上。
+const convRows = (snapshot, settings, convId) => markSelf(((snapshot && snapshot.messages) || {})[convId] || [], snapshotSelfIds(snapshot, settings));
+
 function messages(raw, conv, me, { myName = '', names = null } = {}) {
   const list = messageRecords(raw) || [];
+  const ids = selfIdList(me);
   return list.map((m, i) => {
     const time = timeValue(first(m, ['serverSendTime', 'server_send_time', 'send_time', 'sendTime', 'msg_time', 'msgTime', 'time', 'timestamp', 'create_time', 'createTime']), first(m, ['timeZone', 'TimeZone']));
     const at = time.at;
     const account = String(first(m, ['sender_account', 'senderAccount', 'from_account', 'fromAccount', 'sender_id', 'senderId', 'sender', 'from', 'account']) ?? '');
     const named = first(m, ['sender_name', 'senderName', 'staff_name', 'native_name', 'nick_name', 'from_name']);
     const key = String(first(m, ['msgId', 'msg_id', 'message_id', 'messageId', 'id']) ?? `${at || 0}-${i}`);
-    const mine = explicitBoolean(m.is_self) || explicitBoolean(m.isSelf) || m.direction === 'send' || (!!me && account === String(me));
+    const mine = explicitBoolean(m.is_self) || explicitBoolean(m.isSelf) || m.direction === 'send' || isSelfAccount(account, ids);
     const sender = mine ? '我' : String(named ?? (names && names.get(account)) ?? account);
     const content = first(m, ['content', 'msg_content', 'msgContent', 'text', 'message', 'body']) ?? '';
     const text = textOf(content);
     const contentType = String(first(m, ['contentType', 'content_type', 'msgType']) ?? '');
     const atList = Array.isArray(m.atAccountList) ? m.atAccountList.map(String) : [];
     const atFlag = explicitBoolean(m.at), atSelf = first(m, ['atself', 'atSelf', 'at_self']);
-    const atMe = !mine && (explicitBoolean(atSelf) || (!!me && atList.includes(String(me))) || (!!myName && text.includes('@' + myName)));
+    const atMe = !mine && (explicitBoolean(atSelf) || atList.some(a => isSelfAccount(a, ids)) || (!!myName && text.includes('@' + myName)));
     const atAll = !mine && !atMe && (explicitBoolean(first(m, ['atall', 'atAll', 'at_all'])) || atFlag && !atList.length);
     return { sourceId: `msg:${conv.id}:${key}`, conv: conv.id, convName: conv.name, group: conv.group, key, at, sender, account, mine, atMe, atAll, text, content, contentType, replyTo: replyTargetOf(content),
       displayTime: displayTime(at), timeStatus: time.status === 'known' ? 'known' : 'unknown', timeEvidence: time,
@@ -348,13 +372,19 @@ const emojiReply = (m, hit) => {
   return found && !rest;
 };
 const LEVEL_ORDER = { strong: 0, weak: 1, settled: 2 };
+// 这条群消息之后我在群里接过话（R66，反馈「已经回过的消息仍提示」）：我后来发的、没有引用别的消息的话都算；
+// 引用了另一条的只算回了那一条（甲、乙都 @我、我只引用回复了甲，乙仍算没回）。和定时汇总（digest.js）同一口径。
+function repliedAfter(list, hit) {
+  return (list || []).some(m => m && m.mine && Number(m.at) > Number(hit.at) && (() => { const q = m.replyTo ?? replyTargetOf(m.content); return !q || q === hit.key; })());
+}
 function awaiting(snapshot, settings = {}, { now, review } = {}) {
   const myName = settings.myName || '';
   const t = Number.isFinite(now) ? now : (Number(snapshot.at) || Date.now());
   const items = ((review === undefined ? settings.replyReview : review) || {}).items || {};
   const out = [];
+  const selfIds = snapshotSelfIds(snapshot, settings);
   for (const conv of snapshot.conversations || []) {
-    const list = (snapshot.messages || {})[conv.id] || [];
+    const list = markSelf((snapshot.messages || {})[conv.id] || [], selfIds);
     if (!list.length) continue;
     const last = list[list.length - 1];
     const r = items[conv.id];
@@ -461,4 +491,4 @@ function eventInRange(m, range) {
   return true;
 }
 
-module.exports = { idCmp, sameMsgKey, DISPLAY_ZONE, dayKey, clock, displayTime, dateParts, timeValue, toMs, explicitBoolean, listIn, textOf, short, namesOf, messageRecords, conversationRecords, messageId, meetings, isCancelledMeeting, calendarEvents, isCancelledCalendarEvent, conversations, messages, mails, awaiting, reviewAnchor, relatedGroups, sourceIndex, todaysMeetings, unresolvedMeetings, eventTimeUnknown, eventInRange, mergeMeetings };
+module.exports = { convRows, repliedAfter, selfIdList, isSelfAccount, markSelf, snapshotSelfIds, idCmp, sameMsgKey, DISPLAY_ZONE, dayKey, clock, displayTime, dateParts, timeValue, toMs, explicitBoolean, listIn, textOf, short, namesOf, messageRecords, conversationRecords, messageId, meetings, isCancelledMeeting, calendarEvents, isCancelledCalendarEvent, conversations, messages, mails, awaiting, reviewAnchor, relatedGroups, sourceIndex, todaysMeetings, unresolvedMeetings, eventTimeUnknown, eventInRange, mergeMeetings };

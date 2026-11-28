@@ -484,14 +484,16 @@ test('预热忙碌上限会在空闲后重新计算，且不回收已有问题�
   f.a.lanes.chat.job = null; f.a.retireExpiredWarm(); await f.settle(); assert.ok(f.closed.includes(warm));
 });
 
-test('预热回收独立计时，助理暂停后仍执行；close 会清掉清扫定时器', async t => {
+test('关助理（pause）当场关掉预开会话、清扫定时器，关着时不再预开；再开后照常预开；close 会清掉清扫定时器（R66）', async t => {
   const f = fixture(t); f.a.deps.noTimer = false;
   t.mock.timers.enable({ apis: ['setInterval'] });
   f.a.prewarm('desk'); await f.settle(); const warm = f.a.warm.desk;
-  f.a.started = true; f.a.pause();
-  f.advance(PREWARM_TTL_MS); t.mock.timers.tick(PREWARM_TTL_MS); await f.settle();
-  assert.ok(f.closed.includes(warm)); assert.equal(f.a.warmSweepTimer, null);
-  f.a.prewarm('desk'); await f.settle(); assert.ok(f.a.warmSweepTimer);
+  assert.ok(f.a.warmSweepTimer);
+  f.a.started = true; f.a.pause(); await f.settle();
+  assert.ok(f.closed.includes(warm)); assert.equal(f.a.warmSweepTimer, null); assert.deepEqual(f.a.warm, {});
+  assert.equal(f.a.prewarm('desk'), null);
+  f.a.resume();
+  f.a.prewarm('desk'); await f.settle(); assert.ok(f.a.warm.desk); assert.ok(f.a.warmSweepTimer);
   f.a.close(); assert.equal(f.a.warmSweepTimer, null);
 });
 

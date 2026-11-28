@@ -13,10 +13,16 @@ const TEXT_EXT = new Set(['.md', '.py', '.js', '.mjs', '.cjs', '.ps1', '.json', 
 const ID_PREFIX = 'weclaw:';
 
 function weclawRoots(homeDir) {
+  // 员工助手 7.11 起还按「场景」各放一份技能（.config/weclaw/scenario/<编号>/skills）；排在三个主目录之后，
+  // 同名按顺序取第一个，主目录有的不会重复；主目录被清空或改版后，场景里的技能仍能看到。
+  const scenarioDir = path.join(homeDir, '.config', 'weclaw', 'scenario');
+  const scenarios = listDir(scenarioDir).filter(e => e.isDirectory() && !e.isSymbolicLink() && !e.name.startsWith('.'))
+    .map(e => e.name).sort().slice(0, 50).map(name => path.join(scenarioDir, name, 'skills'));
   return [
     path.join(homeDir, '.config', 'weclaw', 'opencode', 'skills'),
     path.join(homeDir, '.skillhub', 'workspace', 'skills'),
     path.join(homeDir, '.config', 'weclaw', 'package', 'default', 'skills'),
+    ...scenarios,
   ];
 }
 
@@ -100,7 +106,7 @@ function readTexts(root, files, { skipBodies = false, skillMd = '' } = {}) {
 }
 
 /** 读一个员工助手技能目录（entryDir 是根目录下的一项）。返回 null 表示不是技能或应跳过。 */
-function readSkill(rootIndex, root, entryName) {
+function readSkill(rootIndex, root, entryName, seenIds = null) {
   const entryDir = path.join(root, entryName);
   if (!inside(root, entryDir) || isLink(entryDir)) return null;
   const skillRoot = findSkillRoot(entryDir);
@@ -110,6 +116,10 @@ function readSkill(rootIndex, root, entryName) {
   let text = '';
   try { text = fs.readFileSync(path.join(skillRoot, 'SKILL.md'), 'utf8'); } catch { return null; }
   const { fm, order, body } = rules.parseFrontmatter(text);
+  const sourceName = fm.name || meta.name || path.basename(skillRoot);
+  const normalized = rules.slug(sourceName, meta.skillId, path.basename(skillRoot), entryName);
+  // 前面的根目录已有同名技能（7.11 按场景各放一份）：不再逐个文件读正文，免得场景多时扫描超时。
+  if (seenIds && seenIds.has(ID_PREFIX + normalized)) return { duplicate: true, entryName };
   const listing = listFiles(skillRoot);
   const { texts, unscanned } = readTexts(skillRoot, listing.files, { skipBodies: listing.tooLarge, skillMd: text });
   const deps = rules.detectDeps(texts);
@@ -117,8 +127,6 @@ function readSkill(rootIndex, root, entryName) {
   if (unscanned.length) deps.push({ key: 'unscanned', label: '未检查的文件', tier: 'fix', files: unscanned.slice(0, 5),
     why: `有 ${unscanned.length} 个文本文件${listing.tooLarge ? '（技能整体超限）' : '超过 2 MB 或读不出'}，没有检查正文，无法确认是否依赖员工助手，导入后请人工核对` });
   const sensitive = rules.detectSensitive(texts);
-  const sourceName = fm.name || meta.name || path.basename(skillRoot);
-  const normalized = rules.slug(sourceName, meta.skillId, path.basename(skillRoot), entryName);
   const description = String(fm.description || meta.description_zh || meta.description || '').trim();
   const displayName = String(meta.display_name || meta.displayName || fm.name || entryName);
   const use = rules.useTier({ names: [normalized, sourceName, entryName, path.basename(skillRoot)], deps });
@@ -140,8 +148,8 @@ function scanWeclaw(homeDir, { roots = weclawRoots(homeDir) } = {}) {
     if (isLink(root)) return;
     for (const e of listDir(root)) {
       if (!e.isDirectory() || e.name.startsWith('.')) continue; // 符号链接/联接 isDirectory() 为假，直接不看
-      const item = readSkill(index, root, e.name);
-      if (!item) continue;
+      const item = readSkill(index, root, e.name, items);
+      if (!item || item.duplicate) continue;
       if (item.skipped) { skipped.push(item.entryName); continue; }
       if (!items.has(item.id)) items.set(item.id, item);
     }

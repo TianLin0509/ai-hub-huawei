@@ -25,11 +25,11 @@ function nextSlotAt(now) {
 }
 
 /** 候选：近 3 天、超过 30 分钟、最后一条是别人说的私聊（不管规则怎么判），外加有 @我 的群。 */
-function candidates(snapshot, { now = Date.now(), myName = '', done = new Set() } = {}) {
+function candidates(snapshot, { now = Date.now(), myName = '', done = new Set(), settings = null } = {}) {
   const out = [];
   const fresh = at => Number.isFinite(at) && now - at <= WINDOW_MS && now - at >= MIN_WAIT_MS;
   for (const conv of snapshot.conversations || []) {
-    const list = (snapshot.messages || {})[conv.id] || [];
+    const list = D.convRows(snapshot, settings, conv.id);
     if (!list.length) continue;
     const last = list[list.length - 1];
     if (conv.group) {
@@ -51,7 +51,7 @@ function candidates(snapshot, { now = Date.now(), myName = '', done = new Set() 
   const when = at => (Number.isFinite(at) ? `${D.dayKey(at).slice(5)} ${D.clock(at)}` : '时间未知');
   const line = ({ m, gap }) => `${gap ? '…\n' : ''}${when(m.at)} ${m.mine ? '我' : m.sender}${m.atMe ? '（@我）' : ''}: ${D.short(m.text || m.preview, 200)}`;
   return out.slice(0, MAX_CONVS).map((x, i) => ({ c: `c${i + 1}`, conv: x.conv.id, convName: x.conv.name, group: !!x.conv.group,
-    lastKey: D.reviewAnchor(x.conv, (snapshot.messages || {})[x.conv.id] || [], myName), lines: x.rows.map(line) }));
+    lastKey: D.reviewAnchor(x.conv, D.convRows(snapshot, settings, x.conv.id), myName, settings), lines: x.rows.map(line) }));
 }
 
 function prompt(cands, { now = Date.now() } = {}) {

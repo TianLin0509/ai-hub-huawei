@@ -40,7 +40,8 @@ ${body}
   const stop = async () => { if (hub) { result.teardown = await gracefulQuit(hub); hub = null; } if (c) { await c.close(); c = null; } };
   try {
     hub = await launchIsolatedHub({ entryPath: repo, cwd: repo, dataDir, port: await freePort(), windowMode: 'hidden', label: 'skill-plaza', extraEnv: {
-      ...(REAL ? { CLAUDE_HUB_HOME_DIR: home, CLAUDE_HUB_SKILL_PLAZA_WECLAW: '1', AI_HUB_CODEAGENT_CONFIG_DIR: path.join(home, '.cac') } : {}),
+      // 真实模式不给 CLAUDE_HUB_SKILL_PLAZA_WECLAW：隔离环境里没有员工助手主程序（同「装在自选目录、默认位置认不出」），只凭技能目录也要列出（2026-11-28 反馈）
+      ...(REAL ? { CLAUDE_HUB_HOME_DIR: home, AI_HUB_CODEAGENT_CONFIG_DIR: path.join(home, '.cac') } : {}),
       CLAUDE_CONFIG_DIR: path.join(root, 'unused-claude'), CODEX_HOME: path.join(root, 'unused-codex'), HUB_SESSION_SEARCH_DISABLE_NATIVE: '1',
       CLAUDE_HUB_ASSISTANT_TIMER: '0', CLAUDE_HUB_FORUM_TIMER: '0',
       ...(process.env.NODE_PATH ? { NODE_PATH: process.env.NODE_PATH } : {}),
@@ -159,6 +160,20 @@ ${body}
       assert.equal(noWeclaw.src, false);
       result.checks.push('员工助手没装：来源里没有员工助手，页首灰字说明怎么获得更多技能');
       await shot('20261127-skill-plaza-5-codex-no-weclaw');
+      // 一路失败不拖垮整个广场：本机已装读失败 → 页首一行红字带「重试」，员工助手与 AgentCenter 卡片照常；点重试恢复
+      await c.eval(`window.__spzStub.weclawPresent=true; window.__spzStub.fail={local:'读本机各家 AI 的技能超过 25 秒没读完'}`);
+      await click('#skill-plaza-page [data-spz="rescan"]');
+      await until(`!!document.querySelector('#skill-plaza-page .spz-tip:not([hidden]) .spz-tl.bad[data-source="local"]')`);
+      const partial = await c.eval(`({cards:document.querySelectorAll('#skill-plaza-page .spz-card').length,weclaw:!!document.querySelector('#skill-plaza-page .spz-card[data-source="weclaw"]'),text:document.querySelector('#skill-plaza-page .spz-tl.bad').innerText,fits:(()=>{const p=document.querySelector('#skill-plaza-page .spz-root');return p.scrollHeight<=p.clientHeight+1})()})`);
+      assert.ok(partial.weclaw && partial.cards > 0 && /没读到/.test(partial.text) && /重试/.test(partial.text) && partial.fits, JSON.stringify(partial));
+      await shot('20261128-skill-plaza-8-one-source-failed');
+      await c.eval(`window.__spzStub.fail={}`);
+      await click('#skill-plaza-page .spz-tl.bad [data-spz="rescan"]');
+      await until(`document.querySelector('#skill-plaza-page .spz-tip').hidden && !!document.querySelector('#skill-plaza-page .spz-card[data-source="local"]')`);
+      result.checks.push('一路失败：本机已装读失败时页首一行原因 + 「重试」，员工助手等其余卡片照常、一屏不滚；点「重试」恢复');
+      await c.eval(`window.__spzStub.weclawPresent=false`);
+      await click('#skill-plaza-page [data-spz="rescan"]');
+      await until(`!document.querySelector('#skill-plaza-page .spz-tip').hidden`);
       // 主进程发 skill-plaza:changed：界面强制重扫（这里用员工助手「装上」来看出变化）
       await c.eval(`window.__spzStub.weclawPresent=true`);
       await c.eval(`require('electron').ipcRenderer.emit('skill-plaza:changed', {}, {})`);
@@ -176,6 +191,8 @@ ${body}
       assert.equal(uses['local:demo-sim'], 'installed');
       assert.equal(uses['local:demo-review'], 'installed', 'CodeAgent 已装技能出现在本机已装');
       result.checks.push('真实扫描：员工助手三档（直接用/需改写/交员工助手执行）与本机已装（Claude、CodeAgent 各 1 个）都正确显示');
+      assert.ok(await c.eval(`!!document.querySelector('#skill-plaza-page [data-spz-source="weclaw"]') && document.querySelector('#skill-plaza-page .spz-tip').hidden`), '主程序认不出时员工助手来源照样在、不提示没找到');
+      result.checks.push('主程序路径认不出（隔离环境没有员工助手主程序）：只凭技能目录照样列出员工助手来源，页首不报「没找到」');
       await typeSearch('纪要');
       assert.deepEqual(await cards(), [W + 'demo-meeting-notes']);
       await click(`${card(W + 'demo-meeting-notes')} [data-spz="detail"]`);

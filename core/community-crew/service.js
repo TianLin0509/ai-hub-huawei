@@ -171,8 +171,9 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
       requireEnabled();
       return task();
     });
-    // 对方能应答但文件不存在（ENOENT）说明主机是通的，不算失败、不退避。
-    const settle = e => (e && e.code === 'ENOENT' ? peerSucceeded(ip) : fail());
+    // 对方能应答但文件不存在、没有权限或不是目录，都说明主机是通的，不算失败、不退避
+    // （同事电脑上排在前面的共享读不了时，后面真正放信箱的共享还要接着试）。
+    const settle = e => (e && /^(ENOENT|EACCES|EPERM|ENOTDIR)$/.test(e.code) ? peerSucceeded(ip) : fail());
     actual.then(() => {}, settle)
       .finally(() => { meta.pending = false; uncActive--; });
     return ms == null ? actual : withTimeout(actual, ms, '连接').catch(e => { settle(e); throw e; });
@@ -300,6 +301,21 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
     const made = await shareTools.createShare();
     return detectShare({ preferred: made.name });
   }
+  // 团队信箱所在共享现在给了谁（R66-5）：只读查一次、缓存 10 分钟，查到后通知界面重画；查不到就不显示，不影响收发。
+  let scopeCache = null, scopeLoading = false;
+  function shareScopeNow() {
+    const share = load().share;
+    if (!share || !shareTools.shareAccess) return null;
+    const fresh = scopeCache && scopeCache.name === share.name && now() - scopeCache.at < 10 * 60000;
+    if (!fresh && !scopeLoading) {
+      scopeLoading = true;
+      Promise.resolve().then(() => shareTools.shareAccess(share.name))
+        .then(entries => { scopeCache = { name: share.name, at: now(), scope: shareTools.shareScope(entries) }; emit('update', {}); })
+        .catch(e => { scopeCache = { name: share.name, at: now(), scope: null }; logger.warn?.('[crew] 查共享权限失败：', e.message); })
+        .finally(() => { scopeLoading = false; });
+    }
+    return scopeCache && scopeCache.name === share.name ? scopeCache.scope : null;
+  }
 
   // ---------- 发布：名片与信件 ----------
   function cardFor(crew) {
@@ -307,8 +323,10 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
     return {
       v: 1, id: s.me.id, nick: clip(p.nick || '我', 24), pet: clip(p.pet || '01-cat', 40), petName: clip(p.petName || '', 24),
       ip: myIp(), share: s.share ? s.share.name : '', status: STATUS.includes(s.me.status) ? s.me.status : 'on',
-      doing: clip(s.me.doing, 80), sig: clip(s.me.sig, 80), at: now(), crewName: clip(crew.name, 40),
-      roster: crew.members.filter(m => validId(m.id) && ipOk(m.ip) && shareOk(m.share)).map(m => ({ id: m.id, nick: clip(m.nick, 24), ip: m.ip, share: m.share })),
+      doing: clip(s.me.doing, 80), sig: clip(s.me.sig, 80), at: now(), crewName: clip(crew.name, 40), joinedAt: Number(crew.createdAt) || 0,
+      // 谁退出了、何时：读不到退出者本人名片的成员（他退出后关机了）也能从别人这里知道。
+      gone: Object.fromEntries(Object.entries(crew.left || {}).filter(([id]) => idOk(id)).slice(-200)),
+      roster: crew.members.filter(m => validId(m.id) && ipOk(m.ip) && shareOk(m.share)).map(m => ({ id: m.id, nick: clip(m.nick, 24), ip: m.ip, share: m.share, joinedAt: Number(m.joinedAt) || 0 })),
     };
   }
   function myFeed(crewId) {
@@ -374,7 +392,11 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
       if (cardBuf) {
         const c = seal.openJson(crew.key, cardBuf);
         if (!c || c.id !== m.id) throw new Error('对方名片身份不匹配');
+        if (c.left) { markLeft(crew, m.id, Number(c.joinedAt) || Number(m.joinedAt) || 1); peerSucceeded(m.ip); return true; }
         if (c && validId(c.id) && c.id === m.id) {
+          // 在线按本机收到新名片的时间算，不用对方电脑的时钟；名片里的时间戳没变（重启后重读旧名片）不算新到。
+          if (!m.cardAt || Number(c.at) !== m.cardAt) m.cardSeenAt = now();
+          m.joinedAt = Math.max(Number(m.joinedAt) || 0, Number(c.joinedAt) || 0);
           Object.assign(m, { nick: clip(c.nick, 24) || m.nick, pet: clip(c.pet, 40) || m.pet, petName: clip(c.petName, 24), status: STATUS.includes(c.status) ? c.status : 'on',
             doing: clip(c.doing, 80), sig: clip(c.sig, 80), cardAt: Number(c.at) || 0 });
           // 刚读通的地址优先；名片只提供以后断连时可探测的候选地址。
@@ -382,9 +404,19 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
           if (shareOk(c.share)) m.share = c.share;
           for (const r of Array.isArray(c.roster) ? c.roster : []) {
             if (!r || !validId(r.id) || r.id === meId() || !ipOk(r.ip) || !shareOk(r.share)) continue;
+            if (crew.left && crew.left[r.id] >= (Number(r.joinedAt) || 0)) continue; // 退出后别人名单里的旧记录不再拉回来
             const known = crew.members.find(x => x.id === r.id);
             if (known) { if (r.ip !== known.ip) known.candidateIp = r.ip; continue; }
-            crew.members.push({ id: r.id, nick: clip(r.nick, 24), ip: r.ip, share: r.share, pet: '', joinedAt: now() });
+            if (crew.left) delete crew.left[r.id];
+            crew.members.push({ id: r.id, nick: clip(r.nick, 24), ip: r.ip, share: r.share, pet: '', joinedAt: Number(r.joinedAt) || 0 });
+          }
+          for (const [id, at] of Object.entries(c.gone && typeof c.gone === 'object' ? c.gone : {})) {
+            const t = Number(at) || 0, x = idOk(id) && id !== meId() && crew.members.find(y => y.id === id);
+            if (t <= 0 || t > now() + 86400000) continue; // 无效或离谱的未来时间不采信
+            // 二手消息：我正能直接读到他的名片，就以他本人为准，不听别人说他退出了。
+            if (x && peerMeta.get(crew.id + ':' + id)?.ok && x.cardSeenAt && now() - x.cardSeenAt < ONLINE_MS) continue;
+            if (x && t >= (Number(x.joinedAt) || 0)) markLeft(crew, id, t);
+            else if (idOk(id) && !x && t > ((crew.left || {})[id] || 0)) { crew.left = crew.left || {}; crew.left[id] = t; }
           }
           changed = true;
         }
@@ -544,7 +576,8 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
       const s = load();
       for (const crew of s.crews) {
         if (!enabled() || !validId(crew.id)) break;
-        const before = crew.members.length;
+        const sig = () => crew.members.map(m => m.id + '@' + m.ip + '\\' + m.share).join(',');
+        const before = sig();
         const peers = crew.members.filter(m => validId(m.id) && m.id !== meId() && ipOk(m.ip) && shareOk(m.share));
         // 最多 4 路并发轮询（与全局 UNC 名额一致），人多时排队而不是被挤掉。
         const queue = peers.slice(), results = [];
@@ -552,53 +585,107 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
           while (queue.length && enabled()) results.push(await pollMember(crew, queue.shift()).catch(() => false));
         }));
         await findPendingJoiners(crew).catch(() => {});
+        await discoverInbound(crew).catch(e => logger.warn?.('[crew] 入站发现失败：', e.message));
         await sweepInvites(crew);
-        if (results.some(Boolean) || crew.members.length !== before) { saveLog(crew.id); save(); emit('update', { crewId: crew.id }); }
+        const moved = sig() !== before;
+        if (moved) await publishCard(crew).catch(() => {}); // 名单变了马上告诉其他人，不等 30 秒一次的名片
+        if (results.some(Boolean) || moved) { saveLog(crew.id); save(); emit('update', { crewId: crew.id }); }
       }
       await sweepShares();
     } finally { polling = false; }
   }
 
-  // 发出邀请后，对方用邀请码加入时会在他自己的信箱里建好本团队的目录；这边按邀请时填的 IP 去他的共享里找（net view 列共享名）。
-  const lastPendingAt = new Map();
+  // 邀请是一段话，常被发到群里多人用：一条邀请到期前可以多人加入，加入的人记在 joined 里。
+  // 入队的人只往自己的信箱写，队长要自己去找到他们：
+  //   1. 邀请时填了 IP：按 IP 去对方共享里找；
+  //   2. 没填或填错：入队的人会持续读队长的共享，本机能看到「谁正连着我的 445」（netstat，不要管理员），按这些地址去找。
+  // 找到目录后先用团队钥匙解开名片、核对身份，才算成员（别人伪造的目录解不开）。
+  const INVITE_MS = 7 * 86400000;
+  const liveInvite = v => v.at > now() - INVITE_MS;
+  const lastPendingAt = new Map(), lastInboundAt = new Map(), inboundMiss = new Map();
   async function sweepInvites(crew) {
     if (!enabled() || !box()) return;
     const keep = [];
     for (const v of crew.invites || []) {
       if (!validId(v.inviteId)) continue;
-      if (v.joinedId || v.at <= now() - 7 * 86400000) {
+      if (!liveInvite(v)) {
         requireEnabled();
         await fsp.rm(guarded(box(), path.join(box(), 'invites', v.inviteId + '.bin')), { force: true });
       } else keep.push(v);
     }
     if (keep.length !== (crew.invites || []).length) { crew.invites = keep; save(); }
   }
+  function markLeft(crew, id, at = now()) {
+    crew.left = crew.left && typeof crew.left === 'object' ? crew.left : {};
+    crew.left[id] = Math.max(Number(crew.left[id]) || 0, at);
+    crew.members = crew.members.filter(m => m.id !== id);
+    peerMeta.delete(crew.id + ':' + id);
+  }
+  // 读对方共享里本团队目录下的成员，名片解得开、身份对得上才加；返回新加的人数，读不到返回 -1。
+  async function adoptFrom(crew, ip, sh, invite) {
+    if (!shareOk(sh) || !ipOk(ip)) return -1;
+    const base = shareTools.peerBoxDir(ip, sh);
+    const dir = path.join(base, 'crews', checkId(crew.id));
+    let names;
+    try { names = await uncRequest(ip, () => fsp.readdir(dir)); } catch { return -1; }
+    peerSucceeded(ip);
+    let added = 0;
+    const stale = m => !m.manualIp && !m.ipOverride && (m.ip !== ip || m.share !== sh);
+    for (const id of names.filter(n => idOk(n) && n !== meId() && crew.members.every(m => m.id !== n || stale(m)))) {
+      let c = null;
+      try { c = seal.openJson(crew.key, await uncRequest(ip, () => fsp.readFile(guarded(base, path.join(dir, id, 'card.bin'))))); } catch { c = null; }
+      if (!c || c.id !== id || c.left) continue;
+      if (crew.left && crew.left[id] >= (Number(c.joinedAt) || 0)) continue; // 退出前的旧名片被拿来回放
+      const old = crew.members.find(m => m.id === id);
+      if (old) { if (stale(old)) { Object.assign(old, { ip, share: sh, candidateIp: '' }); peerMeta.delete(crew.id + ':' + id); added++; } continue; }
+      if (crew.left) delete crew.left[id];
+      crew.members.push({ id, nick: clip(c.nick, 24) || (invite && invite.forName) || '新成员', pet: clip(c.pet, 40), petName: clip(c.petName, 24), ip, share: sh, joinedAt: Number(c.joinedAt) || now() });
+      if (invite) { invite.joined = [...new Set([...(Array.isArray(invite.joined) ? invite.joined : []), id])]; invite.joinedId = invite.joinedId || id; }
+      added++;
+    }
+    return added;
+  }
   async function findPendingJoiners(crew) {
-    const pend = (crew.invites || []).filter(v => v.ip && !v.joinedId && v.at > now() - 7 * 86400000);
+    const pend = (crew.invites || []).filter(v => v.ip && ipOk(v.ip) && liveInvite(v) && !crew.members.some(m => m.ip === v.ip));
     if (!pend.length || now() - (lastPendingAt.get(crew.id) ?? -Infinity) < 20000) return;
     lastPendingAt.set(crew.id, now());
     for (const v of pend) {
-      if (!enabled() || !validId(v.inviteId) || !ipOk(v.ip)) continue;
+      if (!enabled() || !validId(v.inviteId)) continue;
       const shares = v.share ? [v.share] : await remoteShares(v.ip);
-      for (const sh of shares) {
-        if (!shareOk(sh)) continue;
-        let names = [];
-        try { names = await uncRequest(v.ip, () => fsp.readdir(path.join(shareTools.peerBoxDir(v.ip, sh), 'crews', checkId(crew.id)))); } catch { continue; }
-        peerSucceeded(v.ip);
-        for (const id of names.filter(n => validId(n) && n !== meId() && !crew.members.some(m => m.id === n))) {
-          crew.members.push({ id, nick: v.forName || '新成员', ip: v.ip, share: sh, pet: '', joinedAt: now() });
-          v.joinedId = id;
-        }
-        if (v.joinedId) break;
-      }
+      for (const sh of shares) { if (await adoptFrom(crew, v.ip, sh, v) > 0) { v.share = sh; break; } }
     }
     save();
+  }
+  async function discoverInbound(crew) {
+    // 只在发过邀请的两周内找（邀请 7 天有效，再留 7 天给晚开机的人）；每 30 秒最多一次。
+    const recent = (crew.invites || []).some(v => v.at > now() - 2 * INVITE_MS) || (crew.lastInviteAt || 0) > now() - 2 * INVITE_MS;
+    if (!recent || !enabled() || !shareTools.inboundSmbPeers) return;
+    if (now() - (lastInboundAt.get(crew.id) ?? -Infinity) < 30000) return;
+    lastInboundAt.set(crew.id, now());
+    const known = new Set([myIp(), ...ipCandidates(), ...crew.members.map(m => m.ip)]);
+    // 没找到的地址按次数退避：第一次 30 秒后再试（刚入队的人信箱可能还没写好），之后翻倍，最长 10 分钟；没试过的优先。
+    const miss = ip => inboundMiss.get(crew.id + ':' + ip) || { at: -Infinity, n: 0 };
+    const due = ip => now() - miss(ip).at >= Math.min(30000 * 2 ** Math.max(0, miss(ip).n - 1), 600000);
+    const ips = (await shareTools.inboundSmbPeers()).filter(ip => ipOk(ip) && !known.has(ip) && due(ip))
+      .sort((a, b) => miss(a).at - miss(b).at).slice(0, 6);
+    let any = false;
+    for (const ip of ips) {
+      if (!enabled()) break;
+      let found = false;
+      const probe = probeSmb || (shareTools.peerBoxDir(ip, '').startsWith('\\\\') && (shareTools.probeSmb || lanShare.probeSmb));
+      if (!probe || await probe(ip)) {
+        for (const sh of await remoteShares(ip)) { if (await adoptFrom(crew, ip, sh, null) > 0) { found = true; break; } }
+      }
+      if (found) { any = true; inboundMiss.delete(crew.id + ':' + ip); } else inboundMiss.set(crew.id + ':' + ip, { at: now(), n: miss(ip).n + 1 });
+    }
+    if (any) save();
   }
   async function remoteShares(ip) {
     if (!ipOk(ip)) return [];
     try {
       const raw = await shareTools.powershell(`net view \\\\${ip} 2>$null | Out-String`, { timeoutMs: 15000 });
-      return [...new Set(String(raw).split(/\r?\n/).map(l => l.match(/^(\S.*?)\s{2,}(Disk|磁盘)/i)).filter(Boolean).map(m => m[1].trim()).filter(shareOk))];
+      const names = [...new Set(String(raw).split(/\r?\n/).map(l => l.match(/^(\S.*?)\s{2,}(Disk|磁盘)/i)).filter(Boolean).map(m => m[1].trim()).filter(shareOk))];
+      return names.sort((a, b) => (b === lanShare.NEW_SHARE_NAME) - (a === lanShare.NEW_SHARE_NAME));
     } catch { return []; }
   }
 
@@ -628,11 +715,12 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
     if (ip && !ipOk(ip)) throw new Error('IP 格式不对');
     const code = seal.newInviteCode(), iv = seal.inviteId(code);
     const p = prof();
-    const pack = { v: 1, crewId: crew.id, name: crew.name, key: crew.key, from: { id: meId(), nick: clip(p.nick || '', 24), ip: myIp(), share: load().share.name, pet: p.pet || '' },
-      roster: crew.members.filter(m => validId(m.id) && ipOk(m.ip) && shareOk(m.share)).map(m => ({ id: m.id, nick: m.nick, ip: m.ip, share: m.share })), exp: now() + 7 * 86400000 };
+    const pack = { v: 1, crewId: crew.id, name: crew.name, key: crew.key, from: { id: meId(), nick: clip(p.nick || '', 24), ip: myIp(), share: load().share.name, pet: p.pet || '', joinedAt: Number(crew.createdAt) || 0 },
+      roster: crew.members.filter(m => validId(m.id) && ipOk(m.ip) && shareOk(m.share)).map(m => ({ id: m.id, nick: m.nick, ip: m.ip, share: m.share, joinedAt: Number(m.joinedAt) || 0 })), exp: now() + 7 * 86400000 };
     await writeAtomic(path.join(box(), 'invites', iv + '.bin'), seal.sealJson(seal.inviteKey(code), pack));
     await sweepInvites(crew);
-    crew.invites.push({ inviteId: iv, forName: clip(forName, 24), ip: ip || '', at: now() });
+    crew.invites.push({ inviteId: iv, forName: clip(forName, 24), ip: ip || '', at: now(), joined: [] });
+    crew.lastInviteAt = now();
     save();
     const unc = '\\\\' + myIp() + '\\' + load().share.name;
     const pretty = seal.prettyCode(code);
@@ -674,8 +762,11 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
     peerSucceeded(inv.ip);
     if (pack.exp && pack.exp < now()) throw new Error('邀请已过期，请对方重新生成');
     let crew = crewOf(pack.crewId);
-    if (!crew) { crew = { id: pack.crewId, name: clip(pack.name, 30), key: pack.key, createdAt: now(), members: [], invites: [] }; s.crews.push(crew); }
-    const add = r => { if (r && validId(r.id) && r.id !== meId() && !crew.members.some(m => m.id === r.id) && ipOk(r.ip) && shareOk(r.share)) crew.members.push({ id: r.id, nick: clip(r.nick, 24), ip: r.ip, share: r.share, pet: clip(r.pet, 40), joinedAt: now() }); };
+    if (!crew) {
+      const lastLeft = Number((s.leftCrews || {})[pack.crewId]) || 0;
+      crew = { id: pack.crewId, name: clip(pack.name, 30), key: pack.key, createdAt: Math.max(now(), lastLeft + 1), members: [], invites: [] }; s.crews.push(crew);
+    }
+    const add = r => { if (r && validId(r.id) && r.id !== meId() && !crew.members.some(m => m.id === r.id) && ipOk(r.ip) && shareOk(r.share)) crew.members.push({ id: r.id, nick: clip(r.nick, 24), ip: r.ip, share: r.share, pet: clip(r.pet, 40), joinedAt: Number(r.joinedAt) || 0 }); };
     add({ ...pack.from, ip: inv.ip, share: pack.from.share || usedShare });
     (Array.isArray(pack.roster) ? pack.roster : []).forEach(add);
     save();
@@ -687,10 +778,23 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
   }
   function leave({ crewId }) {
     checkId(crewId);
-    const s = load();
-    if (!crewOf(crewId)) throw new Error('没有这个团队');
-    s.crews = s.crews.filter(c => c.id !== crewId); save();
-    if (box()) fsp.rm(guarded(box(), path.join(box(), 'crews', crewId)), { recursive: true, force: true }).catch(() => {});
+    const crew = crewOf(crewId);
+    if (!crew) throw new Error('没有这个团队');
+    return leaveCrew(crew);
+  }
+  async function leaveCrew(crew) {
+    const s = load(), crewId = crew.id;
+    const leftAt = Math.max(now(), Number(crew.createdAt) || 0);
+    s.leftCrews = { ...(s.leftCrews || {}), [crewId]: leftAt };
+    s.crews = s.crews.filter(c => c.id !== crewId); save(); // 先去掉，排队中的发布看到团队已不在就不再写
+    // 留一张「已退出」名片，别人下次读到就把我从名单里移走；信件和分享删掉。
+    if (box() && isEnabled()) {
+      await (publishQueues.get(crewId) || Promise.resolve()).catch(() => {});
+      const dir = myDir(crewId);
+      await fsp.rm(guarded(box(), path.join(dir, 'blobs')), { recursive: true, force: true }).catch(() => {});
+      await fsp.rm(guarded(box(), path.join(dir, 'feed.bin')), { force: true }).catch(() => {});
+      await writeAtomic(path.join(dir, 'card.bin'), seal.sealJson(crew.key, { v: 1, id: meId(), left: true, at: 0, joinedAt: leftAt })).catch(() => {});
+    }
     logs.delete(crewId); seen.delete(crewId);
     for (const file of [logFile(crewId), path.join(root, `seen-${crewId}.json`)]) {
       try { fs.unlinkSync(guarded(root, file)); } catch { /* 没有记录 */ }
@@ -908,12 +1012,12 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
         .concat(c.members.map(m => {
           const meta = peerMeta.get(c.id + ':' + m.id) || {};
           return { id: m.id, nick: m.nick, pet: m.pet, petName: m.petName || '', ip: m.ip, share: m.share, manualIp: !!m.manualIp, status: m.status || 'on',
-            doing: m.doing || '', sig: m.sig || '', online: !!(meta.ok && m.cardAt && now() - m.cardAt < ONLINE_MS), lastSeenAt: m.lastSeenAt || 0, error: meta.ok === false ? meta.err : '' };
+            doing: m.doing || '', sig: m.sig || '', online: !!(meta.ok && m.cardSeenAt && now() - m.cardSeenAt < ONLINE_MS), lastSeenAt: m.lastSeenAt || 0, error: meta.ok === false ? meta.err : '' };
         }));
       const items = l.items.slice(-200).map(i => ({ ...i, mine: i.from === s.me.id }));
-      return { id: c.id, name: c.name, members, items, invites: (c.invites || []).filter(v => !v.joinedId && v.at > now() - 7 * 86400000).map(v => ({ forName: v.forName, ip: v.ip, at: v.at })) };
+      return { id: c.id, name: c.name, members, items, invites: (c.invites || []).filter(v => v.at > now() - 7 * 86400000).map(v => ({ forName: v.forName, ip: v.ip, at: v.at, joined: (Array.isArray(v.joined) ? v.joined : v.joinedId ? [v.joinedId] : []).length })) };
     });
-    return { ok: true, enabled: !!isEnabled(), share: s.share, me: { ...s.me, ip: myIp(), ipCandidates: ipCandidates() }, rules: s.rules, limits: s.limits,
+    return { ok: true, enabled: !!isEnabled(), share: s.share, shareScope: shareScopeNow(), me: { ...s.me, ip: myIp(), ipCandidates: ipCandidates() }, rules: s.rules, limits: s.limits,
       answerDir: s.answerDir, crews, transfers: [...transfers.entries()].map(([id, t]) => ({ id, ...t })), receivedRoot: receivedRoot() };
   }
 

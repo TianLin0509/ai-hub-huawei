@@ -9,7 +9,9 @@ const ACTIONS = Object.freeze(['watch', 'remind', 'draft']); // Beta 没有自�
 const LEVEL = Object.freeze({ watch: 1, remind: 2, draft: 3 });
 const KINDS = Object.freeze(['all', 'groups', 'dm', 'pick']);
 const TEMPLATES = Object.freeze({
-  watch: { name: '帮我盯消息', kind: 'all', action: 'remind', atOnly: false, prefixed: false, memory: false, guide: '你在替本人盯消息。只挑出本人真正需要处理的：有截止时间、点名要本人做事、没人回答的直接提问、和本人负责的事相关的变化。普通通知和闲聊一律 skip。' },
+  // 2026-11-28 群反馈「盯消息为啥先全选」「要盯的就是那几个重要的群」：新建默认只盯选中的群和人（白名单）。
+  // 已建的「全部会话」分身原样保留，范围页能一键改成只盯几个。
+  watch: { name: '帮我盯消息', kind: 'pick', action: 'remind', atOnly: false, prefixed: false, memory: false, guide: '你在替本人盯消息。只挑出本人真正需要处理的：有截止时间、点名要本人做事、没人回答的直接提问、和本人负责的事相关的变化。普通通知和闲聊一律 skip。' },
   draft: { name: '帮我起草回复', kind: 'all', action: 'draft', atOnly: true, prefixed: false, memory: false, guide: '你在替本人起草回复。按本人的口吻写一条可以直接发的话，长度向本人平时的说法看齐。对方交办事情或问能不能做时，只确认理解或追问细节，接不接、什么时候给由本人定。' },
   qa: { name: '群答疑助手', kind: 'pick', action: 'draft', atOnly: false, prefixed: true, memory: true, guide: '你在群里帮本人答疑。权威答疑人说过的话就是标准答案，照原意回答；资料里没有依据的不要猜，改成 remind 交给本人。已有人答对、闲聊、道谢都 skip。回复开头写「提问人 关于『主题』：」，不 @ 人。' },
   // 2026-11-22：原先默认「提醒」，同事建了「我的分身」、勾了群和「只响应 @我」却一直不起草（动作藏在目标表里没注意到）。
@@ -59,6 +61,15 @@ function newAvatar({ id, tpl, now, persona = '', prefix = '我的数字分身', 
   const out = applyPatch(base, input);
   if (Array.isArray(input.targets) && !input.targets.some(x => x?.action)) out.targets = out.targets.map(x => ({ ...x, action: t.action }));
   return out;
+}
+
+// 新建「只盯几个」时替用户先选的起点：最近 @过本人的群优先，其次消息多的群，再按最近会话顺序；只给少量，由本人增删。
+// rows 是 targets() 给的名单行（type / atMe / count），exclude 是已经不看的。
+function suggestTargets(rows, { limit = 3, exclude = [] } = {}) {
+  const skip = new Set((exclude || []).map(x => x?.id || x));
+  return (Array.isArray(rows) ? rows : []).filter(r => r && r.id && r.type === 'group' && !skip.has(r.id))
+    .map((r, i) => ({ r, i })).sort((a, b) => (b.r.atMe || 0) - (a.r.atMe || 0) || (b.r.count || 0) - (a.r.count || 0) || a.i - b.i)
+    .slice(0, limit).map(({ r }) => ({ id: r.id, name: r.name || r.id, type: 'group' }));
 }
 
 const isOwnOutput = s => String(s || '').trimStart().startsWith(MARK) || R.isAutoReply(s);
@@ -301,4 +312,4 @@ function rulesMarkdown(av, { memoryLines = 0, sources: known = [] } = {}) {
     'draft = 写好草稿等本人确认；remind = 需要本人亲自处理或你没把握；skip = 不用处理。allowed 只有 remind 时不要写 draft。', 'ownerAsked 为 true 的事项是本人点名要草稿：必须给 draft；资料不足就写一句稳妥的回复（如说明需要确认后答复），why 里写清缺什么。'].join('\n');
 }
 
-module.exports = { MARK, ACTIONS, LEVEL, KINDS, TEMPLATES, applyPatch, newAvatar, prefixOf, isOwnOutput, matchAvatar, routeMessage, ownerOf, noise, groupWorth, candidates, answeredAfter, maybeAnswered, gate, parseResults, applyResult, safeText, related, minePairs, rulesMarkdown };
+module.exports = { MARK, ACTIONS, LEVEL, KINDS, TEMPLATES, applyPatch, newAvatar, suggestTargets, prefixOf, isOwnOutput, matchAvatar, routeMessage, ownerOf, noise, groupWorth, candidates, answeredAfter, maybeAnswered, gate, parseResults, applyResult, safeText, related, minePairs, rulesMarkdown };

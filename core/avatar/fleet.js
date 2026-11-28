@@ -17,6 +17,8 @@ const D = require('../company-assistant/data');
 const { WELINK_RATE_LIMITED } = require('../company-assistant/welink-gate');
 
 const WIDE_MS = 120000, WIDE_PER_TICK = 4, WIDE_LIST = 50, WIDE_PENDING_MAX = WIDE_LIST, WIDE_FAIL_MAX = 3;
+// 建议起点多给几个候选：页面去掉本人不看的之后取前 3 个（R64）。
+const SUGGEST_POOL = 8;
 const TICK_MS = 30000, BATCH = 5, LOOKBACK_MS = 2 * 3600000, HOT_PER_TICK = 6, MAX_PARALLEL = 2, DAILY_ITEMS = 150, KEEP_LOG = 200, KEEP_LIVE = 200, HISTORY_DAYS = 90, MEMORY_TTL_MS = 86400000;
 const OPEN = new Set(['new', 'drafting', 'ready', 'remind']), INBOX = new Set(['ready', 'remind']);
 const TEXT_FILE = /\.(?:md|txt|csv|json|log)$/i;
@@ -28,7 +30,7 @@ class FleetService {
   constructor(deps) {
     this.d = deps; this.now = deps.now || (() => Date.now());
     this.legacy = new AvatarService({ dataDir: deps.dataDir, getAssistant: deps.getAssistant, runAi: deps.runAi, now: this.now, noTimer: true });
-    this.sessions = new AgentSessions({ dataDir: deps.dataDir, createSession: deps.createSession, sendPrompt: deps.sendPrompt, lastFinal: deps.lastFinal, getSession: deps.getSession, closeSession: deps.closeSession, readTerminalScreen: deps.readTerminalScreen, pollMs: deps.pollMs, now: this.now, pickAccount: model => this.pickAccount(model) });
+    this.sessions = new AgentSessions({ dataDir: deps.dataDir, createSession: deps.createSession, sendPrompt: deps.sendPrompt, lastFinal: deps.lastFinal, getSession: deps.getSession, closeSession: deps.closeSession, readTerminalScreen: deps.readTerminalScreen, screenError: deps.screenError, pollMs: deps.pollMs, now: this.now, pickAccount: model => this.pickAccount(model) });
     this.timer = null; this.ticking = false; this.running = new Set(); this.sending = new Set(); this.live = new Map(); this.hotAt = 0; this.prep = null; this.readError = ''; this.lastError = ''; this.recovered = new Set();
     this.accountEpoch = 0; this.runtimeOwner = undefined; this.statusVersion = 0;
     this.authCheck = null; this.authCheckAt = -Infinity; this.authSignature = '';
@@ -172,6 +174,40 @@ class FleetService {
   // ---- 存储 ----
   home(owner, id) { return path.dirname(this.legacy.file(owner, path.join('agents', id, 'x'))); }
   work(owner, id) { const dir = path.join(this.home(owner, id), 'work'); fs.mkdirSync(dir, { recursive: true }); return dir; }
+  // 会话的启动目录：本人选过或自动沿用的公司代码仓库（fleet.workCwd，所有分身共用）；目录没了就回到分身自己的工作目录（R64）。
+  runCwd(owner, dir) {
+    const p = this.fleet(owner).workCwd?.path;
+    try { if (p && fs.statSync(p).isDirectory()) return p; } catch { /* 目录被删或盘符没了 */ }
+    return dir;
+  }
+  // 被外部模型管控拦下：先找本人在主页开过 CodeAgent 的公司代码仓库，找到就记下、下一轮在那里启动。返回记下的目录或空串。
+  adoptTrustedCwd(owner) {
+    if (this.fleet(owner).workCwd?.path) return '';
+    let found = '';
+    try { found = this.d.findTrustedCwd?.() || ''; } catch { found = ''; }
+    if (!found) return '';
+    this.mutateFleet(owner, fleet => { fleet.workCwd = { path: found, source: 'auto', at: this.now() }; });
+    this.legacy.audit(owner, { op: 'avatar-work-cwd', source: 'auto' });
+    return found;
+  }
+  // 页面：本人选的代码仓库目录 / 恢复默认。只收公司代码仓库，选错了就地说明。
+  setWorkCwd(dir) {
+    const owner = this.need();
+    if (!dir) { this.mutateFleet(owner, fleet => { delete fleet.workCwd; }); }
+    else {
+      if (!require('./trusted-cwd').isCompanyRepo(dir)) throw new Error('这个目录不是公司代码仓库（git remote 没有指向公司代码平台），换一个你在主页用 CodeAgent 打开过的代码仓库');
+      this.mutateFleet(owner, fleet => { fleet.workCwd = { path: dir, source: 'manual', at: this.now() }; });
+    }
+    this.legacy.audit(owner, { op: 'avatar-work-cwd', source: dir ? 'manual' : 'reset' });
+    // 换了启动目录：各分身的旧会话下一轮按新目录重开；被这条管控拦下的事项重新排队。
+    for (const av of this.fleet(owner).avatars) this.mutate(owner, av.id, st => {
+      if (['trusted_repo_required', 'external_model_blocked'].includes(st.failure?.code)) { st.failure = null; st.lastError = ''; }
+      for (const item of Object.values(st.items)) if (item.state === 'remind' && ['trusted_repo_required', 'external_model_blocked'].includes(item.failure?.code)) Object.assign(item, { state: 'new', tries: 0, failure: null });
+    });
+    if (['trusted_repo_required', 'external_model_blocked'].includes(this.activeFailure?.code)) { this.activeFailure = null; this.lastError = ''; this.lastErrorAt = 0; }
+    void this.tick().catch(e => { this.lastError = e.message; });
+    return this.status();
+  }
   fleet(owner) {
     const saved = this.legacy.read(owner, 'fleet.json', null);
     return saved ? { version: 1, paused: false, avatars: [], ...saved } : this.migrate(owner);
@@ -525,7 +561,7 @@ class FleetService {
     const epoch = this.accountEpoch, running = this.running;
     if (this.running.has(id)) return;
     running.add(id);
-    let pending = [];
+    let pending = [], adopted = false;
     try {
       const fleet = this.fleet(owner), av = fleet.avatars.find(v => v.id === id); if (!av || !av.enabled || fleet.paused) return;
       pending = this.mutate(owner, id, st => {
@@ -540,7 +576,7 @@ class FleetService {
       this.stage('context', 'running', `准备 ${pending.length} 条消息的依据`);
       this.changed();
       const dir = this.work(owner, id), before = this.state(owner, id); this.writeRules(owner, av, before);
-      const session = await this.sessions.ensure(av, before.session, dir);
+      const session = await this.sessions.ensure(av, before.session, dir, { runCwd: this.runCwd(owner, dir) });
       if (!this.current(owner, epoch)) { await this.sessions.close(session.id); return; }
       if (!this.exists(owner, id)) { await this.sessions.close(session.id); return; }
       this.mutate(owner, id, st => { st.session = session; });
@@ -549,7 +585,7 @@ class FleetService {
       this.stage('context', 'ok', '已准备本题上下文和相关依据');
       this.jobs.get(id)?.forEach(job => { job.stage = 'draft'; job.since = this.now(); });
       this.stage('draft', 'running', `生成 ${pending.length} 条草稿`);
-      let raw; try { raw = await this.sessions.ask(session, file, { isCurrent: () => this.current(owner, epoch) }); } finally { fs.rmSync(target, { force: true }); }
+      let raw; try { raw = await this.sessions.ask(session, file, { isCurrent: () => this.current(owner, epoch), dir }); } finally { fs.rmSync(target, { force: true }); }
       if (!this.current(owner, epoch)) return;
       const results = F.parseResults(raw);
       if (!this.exists(owner, id)) return;
@@ -579,6 +615,16 @@ class FleetService {
       this.stage('confirm', 'ok', '草稿或提醒已交给你确认');
     } catch (e) {
       if (e.code === 'AVATAR_STALE_OWNER' || !this.current(owner, epoch)) return;
+      // 外部模型管控按启动目录判：还在分身自己的目录里、找得到本人用过的公司代码仓库，就换到那里马上重来，不算这条失败（R64）。
+      if (e.code === 'AVATAR_DIR_POLICY' && !e.inRepo && this.exists(owner, id) && this.adoptTrustedCwd(owner)) {
+        const stale = this.mutate(owner, id, st => {
+          for (const p of pending) { const item = st.items[p.id]; if (item?.state === 'drafting') item.state = 'new'; }
+          const sid = st.session?.id || ''; st.session = null; return sid;
+        });
+        await this.sessions.close(stale);
+        this.stage('draft', 'ok', '所选模型要在公司代码仓库里用：已换到你在主页用过的代码仓库目录，马上重试');
+        adopted = true; return;
+      }
       const failure = this.recordFailure(e, 'model');
       failure.avatarId = id;
       failure.actions = failure.actions.map(a => a.kind === 'retry_tick' ? { ...a, payload: { ...a.payload, avatarId: id } } : a);
@@ -603,6 +649,8 @@ class FleetService {
       running.delete(id);
       if (this.current(owner, epoch)) {
         this.jobs.delete(id); this.changed();
+        // 刚换到代码仓库：就地重跑这一批，调用方（如纠错后重答）等到的是重跑的结果，而不是「还在排队」（R64 审查 P1）。
+        if (adopted) return this.runAvatar(owner, id, { itemId }); // eslint-disable-line no-unsafe-finally
         try { this.pump(owner, this.fleet(owner)); } catch { /* 下一轮再说 */ }
       }
     }
@@ -660,7 +708,7 @@ class FleetService {
     const epoch = this.accountEpoch;
     try {
       const { av } = this.find(owner, id), st = this.state(owner, id); this.writeRules(owner, av, st);
-      const session = await this.sessions.ensure(av, st.session, this.work(owner, id));
+      const dir = this.work(owner, id), session = await this.sessions.ensure(av, st.session, dir, { runCwd: this.runCwd(owner, dir) });
       if (!this.current(owner, epoch)) { await this.sessions.close(session.id); return; }
       if (!this.exists(owner, id)) { await this.sessions.close(session.id); return; }
       this.mutate(owner, id, now => { if (now.session?.id !== session.id) now.session = session; now.lastError = ''; });
@@ -924,7 +972,7 @@ class FleetService {
       const reason = reasonKind === 'login' ? `${login.reason}（到左侧「助理」页重新登录）`
         : reasonKind === 'error' ? `读 WeLink 消息出错：${this.readError}` : '助理还没取到 WeLink 会话列表，分身会直接读取，点重试可重新获取';
       const cached = this.cachedTargets(owner, hasRows);
-      if (cached) return { ok: true, ready: true, stale: true, at: cached.at, groups: cached.groups, people: cached.people, reason, reasonKind };
+      if (cached) return { ok: true, ready: true, stale: true, at: cached.at, groups: cached.groups, people: cached.people, suggested: F.suggestTargets(cached.groups, { limit: SUGGEST_POOL }), reason, reasonKind };
       return { ok: true, groups: [], people: [], ready: false, reason, reasonKind };
     }
     const { groups, people } = this.targetRows(owner, snap0);
@@ -933,7 +981,7 @@ class FleetService {
       const old = this.legacy.read(owner, 'targets-cache.json', null);
       if (!old || old.at !== at) this.legacy.write(owner, 'targets-cache.json', { at, groups, people });
     } catch { /* 缓存写不了只影响下次的首屏 */ }
-    return { ok: true, ready: true, at, groups, people };
+    return { ok: true, ready: true, at, groups, people, suggested: F.suggestTargets(groups, { limit: SUGGEST_POOL }) };
   }
   fetchTargets(owner) {
     if (this.targetFetch) return this.targetFetch;
@@ -953,7 +1001,9 @@ class FleetService {
   }
   targetRows(owner, snap) {
     const roster = this.legacy.roster(owner), titles = this.legacy.read(owner, 'titles.json', {});
-    const rows = (snap?.conversations || []).map(c => ({ id: c.id, name: c.name || c.id, type: c.group ? 'group' : 'user', count: (snap.messages?.[c.id] || []).length, title: titles[c.id]?.title || '', leader: !!roster.people?.[c.id]?.protected }));
+    // atMe：快照里别人 @本人的条数，给「只盯几个」挑默认起点用（F.suggestTargets）。
+    const rows = (snap?.conversations || []).map(c => { const list = snap.messages?.[c.id] || [];
+      return { id: c.id, name: c.name || c.id, type: c.group ? 'group' : 'user', count: list.length, atMe: list.filter(m => m && m.atMe && !m.mine).length, title: titles[c.id]?.title || '', leader: !!roster.people?.[c.id]?.protected }; });
     return { groups: rows.filter(r => r.type === 'group'), people: rows.filter(r => r.type === 'user') };
   }
   cachedTargets(owner, hasRows) {
@@ -1003,7 +1053,7 @@ class FleetService {
     for (const av of fleet.avatars) for (const item of Object.values(this.state(owner, av.id).items)) if (item.state === 'new') queued.push({ itemId: item.id, avatarId: av.id, convName: item.convName || '', question: short(item.text, 160), stage: 'queued', since: item.createdAt || item.at || 0, queuePos: queued.length + 1 });
     const activeFailure = loginFailure || this.activeFailure || avatars.map(av => av.state.failure).find(Boolean) || null;
     const externalItems = this.externalItems(owner, fleet);
-    return { ok: true, available: true, beta: true, paused: fleet.paused, login, snapAt: snap?.at || 0, readError: this.readError, lastError: this.lastError, prep: this.prep, avatars, externalItems, items: items.filter(i => !i.externalTwin).sort((x, y) => (y.at || 0) - (x.at || 0)), backends,
+    return { ok: true, available: true, beta: true, paused: fleet.paused, workCwd: fleet.workCwd || null, login, snapAt: snap?.at || 0, readError: this.readError, lastError: this.lastError, prep: this.prep, avatars, externalItems, items: items.filter(i => !i.externalTwin).sort((x, y) => (y.at || 0) - (x.at || 0)), backends,
       preflight, health: this.health(fleet, login, activeFailure), stages: this.stages.map(s => ({ ...s, durationMs: s.state === 'running' ? Math.max(0, this.now() - s.at) : s.durationMs })), inProgress: [...inProgress, ...queued], activeFailure, statusVersion: this.statusVersion };
   }
 }

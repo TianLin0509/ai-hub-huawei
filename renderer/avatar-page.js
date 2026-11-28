@@ -5,13 +5,14 @@
 // 页面只经 avatar:* 接口读状态和发操作；发送只有「本人点发送」这一条路，收信方由主进程从事项记录里取。
 
 const TEMPLATES = [
-  ['watch', '帮我盯消息', '谁在等你、哪条重要，及时提醒。不替你发任何消息。', '全部会话 · 只提醒'],
+  ['watch', '帮我盯消息', '只盯你选的几个重要的群和人，谁在等你、哪条重要，及时提醒。不替你发任何消息。', '选定的群和人 · 只提醒'],
   ['draft', '帮我起草回复', '私聊和群里 @我 的消息先写好草稿，你点了才发。', '私聊和 @我 · 起草'],
   ['qa', '群答疑助手', '学习群里的历史问答，帮你答重复的问题，你确认后发出。', '选定的群 · 起草'],
   ['blank', '空白分身', '从零开始，每一项都由你来定。', '全部自选'],
 ];
 const ACT = { watch: '只看', remind: '提醒', draft: '起草' };
-const KINDS = [['all', '全部会话'], ['groups', '全部群'], ['dm', '全部私聊'], ['pick', '指定群或人']];
+const KINDS = [['pick', '只盯选中的群或人'], ['all', '全部会话'], ['groups', '全部群'], ['dm', '全部私聊']];
+const PICK_SIZE = 14;
 const LOG = { draft: ['起草', 'w'], remind: ['提醒', 'b'], skip: ['跳过', ''], sent: ['已发送', 'g'], answered: ['已有人回', ''], dropped: ['已丢弃', ''], done: ['已处理', ''], recalled: ['已撤回', ''], moved: ['已转走', ''] };
 const LOG_FILTER = { all: () => true, you: r => ['draft', 'remind'].includes(r.act), sent: r => ['sent', 'recalled'].includes(r.act), skip: r => ['skip', 'answered', 'dropped', 'done', 'moved'].includes(r.act) };
 const EFFORT = [['', '默认'], ['low', '低'], ['medium', '中'], ['high', '高'], ['max', '最高']];
@@ -99,6 +100,8 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   // checking：打开页面后的首次自检（含一次自动「重新检查」）还没结束，期间只显示一行平静的「正在检查」，不先报「用不了」。
   // scan：就地扫码弹层；focus：报错条「去账号卡」后要高亮的那一项（几秒后自动淡掉）。
   let checking = false, autoRechecked = false, scan = null, scanTimer = null, clockTimer = null, scopePage = 0, focus = null;
+  // 群和人的搜索多选（新建向导和范围页共用）：一屏内翻页，不出滚动条。key → { q, page, rows, chosen, op }。
+  const pickers = {};
   const isOpen = () => !!page && !page.hidden;
   const avatar = id => data?.avatars?.find(a => a.id === id);
   const cur = () => avatar(sel);
@@ -215,6 +218,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     page.innerHTML = '<div class="avx-root"></div>'; root = page.firstChild; document.body.append(page);
     page.addEventListener('click', event => { const b = event.target.closest('[data-av]'); if (b && !b.disabled) void act(b, event).catch(e => { error = e.message; render(); }); });
     page.addEventListener('input', onInput);
+    page.addEventListener('compositionend', event => { if (event.target?.dataset?.pickQ) onPickQuery(event.target); });
     // 「自己问一句」回车直接试答（输入法选词时的回车不算）。
     page.addEventListener('keydown', event => { const t = event.target; if (event.key === 'Enter' && !event.isComposing && t?.dataset && 'tryAsk' in t.dataset) { event.preventDefault(); void tryAct('try-ask', t).catch(e => { error = e.message; render(); }); } });
     // 「原始报错」展开后，后台刷新重画时保持展开。
@@ -269,7 +273,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
       ${ready ? '<button class="avx-btn p" data-av="new">新建分身</button>' : ''}</div></header>`;
   }
   // 结构化报错：一句人话 + 紧挨着的修复按钮 + 折叠的原始报错。整页（activeFailure）和单条事项（item.failure）共用。
-  const FIX_LABEL = { provider_repair: '改用手动会话在用的供应商', open_account_card: '去账号卡换', open_model_settings: '选择模型与供应商', welink_login: '就地扫码登录', retry_tick: '重试巡检', open_account_page: '去账号页登录' };
+  const FIX_LABEL = { provider_repair: '改用手动会话在用的供应商', open_account_card: '去账号卡换', open_model_settings: '选择模型与供应商', welink_login: '就地扫码登录', retry_tick: '重试巡检', open_account_page: '去账号页登录', pick_trusted_cwd: '选公司代码仓库目录' };
   function failureBox(f, key, slim = false, sessionId = '') {
     if (!f) return '';
     const sev = f.severity === 'warn' ? 'w' : 'r';
@@ -443,16 +447,48 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   function chips(a, field, title, options) {
     return `<label class="avx-lb">${title}</label><div class="avx-chips">${a[field].map(x => `<span class="avx-pk on">${esc(x.name)}<button class="avx-x" data-av="chip-del" data-f="${field}" data-id="${esc(x.id)}" aria-label="移除">×</button></span>`).join('')}<select class="avx-in sm" data-chg="chip-add" data-f="${field}"><option value="">添加…</option>${options.filter(o => !a[field].some(x => x.id === o.id)).map(o => `<option value="${esc(o.id)}">${esc(o.name)}</option>`).join('')}</select></div>`;
   }
+  // 群太多时靠搜索找：输入框只改列表那一块，不整页重画（中文输入法拼字时整页重画会打断输入）。
+  function pickerBody(key) {
+    const st = pickers[key]; if (!st) return '';
+    const q = st.q.trim().toLowerCase(), rows = q ? st.rows.filter(x => String(x.name || '').toLowerCase().includes(q)) : st.rows;
+    const pg = paginate(rows, st.page, PICK_SIZE); st.page = pg.at;
+    const on = id => st.chosen.some(t => t.id === id);
+    const pills = pg.rows.map(x => `<button class="avx-pk ${on(x.id) ? 'on' : ''}" data-av="${st.op}" data-id="${esc(x.id)}" data-n="${esc(x.name)}" data-ty="${x.type}" title="${esc(x.name)}">${on(x.id) ? '✓ ' : ''}${esc(x.name)}${x.type === 'user' ? '<small>私聊</small>' : ''}${x.atMe ? `<small>@我 ${x.atMe}</small>` : ''}</button>`).join('');
+    const empty = !st.rows.length ? `<span class="avx-m">${esc(noGroupsText())}</span>${!targetsLoading && (targetsFailed || targets?.reason) ? ' <button class="avx-btn s" data-av="targets-retry">重试</button>' : ''}` : `<span class="avx-m">没找到名字里带「${esc(st.q.trim())}」的，换个词试试</span>`;
+    const pager = pg.pages > 1 ? `<div class="avx-line mt"><span class="avx-m">${q ? `找到 ${rows.length} 个，` : ''}第 ${pg.at + 1} / ${pg.pages} 页</span><button class="avx-btn s" data-av="pick-page" data-key="${key}" data-d="-1" ${pg.at ? '' : 'disabled'}>上一页</button><button class="avx-btn s" data-av="pick-page" data-key="${key}" data-d="1" ${pg.at < pg.pages - 1 ? '' : 'disabled'}>下一页</button></div>` : '';
+    return `<div class="avx-chips">${pills || empty}</div>${pager}`;
+  }
+  function picker(key, rows, chosen, op, placeholder = '搜索群名或人名') {
+    const st = pickers[key] || (pickers[key] = { q: '', page: 0 });
+    Object.assign(st, { rows, chosen, op });
+    return `<input class="avx-in" data-pick-q="${key}" placeholder="${esc(placeholder)}" value="${esc(st.q)}"><div class="mt" data-pick-body="${key}">${pickerBody(key)}</div>`;
+  }
+  function onPickQuery(t) {
+    const key = t.dataset.pickQ, st = pickers[key]; if (!st) return;
+    st.q = t.value; st.page = 0;
+    const body = root?.querySelector(`[data-pick-body="${key}"]`); if (body) body.innerHTML = pickerBody(key);
+  }
+  // 替本人先选的起点：主进程按「最近 @过你、消息多」排好的候选群（core/avatar/fleet-rules.js suggestTargets），去掉不看的取前 3 个。
+  const suggestedFor = (skip = []) => (targets?.suggested || []).filter(x => !skip.some(y => y.id === x.id)).slice(0, 3);
+  // 「全部」类范围：写清现在实际盯了哪些（最近的群和私聊都在内），给一键改成只盯几个。
+  function wideNote(a, groups, people) {
+    const skip = a.skip || [], inG = groups.filter(x => !skip.some(y => y.id === x.id)).length, inP = people.filter(x => !skip.some(y => y.id === x.id)).length;
+    const what = a.kind === 'groups' ? `全部群（最近的 ${inG} 个群都在内）` : a.kind === 'dm' ? `全部私聊（最近的 ${inP} 个私聊都在内）` : `全部会话（最近的 ${inG} 个群、${inP} 个私聊都在内）`;
+    const sug = suggestedFor(skip);
+    return `<h3>现在盯的是</h3><p>${esc(what)}，新建的群和新联系人也会自动进来${skip.length ? `；不看：${esc(skip.map(x => x.name).join('、'))}` : ''}。</p>
+      <p class="avx-m">只想盯那几个重要的群？改成「只盯选中的群或人」，${sug.length ? `先替你选上最近 @过你、消息最多的 ${sug.length} 个群（${esc(sug.map(x => x.name).join('、'))}），再按需增删` : '再在这里点选要盯的群'}。指定的群每 ${esc(span(data?.health?.hotIntervalMs) || '30 秒')}读一次，响应更快。</p>
+      <button class="avx-btn p s" data-av="kind" data-k="pick">改成只盯几个群</button>
+      <p class="avx-m mt">一条消息只归一个分身：指定的人优先于指定的群，指定的优先于全部。</p>`;
+  }
   function scope(a) {
     // 指定目标多了翻页，不靠卡片裁切把后面的目标藏掉。
     const tpage = paginate(a.targets, scopePage, 4);
-    const groups = targets?.groups || [], people = targets?.people || [], picked = id => a.targets.some(t => t.id === id), all = [...groups, ...people];
-    const pick = (rows, title) => `<h3>${title}</h3>${rows.length ? rows.map(x => `<label class="avx-li ck"><span><input type="checkbox" data-chg="target" data-id="${esc(x.id)}" ${picked(x.id) ? 'checked' : ''}> ${esc(x.name)}</span>${x.leader ? '<span class="avx-ch r">上级</span>' : ''}<small>${esc(x.title || (x.count ? `最近 ${x.count} 条` : ''))}</small></label>`).join('') : `<p class="avx-m">${targetsLoading && !targets ? '正在读取…' : '还没有读到，稍后再看。'}</p>`}`;
+    const groups = targets?.groups || [], people = targets?.people || [], all = [...groups, ...people];
     return `<div class="avx-c2"><div class="avx-stack"><div class="avx-card"><h3>在哪里生效</h3><div class="avx-seg">${KINDS.map(([k, n]) => `<button class="${a.kind === k ? 'on' : ''}" data-av="kind" data-k="${k}">${n}</button>`).join('')}</div>
       ${a.kind === 'pick' ? `<table class="avx-t mt"><colgroup><col><col style="width:172px"><col style="width:104px"></colgroup><tr><th>目标</th><th>归属</th><th>动作</th></tr>${a.targets.length ? tpage.rows.map(t => `<tr><td title="${esc(t.name)}">${esc(t.name)}</td><td title="${esc(a.owners[t.id]?.text)}">${esc(a.owners[t.id]?.text)}</td><td class="vis">${actionSelect(t.action, `data-chg="target-action" data-id="${esc(t.id)}"`)}</td></tr>`).join('') : '<tr><td colspan="3">在右侧勾选群或人</td></tr>'}</table>${tpage.pages > 1 ? `<div class="avx-line mt"><span class="avx-m">第 ${tpage.at + 1} / ${tpage.pages} 页，共 ${a.targets.length} 个</span><button class="avx-btn s" data-av="scope-page" data-d="-1" ${tpage.at ? '' : 'disabled'}>上一页</button><button class="avx-btn s" data-av="scope-page" data-d="1" ${tpage.at < tpage.pages - 1 ? '' : 'disabled'}>下一页</button></div>` : ''}` : `<div class="avx-line mt"><span class="avx-m">这个范围里的动作</span><div class="w120">${actionSelect(a.action, 'data-chg="action"')}</div></div>`}</div>
       <div class="avx-card"><h3>听谁的</h3><label class="avx-line"><input type="checkbox" data-chg="at" ${a.atOnly ? 'checked' : ''}> 群里只响应 @我</label>${chips(a, 'only', '只听这些人（不选就是所有人）', people)}${chips(a, 'skip', '不看这些群或人', all)}</div>
       <div class="avx-card grow tint scroll"><h3>这样设置后</h3><p>${esc(scopeSummary(a))}</p><p class="avx-m">Beta 阶段不会自动发言。人事、密码、审批类消息只提醒，不交给模型。</p></div></div>
-      <div class="avx-card scroll" data-sc="pk">${a.kind === 'pick' ? targetsBar() + pick(groups, '最近的群') + '<div class="gap"></div>' + pick(people, '最近联系的人') : '<h3>范围说明</h3><p class="avx-m">新建的群和新联系人会自动进入这个范围。</p><p class="avx-m">全部类范围跟随助理的消息刷新；想要更快响应，改成指定群或人，会每 ' + (span(data?.health?.hotIntervalMs) || '30 秒') + ' 读取一次。</p><p class="avx-m">一条消息只归一个分身：指定的人优先于指定的群，指定的优先于全部。</p>'}</div></div>`;
+      <div class="avx-card" data-sc="pk">${a.kind === 'pick' ? `<h3>选要盯的群或人<small>已选 ${a.targets.length} 个，点一下增删</small></h3>${targetsBar()}${picker('scope', all, a.targets, 'scope-target')}` : wideNote(a, groups, people)}</div></div>`;
   }
   function context(a) {
     const people = targets?.people || [];
@@ -461,7 +497,13 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
       <div class="avx-stack"><div class="avx-card grow scroll" data-sc="kn"><h3>知识来源</h3>${a.memoryLines ? `<div class="avx-li"><span>群历史问答</span><small>自动 · ${a.memoryLines} 条</small></div>` : ''}${a.sources.map((s, i) => `<div class="avx-li"><span title="${esc(s.path)}">${esc(s.name)}</span><small>${s.type === 'dir' ? '文件夹' : '文件'}</small><button class="avx-x" data-av="source-del" data-i="${i}" aria-label="移除">×</button></div>`).join('')}${!a.memoryLines && !a.sources.length ? '<p class="avx-m">还没有资料。</p>' : ''}<div class="avx-line mt"><button class="avx-btn s" data-av="source" data-t="file">添加文件</button><button class="avx-btn s" data-av="source" data-t="dir">添加文件夹</button></div></div>
       <div class="avx-card"><h3>范例<small>你改过的稿自动进来</small></h3><p class="avx-m">已有 <b>${a.examples}</b> 条，分身写新草稿时会参考。</p></div></div>
       <div class="avx-stack"><div class="avx-card grow col"><h3>补充要求<small>随时告诉它怎么做</small></h3><textarea class="avx-ta grow" data-save="notes" placeholder="比如：涉及排期的问题都转给我">${esc(a.notes)}</textarea></div>
-      <div class="avx-card"><h3>当前会话</h3><p class="avx-m">${a.session.alive ? `运行中，已处理 ${a.session.questions} 条，到 80 条自动换新。` : '闲置时自动休眠，有新消息时启动。'}记忆都在文件里，换新不丢。</p>${pickMissLine(a)}</div></div></div>`;
+      <div class="avx-card"><h3>当前会话</h3><p class="avx-m">${a.session.alive ? `运行中，已处理 ${a.session.questions} 条，到 80 条自动换新。` : '闲置时自动休眠，有新消息时启动。'}记忆都在文件里，换新不丢。</p>${workCwdLine()}${pickMissLine(a)}</div></div></div>`;
+  }
+  // 启动目录（R64）：公司 CodeAgent 按启动目录管控外部模型，换过目录时写清在哪、为什么，给恢复默认。
+  function workCwdLine() {
+    const w = data?.workCwd;
+    if (!w?.path) return '';
+    return `<p class="avx-m" title="${esc(w.path)}">启动目录：${esc(w.path)}（${w.source === 'auto' ? '所选模型要在公司代码仓库里用，自动沿用你在主页用过的仓库' : '你选的公司代码仓库'}）。分身只读自己的文件，不改这个仓库。 <button class="avx-btn s" data-av="work-cwd-reset">恢复默认</button></p>`;
   }
   // 分身会话启动时没选上所选模型（R53 第 4 件）：就地说清选的是谁、现在用的是谁，给「打开后台手动选」（同会话下拉失败时的按钮）。
   function pickMissLine(a) {
@@ -707,6 +749,14 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (cur()?.backend?.model && !(await save({ backend: { ...cur().backend, model: '' } }))) return;
     flash('已改用手动会话成功使用的供应商，下次任务起生效');
   }
+  // 分身会话的启动目录（R64）：选公司代码仓库 / 恢复默认。选错了主进程说明原因，就地显示。
+  async function pickWorkCwd(reset = false) {
+    const r = await call('work-cwd', reset ? { reset: true } : {});
+    if (r?.canceled) return;
+    // 试答页签里的同一条报错也撤掉，免得选好目录后红框还挂着（R64 审查 P1）。
+    if (!reset) for (const t of Object.values(tryouts)) if (['trusted_repo_required', 'external_model_blocked'].includes(t?.failure?.code)) t.failure = null;
+    accept(r); flash(reset ? '已恢复默认：分身在自己的工作目录里启动。' : `分身改在「${r?.workCwd?.path || ''}」里启动，被拦下的消息已重新排队。`); render();
+  }
   async function fixAction(kind, b) {
     // 试答区的报错：「重试」只重跑这次试答（原问题、样本、同意态都沿用），绝不走正式巡检 avatar:recheck。
     if (kind === 'retry_tick' && b.closest('[data-tryout]')) { await tryAct('try-again', b); return; }
@@ -724,6 +774,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (kind === 'welink_login') { void openScan(); return; }
     if (kind === 'retry_tick') { let p = {}; try { p = JSON.parse(b.dataset.payload || '{}') || {}; } catch {} await retryTick(p); return; }
     if (kind === 'open_account_page') { close(); document.getElementById('btn-rail-accounts')?.click(); return; }
+    if (kind === 'pick_trusted_cwd') { await pickWorkCwd(); return; }
     flash('这个修复动作这一版还不支持，请到设置里处理'); render();
   }
   // 「去账号卡换」：切到「后端与前缀」后把对应那一项（部门 API key 行 / 当前 CodeAgent 账号 / 当前模型）滚到眼前并描边，几秒后淡掉。
@@ -788,10 +839,14 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     }
     const title = `<div class="avx-mh"><h2>新建分身</h2><span class="avx-ch">第 ${wiz.step} 步，共 2 步</span><button class="avx-x big" data-av="wiz-close" aria-label="关闭">×</button></div>`;
     if (wiz.step === 1) return `<div class="avx-ov"><div class="avx-md">${title}<div class="avx-mb"><p class="avx-m">选一个最接近的用途，之后什么都能改。</p><div class="avx-tpls wide">${TEMPLATES.map(tplCard).join('')}</div></div></div></div>`;
-    const need = wiz.tpl === 'qa' || wiz.tpl === 'blank', groups = targets?.groups || [], people = targets?.people || [], ready = !need || wiz.targets.length > 0, rows = data.backends.rows;
-    const pill = (x, list, op) => `<button class="avx-pk ${list.some(t => t.id === x.id) ? 'on' : ''}" data-av="${op}" data-id="${esc(x.id)}" data-n="${esc(x.name)}" data-ty="${x.type}">${esc(x.name)}</button>`;
-    const scopeHtml = need ? `<h3>它管哪些群或人？</h3>${targets?.stale || targetsFailed ? targetsBar() : ''}<label class="avx-lb">群</label><div class="avx-chips">${groups.map(x => pill(x, wiz.targets, 'wiz-target')).join('') || `<span class="avx-m">${esc(noGroupsText())}</span>${!targetsLoading && (targetsFailed || targets?.reason) ? ' <button class="avx-btn s" data-av="targets-retry">重试</button>' : ''}`}</div>${wiz.tpl === 'blank' ? `<label class="avx-lb">人</label><div class="avx-chips">${people.map(x => pill(x, wiz.targets, 'wiz-target')).join('')}</div>` : ''}`
-      : `<h3>它会管这些</h3><div class="avx-q">${wiz.tpl === 'watch' ? '全部会话。新建的群和新联系人自动包含。' : '所有私聊，以及群里 @我 的消息。'}</div><label class="avx-lb">不想让它看的群（可选）</label><div class="avx-chips">${groups.map(x => pill(x, wiz.skip, 'wiz-skip')).join('')}</div>`;
+    seedWizard();
+    const watch = wiz.tpl === 'watch', need = wiz.tpl === 'qa' || wiz.tpl === 'blank' || (watch && wiz.kind === 'pick'), groups = targets?.groups || [], people = targets?.people || [], ready = !need || wiz.targets.length > 0, rows = data.backends.rows;
+    const bar = targets?.stale || targetsFailed ? targetsBar() : '';
+    const chosen = wiz.targets.length ? `<label class="avx-lb">已选 ${wiz.targets.length} 个</label><div class="avx-chips">${wiz.targets.map(x => `<span class="avx-pk on">${esc(x.name)}<button class="avx-x" data-av="wiz-target" data-id="${esc(x.id)}" data-n="${esc(x.name)}" data-ty="${x.type}" aria-label="移除">×</button></span>`).join('')}</div>` : '';
+    const seg = watch ? `<div class="avx-seg">${[['pick', '只盯选中的（推荐）'], ['all', '全部会话']].map(([k, n]) => `<button class="${wiz.kind === k ? 'on' : ''}" data-av="wiz-kind" data-k="${k}">${n}</button>`).join('')}</div>` : '';
+    const seedNote = watch && wiz.seeded && wiz.seedCount ? `<p class="avx-m">先替你选上了最近 @过你、消息最多的 ${wiz.seedCount} 个群，点一下增删，可以多选。</p>` : watch ? '<p class="avx-m">点一下选中，可以多选；群多就搜名字。</p>' : '';
+    const scopeHtml = need ? `<h3>${watch ? '盯哪几个群或人？' : '它管哪些群或人？'}</h3>${seg}${seedNote}${bar}${chosen}<label class="avx-lb">${wiz.tpl === 'qa' ? '最近的群' : '最近的群和人'}</label>${picker('wiz', wiz.tpl === 'qa' ? groups : [...groups, ...people], wiz.targets, 'wiz-target', wiz.tpl === 'qa' ? '搜索群名' : '搜索群名或人名')}`
+      : `<h3>它会管这些</h3>${seg}<div class="avx-q mt">${watch ? '全部会话。新建的群和新联系人自动包含。' : '所有私聊，以及群里 @我 的消息。'}</div>${bar}<label class="avx-lb">不想让它看的群（可选）</label>${picker('wiz-skip', groups, wiz.skip, 'wiz-skip', '搜索群名')}`;
     return `<div class="avx-ov"><div class="avx-md">${title}<div class="avx-mb"><div class="avx-w2"><div>${scopeHtml}<p class="avx-m mt">${wiz.tpl === 'watch' ? '只提醒，不会替你发任何消息。' : '写好草稿后由你点发送，不会自动发言。'}</p></div>
       <div class="avx-card tint"><h3>已经替你配好</h3><div class="avx-li"><span>名字</span><small>${esc(wiz.name)}</small></div><div class="avx-li"><span>人设</span><small>${wiz.persona ? '你写的' : '从近期发言生成'}</small></div><div class="avx-li"><span>知识</span><small>${wiz.tpl === 'qa' ? '所选群的历史问答' : '最近的对话'}</small></div><div class="avx-li"><span>后端</span><small>${esc(gatewayOn()?.label || rows.find(r => r.id === wiz.account)?.label || '自动选择')}</small></div><button class="avx-btn s mt" data-av="wiz-adv">${wiz.adv ? '收起高级设置' : '高级设置'}</button>
       ${wiz.adv ? `<label class="avx-lb">名字</label><input class="avx-in" maxlength="30" data-wiz="name" value="${esc(wiz.name)}"><label class="avx-lb">前缀（🤖 保留，留空用默认）</label><input class="avx-in" maxlength="20" data-wiz="prefix" value="${esc(wiz.prefix)}"><label class="avx-lb">人设（留空自动生成）</label><textarea class="avx-ta" rows="2" data-wiz="persona">${esc(wiz.persona)}</textarea><label class="avx-lb">账号</label><select class="avx-in" data-chg="wiz-account">${rows.filter(r => r.usable && !r.gateway).map(r => `<option value="${esc(r.id)}" ${wiz.account === r.id ? 'selected' : ''}>${esc(r.label)}</option>`).join('')}</select>` : ''}</div></div></div>
@@ -800,9 +855,18 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
 
   // ---- 操作 ----
   const toggleIn = (list, entry) => (list.some(x => x.id === entry.id) ? list.filter(x => x.id !== entry.id) : [...list, entry]);
+  // 「帮我盯消息」第一次看到名单时替本人先选几个群（只做一次；本人改过就不再动）。
+  function seedWizard() {
+    if (!wiz || wiz.tpl !== 'watch' || wiz.seeded || !(targets?.groups || []).length) return;
+    wiz.seeded = true;
+    if (wiz.targets.length) return;
+    wiz.targets = suggestedFor(wiz.skip).map(x => ({ id: x.id, name: x.name, type: x.type }));
+    wiz.seedCount = wiz.targets.length;
+  }
   function startWizard(tpl) {
     const t = TEMPLATES.find(x => x[0] === tpl);
-    wiz = { step: t ? 2 : 1, tpl: tpl || '', name: t && tpl !== 'blank' ? t[1] : '我的分身', targets: [], skip: [], adv: false, prefix: '', persona: '', account: 'auto' };
+    wiz = { step: t ? 2 : 1, tpl: tpl || '', kind: tpl === 'watch' ? 'pick' : '', name: t && tpl !== 'blank' ? t[1] : '我的分身', targets: [], skip: [], adv: false, prefix: '', persona: '', account: 'auto', seeded: false, seedCount: 0 };
+    delete pickers.wiz; delete pickers['wiz-skip'];
     void loadTargets(); render();
   }
   async function act(b) {
@@ -821,6 +885,9 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (op === 'wiz-close') { wiz = null; if (!['scope', 'ctx'].includes(tab)) stopTargets(); render(); return; }
     if (op === 'wiz-back') { wiz.step = 1; render(); return; }
     if (op === 'wiz-adv') { wiz.adv = !wiz.adv; render(); return; }
+    if (op === 'work-cwd-reset') { await pickWorkCwd(true); return; }
+    if (op === 'wiz-kind') { wiz.kind = b.dataset.k === 'all' ? 'all' : 'pick'; render(); return; }
+    if (op === 'pick-page') { const st = pickers[b.dataset.key]; if (st) st.page = Math.max(0, st.page + Number(b.dataset.d)); render(); return; }
     if (op === 'wiz-target' || op === 'wiz-skip') {
       const entry = { id: b.dataset.id, name: b.dataset.n, type: b.dataset.ty }, field = op === 'wiz-target' ? 'targets' : 'skip';
       wiz[field] = toggleIn(wiz[field], entry);
@@ -830,7 +897,8 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (op === 'wiz-go') {
       const w = wiz; w.step = 'run'; error = ''; render();
       try {
-        const r = await call('create', { tpl: w.tpl, name: w.name, targets: w.targets, skip: w.skip, ...(w.prefix.trim() ? { prefix: w.prefix } : {}), ...(w.persona.trim() ? { persona: w.persona } : {}), backend: { account: w.account, model: '' } });
+        const wide = w.tpl === 'watch' && w.kind === 'all';
+        const r = await call('create', { tpl: w.tpl, name: w.name, targets: wide ? [] : w.targets, skip: w.skip, ...(w.tpl === 'watch' ? { kind: wide ? 'all' : 'pick' } : {}), ...(w.prefix.trim() ? { prefix: w.prefix } : {}), ...(w.persona.trim() ? { persona: w.persona } : {}), backend: { account: w.account, model: '' } });
         accept(r); sel = r.createdId; tab = 'inbox'; wiz = null; flash('分身已开始工作。想先看看效果，可以挑几道题试答，不会发到群里。', { op: 'tab', k: 'try', label: '先试答几道题看看效果' });
       } catch (e) { w.step = 2; error = e.message; }
       render(); return;
@@ -867,7 +935,23 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (op === 'log-page') { logPage = Math.max(0, logPage + Number(b.dataset.d)); render(); return; }
     if (op === 'log-pick') { logPick = Number(b.dataset.i); render(); return; }
     const av = cur(); if (!av) return;
-    if (op === 'kind') { await save({ kind: b.dataset.k }); return; }
+    if (op === 'kind') {
+      const av = cur(), k = b.dataset.k;
+      // 改成只盯几个、但还一个没选：先替本人选上建议的几个群，免得改完什么都不盯。
+      if (av && k === 'pick' && av.kind !== 'pick' && !(av.targets || []).length) {
+        if (!targets) await loadTargets();
+        const act0 = av.action === 'watch' ? 'remind' : av.action, seed = suggestedFor(av.skip || []).map(x => ({ id: x.id, name: x.name, type: x.type, action: act0 }));
+        await save({ kind: k, ...(seed.length ? { targets: seed } : {}) });
+        flash(seed.length ? `已改成只盯选中的群：先替你选上 ${seed.map(x => x.name).join('、')}，在右侧增删。` : '已改成只盯选中的群：在右侧点选要盯的群或人。');
+        return;
+      }
+      await save({ kind: k }); return;
+    }
+    if (op === 'scope-target') {
+      const av = cur(); if (!av) return;
+      const x = [...(targets?.groups || []), ...(targets?.people || [])].find(y => y.id === b.dataset.id), kept = av.targets.filter(y => y.id !== b.dataset.id);
+      await save({ targets: kept.length < av.targets.length ? kept : x ? [...kept, { id: x.id, name: x.name, type: x.type, action: x.leader ? 'draft' : av.action === 'watch' ? 'remind' : av.action }] : kept }); return;
+    }
     if (op === 'chip-del') { const f = b.dataset.f; await save({ [f]: av[f].filter(x => x.id !== b.dataset.id) }); return; }
     if (op === 'persona') {
       // 记下发起时的分身：生成途中切到别的分身，回包也只写回原来那个（不串分身）。
@@ -939,6 +1023,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
       if (risk && it) risk.textContent = (it.flags || []).some(f => f === 'leader' || f === 'leader-present') && COMMIT_HINT.test(t.value) ? '这句话可能在向上级应承一件事，请确认后再发。' : '';
     }
     if (t.dataset.wiz) wiz[t.dataset.wiz] = t.value;
+    if (t.dataset.pickQ && !event.isComposing) onPickQuery(t);
     if ('tryAsk' in t.dataset && cur()) tryOf(sel).ask = t.value;
     if ('tryNote' in t.dataset && cur()) tryOf(sel).note = t.value;
     if (t.dataset.save === 'prefix') { const p = document.getElementById('avx-preview'); if (p) p.textContent = `🤖【${t.value.trim()}】张三 关于『导出纪要』：在纪要页右上角选导出，格式选 Word。`; }

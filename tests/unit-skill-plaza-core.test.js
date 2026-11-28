@@ -26,7 +26,8 @@ function sandbox() {
     if (meta) write(path.join(roots[rootIndex], dir.split('/')[0], '_skillhub_meta.json'), JSON.stringify(meta));
     return root;
   };
-  const service = (o = {}) => new SkillPlazaService({ dataDir: data, homeDir: home, findInstall: () => 'C:/fake/WeClaw Desktop.exe', log: () => {}, ...o });
+  // locateInstall 默认桩成「没找到」：单测不真的起 PowerShell 查注册表
+  const service = (o = {}) => new SkillPlazaService({ dataDir: data, homeDir: home, findInstall: () => 'C:/fake/WeClaw Desktop.exe', locateInstall: async () => ({ file: '' }), log: () => {}, ...o });
   return { base, home, data, roots, write, skill, service, cleanup: () => fs.rmSync(base, { recursive: true, force: true }) };
 }
 const byId = (list, id) => list.items.find(i => i.id === id);
@@ -99,13 +100,101 @@ test('扫描：多套一层、同名优先级、enabled:false/internal 跳过、
   } finally { s.cleanup(); }
 });
 
-test('没装员工助手时不出现员工助手来源', async () => {
+test('没装员工助手（主程序和技能目录都没有）时不出现员工助手来源', async () => {
   const s = sandbox();
   try {
-    s.skill(0, 'a', { name: 'aa', description: 'x' });
     const list = await s.service({ findInstall: () => '' }).list();
     assert.equal(list.sources.weclaw.present, false);
     assert.equal(list.items.length, 0);
+  } finally { s.cleanup(); }
+});
+
+test('主程序装在自选目录没认出来、技能目录在：照样列出员工助手的技能（2026-11-28 反馈）', async () => {
+  const s = sandbox();
+  try {
+    s.skill(0, 'a', { name: 'aa', description: 'x' });
+    let located = 0;
+    const list = await s.service({ findInstall: () => '', locateInstall: async () => { located++; return { file: '' }; } }).list({ refresh: true });
+    assert.equal(located, 0, '技能目录在就不再等一次查登记');
+    assert.equal(list.sources.weclaw.present, true);
+    assert.ok(byId(list, 'weclaw:aa'));
+    assert.equal(list.sources.weclaw.error, undefined);
+    // 预览、导入也不再因为认不出主程序而拒绝
+    const p = await s.service({ findInstall: () => '' }).preview({ id: 'weclaw:aa' });
+    assert.equal(p.targetName, 'weclaw-aa');
+  } finally { s.cleanup(); }
+});
+
+test('默认位置没有、逐级查到主程序但还没有技能目录：来源在、给一句下一步', async () => {
+  const s = sandbox();
+  try {
+    let forced = null;
+    const list = await s.service({ findInstall: () => '', locateInstall: async o => { forced = o.force; return { file: 'D:/Apps/UniAssistant/WeClaw Desktop.exe' }; } }).list({ refresh: true });
+    assert.equal(forced, true, '点「重新扫描」时强制重查');
+    assert.equal(list.sources.weclaw.present, true);
+    assert.equal(list.sources.weclaw.count, 0);
+    assert.match(list.sources.weclaw.reason, /登录一次/);
+  } finally { s.cleanup(); }
+});
+
+test('员工助手 7.11 的场景目录（scenario/<编号>/skills）也扫，主目录有的不重复', async () => {
+  const s = sandbox();
+  try {
+    s.skill(0, 'a', { name: 'aa', description: 'x' });
+    const scen = path.join(s.home, '.config', 'weclaw', 'scenario', '0123-abcd', 'skills');
+    s.write(path.join(scen, 'a', 'SKILL.md'), ['---', 'name: aa', 'description: 场景里的同名', '---', '正文', ''].join('\n'));
+    s.write(path.join(scen, 'b', 'SKILL.md'), ['---', 'name: bb', 'description: 只在场景里', '---', '正文', ''].join('\n'));
+    const svc = s.service({ roots: null });
+    const list = await svc.list();
+    assert.ok(byId(list, 'weclaw:bb'));
+    assert.equal(byId(list, 'weclaw:aa').description, 'x', '同名取主目录那份');
+    // 同名副本在读文件清单与正文之前就跳过（场景多时不拖慢扫描）
+    const dup = source.readSkill(3, scen, 'a', new Map([['weclaw:aa', {}]]));
+    assert.deepEqual(dup, { duplicate: true, entryName: 'a' });
+    assert.equal(source.readSkill(3, scen, 'b', new Map([['weclaw:aa', {}]])).id, 'weclaw:bb');
+  } finally { s.cleanup(); }
+});
+
+test('一路失败不拖垮整个广场：员工助手扫描失败、本机已装超时、AgentCenter 报错，各自带原因，其余照常', async () => {
+  const s = sandbox();
+  try {
+    s.skill(0, 'a', { name: 'aa', description: 'x' });
+    const localRows = [{ type: 'skill', name: 'mine', description: 'd', sources: [{ agent: 'claude', path: path.join(s.home, '.claude', 'skills', 'mine', 'SKILL.md') }] }];
+    // ① 员工助手扫描失败：本机已装照常
+    const svc1 = s.service({ catalog: async () => ({ rows: localRows }) });
+    svc1.run = async () => { throw new Error('读取员工助手技能超时，请刷新重试'); };
+    const l1 = await svc1.list();
+    assert.equal(l1.sources.weclaw.present, true);
+    assert.match(l1.sources.weclaw.error, /超时/);
+    assert.ok(byId(l1, 'local:mine'), '本机已装照常显示');
+    assert.equal(svc1.cache, null, '有一路失败不缓存，下次打开或点重试重新读');
+    // ② 本机已装卡住：限时后报原因，员工助手照常
+    const svc2 = s.service({ catalog: () => new Promise(() => {}), sourceTimeoutMs: 50 });
+    const l2 = await svc2.list();
+    assert.match(l2.sources.local.error, /没读完/);
+    assert.ok(byId(l2, 'weclaw:aa'));
+    // 页面上已显示的卡片照常能点：按编号找技能用这次结果，不再等一遍卡住那一路
+    let localCalls = 0;
+    const svc2b = s.service({ catalog: () => { localCalls++; return new Promise(() => {}); }, sourceTimeoutMs: 50 });
+    await svc2b.list();
+    assert.equal((await svc2b.find('weclaw:aa')).id, 'weclaw:aa');
+    assert.equal(localCalls, 1, '找已显示的技能不重扫');
+    svc2b.changed();
+    assert.equal(svc2b.lastById, null, '导入或移除后不用旧结果');
+    // ③ AgentCenter：list 抛错 / 卡住 / CodeAgent 在但清单读失败
+    const svc3 = s.service({ market: { status: () => ({ available: true }), list: async () => { throw new Error('市场文件损坏'); } } });
+    const l3 = await svc3.list();
+    assert.equal(l3.sources.agentcenter.present, true);
+    assert.equal(l3.sources.agentcenter.error, '市场文件损坏');
+    assert.ok(byId(l3, 'weclaw:aa'));
+    const svc4 = s.service({ market: { status: () => ({ available: true }), list: () => new Promise(() => {}) }, sourceTimeoutMs: 50 });
+    assert.match((await svc4.list()).sources.agentcenter.error, /没读完/);
+    const svc5 = s.service({ market: { status: () => ({ available: true }), list: async () => ({ available: true, rows: [], reason: '读不到市场清单' }) } });
+    assert.equal((await svc5.list()).sources.agentcenter.error, '读不到市场清单');
+    // ④ 三路都好：照常缓存
+    const svc6 = s.service({ catalog: async () => ({ rows: localRows }) });
+    await svc6.list();
+    assert.ok(svc6.cache);
   } finally { s.cleanup(); }
 });
 

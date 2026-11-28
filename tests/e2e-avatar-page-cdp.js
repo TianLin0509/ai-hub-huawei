@@ -129,7 +129,7 @@ function seedFleet(dataDir, now, snap) {
         assert.ok(fs.readFileSync(cliLog, 'utf8').includes('"recall-message","--group-id","g001","--message-id","900100"'));
         result.checks.push('发出后可以一键撤回，撤回的就是刚发的那一条');
         await click('#avatar-page .avx-row[data-id="vqa"]');
-        for (const [tab, name, probe] of [['log', '6-log', `document.querySelectorAll('#avatar-page .avx-t tr.ck').length===9`], ['scope', '7-scope', `document.querySelector('#avatar-page .avx-seg button.on')?.textContent==='指定群或人'`], ['ctx', '8-context', `(document.querySelector('.avx-c3')?.textContent||'').includes('96 条')`], ['back', '9-backend', `!!document.querySelector('#avx-preview')`]]) {
+        for (const [tab, name, probe] of [['log', '6-log', `document.querySelectorAll('#avatar-page .avx-t tr.ck').length===9`], ['scope', '7-scope', `document.querySelector('#avatar-page .avx-seg button.on')?.textContent==='只盯选中的群或人'`], ['ctx', '8-context', `(document.querySelector('.avx-c3')?.textContent||'').includes('96 条')`], ['back', '9-backend', `!!document.querySelector('#avx-preview')`]]) {
           await click(`#avatar-page .avx-tabs [data-k="${tab}"]`); await until(probe); await _waitMs(150);
           await shot(name); result[name] = await oneScreen(name);
         }

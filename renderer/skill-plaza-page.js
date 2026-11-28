@@ -16,6 +16,21 @@ const PANEL_IDS = ['writing-panel', 'xresearch-panel', 'study-panel', 'progress-
 const FIELD = { name: '名字', description: '描述与触发词', license: '许可', version: '版本', metadata: '其他头字段', files: '文件' };
 const CARD_MIN_W = 320, CARD_H = 138, GAP = 12;
 
+/**
+ * 页首的来源状态行（纯函数，单测用）：哪一路没读到、为什么，每行都带「重试」。
+ * 一路失败只在这里报，其余来源的卡片照常显示（2026-11-28 反馈「加载不出来」）。
+ */
+function sourceNotices(sources = {}) {
+  const out = [];
+  const w = sources.weclaw || {};
+  if (!w.present) out.push({ key: 'weclaw', bad: false, retry: '重新查找', text: '这台电脑上没找到员工助手。装上员工助手（公司软件中心可装）后，这里会多出员工助手里的公司技能，可一键导入给 Claude、CodeAgent 用；已经装了的话点「重新查找」。' });
+  else if (w.error) out.push({ key: 'weclaw', bad: true, retry: '重试', text: '员工助手的技能这次没读到：' + w.error });
+  else if (w.reason && !w.count) out.push({ key: 'weclaw', bad: false, retry: '重试', text: w.reason });
+  if (sources.local?.error) out.push({ key: 'local', bad: true, retry: '重试', text: '本机各家 AI 已装的技能这次没读到：' + sources.local.error });
+  if (sources.agentcenter?.error) out.push({ key: 'agentcenter', bad: true, retry: '重试', text: 'AgentCenter 的技能这次没读到：' + sources.agentcenter.error });
+  return out;
+}
+
 /** 卡片上那颗按钮：随档位与来源变（纯函数，单测用）。 */
 function cardAction(item) {
   if (item.use === 'installed') return item.source === 'weclaw' ? { op: 'remove', label: '移除' } : { op: 'manage', label: '管理' };
@@ -219,9 +234,10 @@ function createSkillPlazaPage({ document, window, ipcRenderer, closeOtherPanels 
     b.textContent = loading ? '正在扫描…' : `重新扫描${n != null ? `（${n}）` : ''}`;
     b.title = data?.sources?.weclaw?.present ? '重新读一遍员工助手和本机各家 AI 的技能目录' : '重新读一遍本机各家 AI 的技能目录';
     const tip = $('.spz-tip');
-    const showTip = !!data && !data.sources?.weclaw?.present;
-    tip.hidden = !showTip;
-    if (showTip) tip.textContent = '这台电脑上没找到员工助手。装上员工助手（公司软件中心可装）后，这里会多出员工助手里的公司技能，可一键导入给 Claude、CodeAgent 用。';
+    const lines = data ? sourceNotices(data.sources) : [];
+    tip.hidden = !lines.length;
+    tip.innerHTML = lines.map(l => `<div class="spz-tl${l.bad ? ' bad' : ''}" data-source="${esc(l.key)}"><span title="${esc(l.text)}">${esc(l.text)}</span>`
+      + `<button type="button" class="spz-btn s" data-spz="rescan"${loading || busy ? ' disabled' : ''}>${esc(loading ? '正在读…' : l.retry)}</button></div>`).join('');
   }
   function visibleSources() {
     if (!data) return [];
@@ -264,7 +280,7 @@ function createSkillPlazaPage({ document, window, ipcRenderer, closeOtherPanels 
     const grid = $('.spz-grid'), pager = $('.spz-pager'), noteEl = $('.spz-note');
     noteEl.hidden = !note; noteEl.className = `spz-note${note && !note.ok ? ' bad' : ''}`; noteEl.textContent = note?.text || ''; noteEl.title = note?.text || '';
     if (!data) {
-      grid.innerHTML = `<div class="spz-empty">${loadError ? esc('读不到技能清单：' + loadError) : '正在扫描本机技能…'}</div>`;
+      grid.innerHTML = `<div class="spz-empty">${loadError ? `${esc('读不到技能清单：' + loadError)}<br><button type="button" class="spz-btn" data-spz="rescan">重试</button>` : '正在扫描本机技能…'}</div>`;
       pager.innerHTML = ''; return;
     }
     const shown = new Set(visibleSources().filter(k => enabled.has(k)));
@@ -378,4 +394,4 @@ function createSkillPlazaPage({ document, window, ipcRenderer, closeOtherPanels 
   return { open, close, isOpen };
 }
 
-module.exports = { createSkillPlazaPage, cardAction, filterItems };
+module.exports = { createSkillPlazaPage, cardAction, filterItems, sourceNotices };

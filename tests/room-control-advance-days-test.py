@@ -3,6 +3,7 @@
 本机没有 PyQt5 时用最小替身，只测这层替换，不跑浏览器。"""
 import copy
 import importlib.util
+import re
 import sys
 import types
 import unittest
@@ -47,15 +48,31 @@ class AdvanceDaysTests(unittest.TestCase):
         self.assertEqual(date(2026, 11, 14) + jobs.timedelta(weeks=1), date(2026, 11, 17))
 
     def test_invalid_values_fall_back_to_seven(self):
-        for bad in [0, 15, '3', 3.0, True, None]:
+        for bad in [0, 121, -1, '3', 3.0, True, None]:
             self.w.cfg['抢订设置']['提前天数'] = bad
             self.assertEqual(adapter.advance_days(self.w.cfg), 7, bad)
 
     def test_configure_accepts_range(self):
         self.assertEqual(adapter.validate_patch({'抢订设置': {'提前天数': 3, '开放时间': '08:30:00'}})['抢订设置']['提前天数'], 3)
-        for bad in [0, 15, True]:
+        for good in [1, 15, 120]:
+            self.assertEqual(adapter.validate_patch({'抢订设置': {'提前天数': good}})['抢订设置']['提前天数'], good)
+        for bad in [0, 121, True]:
             with self.assertRaises(ValueError):
                 adapter.validate_patch({'抢订设置': {'提前天数': bad}})
+
+    def test_120_days_follow_config_across_months_and_year(self):
+        adapter.install_advance_days(self.w)
+        self.w.cfg['抢订设置']['提前天数'] = 120
+        self.assertEqual(adapter.advance_days(self.w.cfg), 120)
+        self.assertEqual(date(2026, 11, 28) + jobs.timedelta(weeks=1), date(2027, 3, 28))
+
+    def test_range_matches_hub_schedule_constants(self):
+        # Hub 的 room-schedule.js 是取值来源；组件两端必须一致。
+        js = (root.parents[0] / 'room-schedule.js').read_text(encoding='utf-8')
+        m = re.search(r'const MIN_DAYS = (\d+), MAX_DAYS = (\d+);', js)
+        self.assertIsNotNone(m)
+        self.assertEqual((adapter.ADVANCE_DAYS_MIN, adapter.ADVANCE_DAYS_MAX), (int(m.group(1)), int(m.group(2))))
+        self.assertEqual((adapter.ADVANCE_DAYS_MIN, adapter.ADVANCE_DAYS_MAX), (1, 120))
 
 
 if __name__ == '__main__':
