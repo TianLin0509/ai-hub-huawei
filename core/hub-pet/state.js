@@ -170,6 +170,14 @@ class SpeechQueue {
       this.held = null;
       changed = true;
     }
+    // 到点提醒先于常驻气泡（新手自我介绍、单击提示）：常驻那句退回队里，等提醒说完再接着说。
+    // 2026-11-28 黄区：新装第一次出来正赶上提醒到点，介绍挂着没人点，提醒被收进小圆点，只看到角标。
+    if (this.current?.sticky && this.current.kind !== 'reminder' && this.pending.some(p => p.kind === 'reminder')) {
+      const { until: _u, at: _a, ...back } = this.current;
+      const reminders = this.pending.filter(p => p.kind === 'reminder');
+      this.pending = [...reminders, back, ...this.pending.filter(p => p.kind !== 'reminder')];
+      this.current = null; this.held = null; changed = true;
+    }
     while (!this.current && this.pending.length) {
       const next = this.pending.shift();
       const verdict = typeof gate === 'function' ? gate(this.spokenAt, next) : { ok: true };
@@ -183,7 +191,12 @@ class SpeechQueue {
       changed = true;
     }
     // 常驻气泡挡住队列时，后续提醒保留在圆点中，不丢弃也不忙等。
-    if (this.current?.sticky) while (this.pending.length) { const next = this.pending.shift(); if (!next.ack) this.toDot(next); changed = true; }
+    // 给提醒让位的常驻闲聊（自我介绍等）留在队里，提醒处理完再说。
+    if (this.current?.sticky) {
+      const wait = [];
+      while (this.pending.length) { const next = this.pending.shift(); if (next.sticky && next.kind !== 'reminder') wait.push(next); else if (!next.ack) this.toDot(next); changed = true; }
+      this.pending = wait;
+    }
     return changed;
   }
 

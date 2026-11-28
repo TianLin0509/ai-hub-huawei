@@ -11,6 +11,8 @@ const KEEP_FILES = 30;
 const MAX_SUBMITS = 3; // 首次提交 + 按自查提醒修改 2 轮
 const ACTIVE = ['waiting_agent', 'revising'];
 const SLOW_MS = 5 * 60000;
+// 一句话三版是同一问里写三页（2026-11-28 黄区实测 6.9 分钟出齐，页面横幅也写「通常 3–6 分钟」），超过 10 分钟才算比平时久。
+const SLOW_GROUP_MS = 10 * 60000;
 
 // 骨架分类按汇报的论证顺序排；不在表里的分类排最后。
 const CATEGORIES = ['现状与问题', '方案与原理', '结果与增益', '规划与计划', '盘点与总结'];
@@ -88,13 +90,13 @@ const guideLines = sk => [
 ];
 
 // 做页任务卡在哪一步（2026-11-17 反馈「PPT制作 十分钟未出结果」：页面只显示已用时间，看不出在排队、在等 CodeAgent 启动还是在写）。
-function waitingText(chat, now) {
+function waitingText(chat, now, slowMs = SLOW_MS) {
   if (!chat) return '';
   const min = t => Math.max(1, Math.round((now - t) / 60000));
   if (chat.state === 'queued') return '排队中：PPT 素材助理还在答前一个问题，答完就轮到这一页';
   if (chat.notReadySince && !chat.answeringAt) return `CodeAgent 还在启动（已等 ${min(chat.notReadySince)} 分钟）：要登录或确认的话，请打开「PPT 素材助理」会话处理`;
   // 写了很久还没交（2026-11-22 F7）：隔离 Hub 实测低档模型从发问到交付 15 秒、整页 46 秒；超过 5 分钟就说明比平时久，给出看过程和停止的办法。
-  if (chat.answeringAt && now - chat.answeringAt >= SLOW_MS) return `助理已写了 ${min(chat.answeringAt)} 分钟，比平时久：可以点「看助理在做什么」，或点「停止」后重试`;
+  if (chat.answeringAt && now - chat.answeringAt >= slowMs) return `助理已写了 ${min(chat.answeringAt)} 分钟，比平时久：可以点「看助理在做什么」，或点「停止」后重试`;
   if (chat.answeringAt) return '助理已开始写页面内容';
   if (chat.state === 'running') return '正在打开助理会话';
   return '';
@@ -287,7 +289,7 @@ class PptMake {
     let waiting = '';
     if (ACTIVE.includes(job.state)) {
       const chat = this.a.chat().find(c => c.id === (job.turnChatId || job.chatId)); // 交付后的修改看修改那一问
-      waiting = waitingText(chat, this.a.now());
+      waiting = waitingText(chat, this.a.now(), job.groupId ? SLOW_GROUP_MS : SLOW_MS);
       if (chat && ['done', 'error'].includes(chat.state)) {
         // 修改途中助理收工：已生成的那一版照常交付，剩余提醒留给用户看。
         if (job.state === 'revising') job.state = 'done';

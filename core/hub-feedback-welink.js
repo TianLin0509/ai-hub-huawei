@@ -141,7 +141,15 @@ function friendlySendError(reason) {
 
 // welink-cli 回执是否真发出去了（与手机对话同一套判断）；发出去返回空串，否则返回原因。
 function sendReceiptError(result, parseJson) {
-  if (!result || result.code !== 0) return String((result && (result.stderr || result.stdout)) || '发送命令失败').trim().slice(0, 200);
+  if (!result || result.code !== 0) {
+    // 命令失败但输出的是 JSON 回执：说成一句人话，不把 {"code":500,...} 原样摆给用户（2026-11-28 黄区真机）。
+    let receipt = null;
+    try { receipt = result && result.stdout ? parseJson(result.stdout) : null; } catch { receipt = null; }
+    const msg = receipt && (receipt.error?.error_msg || receipt.message || receipt.resultContext);
+    const code = receipt && (receipt.code ?? receipt.resultCode ?? receipt.error?.error_code);
+    if (msg) return `WeLink 返回错误${code != null ? `（${code}）` : ''}：${msg}`.slice(0, 200);
+    return String((result && (result.stderr || result.stdout)) || '发送命令失败').trim().slice(0, 200);
+  }
   const receipt = parseJson(result.stdout);
   const code = receipt?.code ?? receipt?.resultCode ?? receipt?.error?.error_code;
   if (receipt?.ok === false || receipt?.success === false || (code !== undefined && !['0', '200'].includes(String(code))))

@@ -11,5 +11,5 @@ const row = object({ id: { ...string, description: '原样复制本轮ppt_read�
 const PPT_DECISION_SCHEMA = object({ title: string, summary: string, task: object({ purpose: string, conditions: array(condition, 12) }, ['purpose', 'conditions']),
   results: array(row, 20), gaps: array(string, 20), search_note: string, answer_status: { enum: ['supported', 'partial', 'insufficient'] } }, ['task', 'results']);
 PPT_DECISION_SCHEMA.description = 'report决策。每条推荐必须完整读过；无需复传evidence，Hub使用本轮真实读取记录。schema规定字段，工具生成报告表格。无必需条件时task.conditions与assessments使用空数组。';
-const PPT_OPS_SCHEMA = { type: 'object', description: 'flash差异对象，字号由Doctor决定。d:[行号]删除、x:[行号]保留图内字、fix:{行号:正确文字}、bbox:{行号:[x0,y0,x1,y1]}、confirm:[行号]、b:[粗体行号]、attr:{行号:{bold,color,align}}、merge:[[行号,...]]、t:[[x0,y0,x1,y1,文字,bold?,color?]]、c:[[x0,y0,x1,y1,radius?]]、g:[[x0,y0,x1,y1,说明?,alpha?]]、p:{子元素id:父元素id}、font:string。行号1或s1，坐标是原图像素。看不了图用空对象。' };
+const PPT_OPS_SCHEMA = { type: 'object', description: 'flash差异对象，字号由Doctor决定。d:[行号]删除、x:[行号]保留图内字、fix:{行号:正确文字}、bbox:{行号:[x0,y0,x1,y1]}、confirm:[行号]、b:[粗体行号]、attr:{行号:{bold,color,align}}、merge:[[行号,...]]、t:[[x0,y0,x1,y1,文字,bold?,color?]]、c:[[x0,y0,x1,y1,radius?]]（radius 为 0–1000 的像素数字）、g:[[x0,y0,x1,y1,说明?,alpha?]]（说明为文字，alpha 为 true/false）、p:{子元素id:父元素id}、font:string。行号1或s1，坐标是原图像素。看不了图用空对象。' };
 module.exports = { PPT_DECISION_SCHEMA, PPT_OPS_SCHEMA };

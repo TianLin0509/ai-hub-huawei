@@ -490,3 +490,17 @@ test('交付后的修改绑定到修改那一问：同一问超过两轮被拒�
   f.chats[2].state = 'done';
   assert.equal(f.make.status(job.id).state, 'done');
 });
+
+// 2026-11-28 黄区：一句话三版 6.9 分钟出齐，但第 5 分钟就提示「比平时久」、旁边又写「通常 1–3 分钟」，与横幅「通常 3–6 分钟」自相矛盾。
+test('一句话三版：10 分钟内不提示「比平时久」，单页仍按 5 分钟', async t => {
+  const f = fixture(t);
+  const { jobs } = f.make.startAuto({ brief: '三版方案' });
+  const chat = f.chats.find(c => c.id === jobs[0].chatId);
+  Object.assign(chat, { state: 'running', sessionId: 'sess-g', answeringAt: Date.now() - 7 * 60000 });
+  assert.match(f.make.status(jobs[0].id).waiting, /已开始写/);
+  assert.ok(f.make.status(jobs[0].id).groupId, '页面据 groupId 显示三版的预计时间');
+  chat.answeringAt = Date.now() - 11 * 60000;
+  assert.match(f.make.status(jobs[0].id).waiting, /助理已写了 11 分钟，比平时久/);
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '../renderer/company-ppt-make.js'), 'utf8');
+  assert.match(src, /job\.groupId \? '三版一起写，通常 3–6 分钟/);
+});

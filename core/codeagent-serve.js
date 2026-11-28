@@ -72,6 +72,17 @@ async function killTree(pid, { runner = run, background = killInBackground } = {
   } else { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退出 */ } }
 }
 
+// 按启动时的随机 token 精确找 serve（命令行里带 --token <token>）：没按时就绪时外层 cmd 已断开、serve 还没监听端口，
+// 进程树和端口两路都找不到它，Hub 退出后它带着约 400 MB 常驻（2026-11-28 黄区真机 1/4 次）。token 每次随机，不会误伤别的进程。
+async function killByToken(token, { runner = run, kill = killTree } = {}) {
+  if (process.platform !== 'win32' || !/^[a-f0-9]{32,}$/i.test(String(token || ''))) return [];
+  const query = `Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%--token ${token}%' AND Name <> 'powershell.exe'" | ForEach-Object { $_.ProcessId }`;
+  const { stdout } = await runner('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', query]);
+  const pids = String(stdout || '').split(/\s+/).map(Number).filter(pid => Number.isInteger(pid) && pid > 0);
+  for (const pid of pids) await kill(pid, { runner });
+  return pids;
+}
+
 async function portOwner(port) {
   if (process.platform !== 'win32') return null;
   const { stdout } = await run('netstat', ['-ano', '-p', 'TCP']);
@@ -187,7 +198,7 @@ async function runTempServe({ command, configDirEnv, configDir, cwd, env = proce
   if (proc.pid) activeServes.set(proc.pid, port);
   const jobKey = proc.pid ? jobQos().assign(`temp-serve:${proc.pid}`, proc.pid, { minStartMs: spawnedFrom - 1000, maxStartMs: Date.now() + 2000, layer: 'temp-serve' }) : '';
   if (jobKey) tempServeJobs.set(proc.pid, jobKey);
-  let exited = false, exitCode = null, spawnError = '';
+  let exited = false, exitCode = null, spawnError = '', readyMsSeen = false;
   const exitPromise = new Promise(resolve => {
     proc.once('exit', code => { exited = true; exitCode = code; resolve(); });
     proc.once('error', error => { exited = true; spawnError = (error && error.message) || String(error); resolve(); });
@@ -199,6 +210,7 @@ async function runTempServe({ command, configDirEnv, configDir, cwd, env = proce
       if (res.status && res.status < 500) { ready = true; break; }
       await new Promise(r => setTimeout(r, 300));
     }
+    readyMsSeen = ready;
     if (!ready) return { ok: false, error: exited ? (spawnError ? `启动 CodeAgent serve 失败：${spawnError}` : `CodeAgent serve 启动后退出了（退出码 ${exitCode}）`) : 'CodeAgent serve 没有按时就绪' };
     const readyMs = Date.now() - started;
     const result = await fn({ port, get: (pathname, opts) => getJson(port, token, pathname, opts) });
@@ -216,6 +228,8 @@ async function runTempServe({ command, configDirEnv, configDir, cwd, env = proce
     }
     const owner = await portOwner(port);
     if (owner) await killTree(owner);
+    // 没确认它自己退出（或根本没就绪）：再按 token 兜底找一遍。
+    if (!exited || !readyMsSeen) await killByToken(token).catch(() => []);
   }
 }
 
@@ -384,4 +398,4 @@ function tempServePids() { return [...activeServes.keys()]; }
 // 选模型、启动传参仍跟 serveEnabled 走，不受这里影响。
 function quotaReadEnabled(env = process.env) { return env.AI_HUB_CODEAGENT_SERVE !== '0'; }
 
-module.exports = { SERVE_EMPTY_MODELS, tempServeJobKeys: () => [...tempServeJobs.values()], spawnServe, serveEnv, prepareShadowHome, applyShadowHome, stripMcpServers, withAccountServe, tempServePids, SHADOW_DIR_NAME, killServeSync, killTree, serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };
+module.exports = { SERVE_EMPTY_MODELS, killByToken, tempServeJobKeys: () => [...tempServeJobs.values()], spawnServe, serveEnv, prepareShadowHome, applyShadowHome, stripMcpServers, withAccountServe, tempServePids, SHADOW_DIR_NAME, killServeSync, killTree, serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };

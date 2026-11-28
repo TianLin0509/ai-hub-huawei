@@ -93,7 +93,7 @@ test('图转字：开始时固定输出目录，改设置后的装配沿用原�
   f.set({ workDir: path.join(f.root, 'one') });
   const job = await lib.imgtext.start(image);
   f.set({ workDir: path.join(f.root, 'two') });
-  await lib.imgtext.build({ jobId: job.id, ops: {}, vision: 'unavailable' });
+  await lib.imgtext.build({ jobId: job.id, ops: {}, vision: 'unavailable', source: 'page' });
   assert.equal(seen[0].args.workdir, seen[1].args.workdir);
   assert.ok(seen[0].args.workdir.startsWith(path.join(f.root, 'one')));
 });

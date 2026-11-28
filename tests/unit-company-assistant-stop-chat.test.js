@@ -123,3 +123,28 @@ test('助理页：等待行有「停止这一问」，已停止的写「已停�
   assert.match(main, /A3-17[^\n]*\n\s*isSessionProcessAlive: id => sessionProcessAlive\(id\)/, '助理接上进程存活判断（公开版也有）');
   assert.match(main, /^function sessionProcessAlive\(id\) \{/m);
 });
+
+// 审查 P2（2026-11-28）：中断抛错或会话仍在跑时，这一问照样结束，但要把「没确认停下」带回给调用方（PPT 转字据此不报「已停止」）。
+test('停止时中断失败或会话仍忙：这一问照样结束，返回里带上中断异常与会话仍在运行', async t => {
+  const f = fixture(t);
+  const q1 = f.a.ask('今天有哪些会');
+  await f.settle();
+  f.a.deps.interruptSession = async () => { throw new Error('中断命令没送到'); };
+  const r1 = await f.a.stopChat(q1.id);
+  assert.equal(r1.state, 'error');
+  assert.equal(r1.interruptError, '中断命令没送到');
+  assert.equal(r1.sessionStillBusy, true, '中断失败后会话仍在忙');
+  await f.settle();
+  const q2 = f.a.ask('明天呢');
+  await f.settle();
+  f.a.deps.interruptSession = async () => {};   // 不抛错，但会话停不下
+  const r2 = await f.a.stopChat(q2.id);
+  assert.equal(r2.interruptError, '');
+  assert.equal(r2.sessionStillBusy, true);
+  await f.settle();
+  const q3 = f.a.ask('后天呢');
+  await f.settle();
+  f.a.deps.interruptSession = async id => { f.busy.delete(id); };
+  const r3 = await f.a.stopChat(q3.id);
+  assert.equal(r3.interruptError, ''); assert.equal(r3.sessionStillBusy, false);
+});

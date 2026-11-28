@@ -2080,8 +2080,11 @@ function sendToRenderer(channel, data) {
     try { devWorkbench.handleEvent(channel, data); }
     catch (error) { console.warn('[dev-workbench] event failed:', error.message); }
   }
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, data);
+  // 关 Hub 时窗口还在、界面进程已销毁：照样 send 会抛「Object has been destroyed」，打断助理收尾等调用方
+  // （2026-11-28 黄区真机日志：退出时 failJob → 提醒总线 → 这里抛出，未处理的 Promise 拒绝）。
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+    try { mainWindow.webContents.send(channel, data); }
+    catch (error) { if (!/destroyed/i.test(error && error.message || '')) throw error; }
   }
 }
 
@@ -3123,6 +3126,12 @@ if (require('./core/distribution').featureEnabled('assistant')) try {
   assistantService.startWatching();
   phoneService = require('./main/ipc/phone-handlers').registerPhoneIpc(ipcMain, assistantService, {dataDir:getHubDataDir(),electron:require('electron')});
 } catch (error) { console.error('[assistant] service unavailable:', error.message); }
+// 助理服务没起（公司版发行目标关掉了助理）时，会话卡片照样会来取「手机发过的原文」：给一个空答复，
+// 不让主进程每打开一个会话就报一次「No handler registered」（2026-11-28 黄区真机日志）。
+if (!phoneService) {
+  try { ipcMain.handle('assistant:phone-session-prompts', () => []); }
+  catch (error) { console.warn('[phone] session prompts handler:', error.message); }
+}
 let appUpdateControllerRef = null;
 function companyHubAdmin() { return null; }
 // 公司版「助理」（2026-10-16）：每日简报 + 对话 + 6 条提醒，只读 WeLink，数据只留在本机 Hub 数据目录。
@@ -5362,6 +5371,12 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
         feedbackService.startRetry(retryMs > 0 ? { intervalMs: retryMs, firstDelayMs: retryMs } : undefined);
         app.on('will-quit', () => feedbackService.stopRetry());
       } catch (e) { console.warn('[hub-feedback] 一键反馈初始化失败：', e && e.message); }
+      // 一键入群的发送端（r47；2026-11-28 起统一包也带）：底栏「用户群」弹层 → 维护人电脑上的收件机；收件地址与一键反馈同一个来源。
+      try {
+        const { createWelinkJoinClient, registerWelinkJoinIpc } = require('./main/welink-join-client');
+        registerWelinkJoinIpc(ipcMain, createWelinkJoinClient({ dataDir: getHubDataDir(),
+          receiverAddress: sharedFeedbackReceiverAddress() }));
+      } catch (e) { console.warn('[welink-join] 初始化失败：', e && e.message); }
       // 社区统计·发送端（2026-11-24）：公司版每小时匿名报一次几个合计值；收件地址与一键反馈同一个来源，本机是收件机时走本地。
       try {
         const communityEdition = distribution.target === 'company' ? (distribution.featureEnabled('memberUpgrade') ? 'public' : 'member') : null;

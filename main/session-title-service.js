@@ -1,6 +1,9 @@
 'use strict';
 
 const { validateUserTitle, titleMetadata, preserveTitleMetadata } = require('../core/title-metadata');
+const { isAiKind } = require('../core/ai-kinds');
+// 和 renderer persistWorkscene 的保留白名单一致：AI 会话（含 -resume 变体）与群聊成员才跨重启保留。
+const persistedKind = s => !!s && (!!s.meetingId || isAiKind(s.kind) || (typeof s.kind === 'string' && s.kind.endsWith('-resume')));
 
 function createTitleService(deps) {
   const { sessionManager, meetingManager, sessionStore, meetingStore, stateStore, sendToRenderer = () => {} } = deps;
@@ -13,6 +16,13 @@ function createTitleService(deps) {
     if (!base) throw new Error('会话或群聊不存在');
     const native = type === 'session' && (sessionManager.getNativeCodex?.(id) || sessionManager.getNativeClaude?.(id));
     if (base.readOnly || native?.control?.shared && native.control.role !== 'controller') throw new Error('只读会话不能重命名');
+    // 纯终端会话（powershell 等非 AI、不在群聊里的）设计上不跨重启保留（renderer persistWorkscene 同一口径）：
+    // 改名只改内存，不落盘。2026-11-28 黄区：改过名的终端以前会被这里写进 sessions/，平常重启偶尔留下、手动更新后又被清掉，前后不一致。
+    if (type === 'session' && live && !persistedKind(live)) {
+      const renamed = sessionManager.renameSession?.(id, title, { userRenamed: true }) || { ...live, title, userRenamed: true };
+      sendToRenderer('session-updated', { session: { ...renamed, id } });
+      return { ok: true, record: { id, title: renamed.title, userRenamed: true } };
+    }
     const store = type === 'session' ? sessionStore : meetingStore;
     const record = await store.withWriteLock(id, () => stateStore.commitTitle({ type, id, base, title,
       getBase: () => {

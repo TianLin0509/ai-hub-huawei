@@ -1200,7 +1200,10 @@ function createHubPetController({
     if (!fromMain(event)) return null;
     setSettings(patch);
     const saveError = patch && patch.live === true ? null : settings.lastSaveError();
-    return saveError ? { ...publicSettings(), saveError } : publicSettings();
+    // 形象没装上时 setSettings 不换（换了也画不出来）；告诉调用方原因，不当成保存成功。
+    const want = patch && typeof patch.role === 'string' ? patch.role : '';
+    const roleMissing = want && !roles.installed(want) ? { id: want, name: (ROLES.find(r => r.id === want) || {}).name || want } : null;
+    return { ...publicSettings(), ...(saveError ? { saveError } : {}), ...(roleMissing ? { roleMissing } : {}) };
   });
   // 形象下载：只在用户点「下载 / 检查新形象」时联网；进度经 hub-pet:roles-state 推给主窗口。
   ipcMain.handle('hub-pet:roles', (event) => (fromMain(event) ? roles.snapshot() : null));

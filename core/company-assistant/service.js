@@ -1772,11 +1772,16 @@ class CompanyAssistant {
       const job = lane.job;
       if (job && job.type === 'chat' && job.chatId === id) {
         job.stopped = true;
+        // 中断结果如实带回（审查 P2）：这一问照样结束，但中断抛错或会话几秒内仍在跑，要让调用方知道「没确认停下」。
+        let interruptError = '', sessionStillBusy = false;
         if (job.sessionId && this.sessionBusy(job.sessionId)) {
-          try { await this.deps.interruptSession?.(job.sessionId); } catch (error) { console.warn('[company-assistant] stop chat', error.message); }
+          try { await this.deps.interruptSession?.(job.sessionId); } catch (error) { interruptError = error.message || String(error); console.warn('[company-assistant] stop chat', interruptError); }
+          for (let i = 0; i < 15 && this.sessionBusy(job.sessionId); i++) await new Promise(r => setTimeout(r, 200));
+          sessionStillBusy = this.sessionBusy(job.sessionId);
         }
         this.failJob(job, STOPPED_TEXT, { stopped: true });
-        return this.chat().find(c => c.id === id);
+        const chat = this.chat().find(c => c.id === id);
+        return chat && { ...chat, interruptError, sessionStillBusy };
       }
     }
     // 队列里已经没有它（Hub 重启前留下的「进行中」）：直接标成已停止；已答完或已报错的不动。
@@ -2268,7 +2273,7 @@ class CompanyAssistant {
         const coverage = answer.coverage || (job.digest && Object.keys(sources).length ? job.digest : null);
         const phoneText = job.via === 'phone' && coverage ? `${answer.text}\n\n（查询范围：${coverage.ok ? '' : '⚠ '}${coverage.line}）` : undefined;
         this.patchChat(job.chatId, { state: 'done', a: answer.text, agentText: final.text, coverage, queryCoverage: answer.lines, sources, ...(phoneText ? { phoneText } : {}),
-          answeredAt: this.now(), pptResults: isPpt ? this.ppt.takeTaskResult?.(job.id) || [] : [] });
+          answeredAt: this.now(), pptResults: isPpt ? this.ppt.takeTaskResult?.(job.id, pptReport ? '' : final.text) || [] : [] });
       } else if (job.type === 'reply-review') this.finishReplyReview(job, final.text, null);
       else this.finishBrief(job, final.text, null);
       if (job.type === 'chat') this.metering.finish(job, 'success');

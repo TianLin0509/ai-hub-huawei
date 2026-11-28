@@ -159,3 +159,14 @@ test('转写落盘：带发言人、按词库替换并保留原听写', async t 
   companion.control(m.id, 'speaker-name', { id: 1, name: '李工' });
   assert.match(fs.readFileSync(companion.export(m.id), 'utf8'), /00:01 李工：把OLLA调小/);
 });
+
+// 2026-11-28 黄区全新用户首装：下载、解压、试运行都过了，最后把临时目录改名为正式目录时 EPERM（杀毒扫描刚解出的程序）。
+test('识别组件装好后的目录改名遇到短暂占用会多等几次，不把 289 MB 白下', async () => {
+  const { renameDirPatiently } = require('../core/company-assistant/meeting-asr');
+  let calls = 0; const waits = [];
+  const rename = () => { calls += 1; if (calls < 4) throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }); return 'ok'; };
+  assert.equal(await renameDirPatiently('a', 'b', { rename, wait: async ms => { waits.push(ms); } }), 'ok');
+  assert.equal(calls, 4); assert.deepEqual(waits, [500, 500, 500]);
+  await assert.rejects(renameDirPatiently('a', 'b', { tries: 3, rename: () => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }); }, wait: async () => {} }), /busy/);
+  await assert.rejects(renameDirPatiently('a', 'b', { rename: () => { throw Object.assign(new Error('nope'), { code: 'ENOENT' }); }, wait: async () => { throw new Error('不该等'); } }), /nope/);
+});

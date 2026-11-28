@@ -47,6 +47,7 @@ function createPptHandlers(service) {
     'ppt-imgtext-status': request => ({ ok: true, job: service.ppt.imgtext.snapshot(request?.jobId) }),
     'ppt-imgtext-retry': request => service.ppt.imgtext.retry(request?.jobId),
     'ppt-imgtext-fallback': request => service.ppt.imgtext.retry(request?.jobId, true),
+    'ppt-imgtext-stop': request => service.ppt.imgtext.stopAgent(request?.jobId),
     // 识别组件过旧时的【一键更新】（r54）：立即返回，下载进度与续跑都写进任务状态，由页面轮询。
     'ppt-imgtext-update-component': request => service.ppt.imgtext.updateComponent(request?.jobId),
     'ppt-imgtext-workdir': request => service.ppt.imgtext.openWorkdir(request?.jobId),

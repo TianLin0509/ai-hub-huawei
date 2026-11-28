@@ -945,3 +945,24 @@ test('the model notice shows the original model, reason and context in separate 
   assert.match(shown, new RegExp(`${NEXT}（推荐）`));
   assert.equal(notice.modelParts.confirm.textContent, '切换并继续');
 });
+
+// 2026-11-28 黄区真机：账号默认模型下线时，后台自动开的会话（公司助理等）卡在「新建会话需要换个模型」确认框。
+// 自动会话、模型来自账号默认：直接换成推荐的那个并记 modelChange；手动新建、或用户明确选过的模型：照旧停下来问。
+test('automatic sessions switch an unavailable account default to the recommended model without asking', t => {
+  const f = fixture(t, { ids: ['GLM-5.2-WX-Auto', 'MiniMax-M2.7'] });
+  f.write(path.join(f.configDir, 'settings.json'), { model: 'deepseek-v4.1-flash-1017' });
+  const auto = f.launch('auto-assistant', { purpose: 'company-assistant' });
+  assert.equal(auto.fixedModel, 'GLM-5.2-WX-Auto');
+  assert.equal(auto.modelChange.auto, true);
+  assert.equal(auto.modelChange.from, 'deepseek-v4.1-flash-1017');
+  const viaSource = f.launch('auto-source', { source: 'auto' });
+  assert.equal(viaSource.fixedModel, 'GLM-5.2-WX-Auto');
+});
+
+test('manual sessions and models the user chose still stop and ask', t => {
+  const f = fixture(t, { ids: ['GLM-5.2-WX-Auto', 'MiniMax-M2.7'] });
+  f.write(path.join(f.configDir, 'settings.json'), { model: 'deepseek-v4.1-flash-1017' });
+  assert.throws(() => f.launch('manual', {}), error => error.code === 'SESSION_MODEL_UNAVAILABLE');
+  assert.throws(() => f.launch('auto-user-chose', { purpose: 'company-assistant', codeagentUserModel: 'deepseek-v4.1-flash-1017' }),
+    error => error.code === 'SESSION_MODEL_UNAVAILABLE');
+});

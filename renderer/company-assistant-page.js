@@ -60,6 +60,12 @@ function todayStatus(d = {}, clock = at => String(at)) {
   return { up, empty, organizing: !!b?.organizing };
 }
 // 「今天」栏里会议行只显示时刻：去掉后端完整写法里的日期（今天的会都是今天）和「（上海 UTC+08:00）」时区说明。
+// 首次生成要先把今天的 WeLink 会议、消息读一遍，实测要好几分钟（11-28 真机约 6.5 分钟）；等待时就地说清楚。
+const BRIEF_FIRST_WAIT = '正在整理今天的摘要：首次整理要读 WeLink，约几分钟。可以先做别的，好了会自动显示。';
+// 今天还没有简报时「今天」栏的内容：正在生成就给等待说明，否则给「现在生成」按钮。
+const noBriefHtml = ({ running = false } = {}) => running
+  ? `<p class="ca-today-empty" data-slot="brief-wait">${BRIEF_FIRST_WAIT}</p>`
+  : '<p class="ca-today-empty">今天的摘要还没生成。</p><button type="button" class="ca-btn small primary" data-ca="brief-now">现在生成</button>';
 const shortMeetingText = text => String(text || '').replace(/\d{4}-\d{2}-\d{2}\s*（周.）\s*/g, '').replace(/\s*（上海 UTC\+08:00）/g, '').replace(/\s{2,}/g, ' ').trim();
 // 时间一律按上海时间显示（和后端 D.dayKey / D.clock 一致），不跟电脑本地时区走。
 const SHANGHAI = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
@@ -84,7 +90,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   const toolPicker = require('./tool-version-picker').createToolVersionPicker({ document, ipcRenderer });
   const { queryRows, refreshNotice } = require('./company-assistant-query-status');
   const { renderMessageBody } = require('./conversation-message-view');
-  let page = null, data = null, timer = null, tick = null, sending = false, gate = null, firstPaint = true;
+  let page = null, data = null, timer = null, tick = null, sending = false, gate = null, firstPaint = true, briefRunning = false;
   const openCoverage = new Set();
   const esc = escHtml;
   const clock = shanghaiClock, dayOf = shanghaiDay;
@@ -100,6 +106,12 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   // 「没有这个能力」：本机确认没装 CodeAgent（检测过且为 false），也没接部门 API 网关。
   const noEngine = () => codeagentPref.detectedInstalled() === false && !data?.answerRoute;
   const NEEDS_SETUP_HTML = '<span class="ca-needs-setup">需要先配置：没检测到 CodeAgent，也没接部门 API，问题没法送出去。</span><button type="button" class="ca-btn small primary" data-hub-err-act="known:codeagent-oneclick">一键安装 CodeAgent</button><button type="button" class="ca-btn small" data-hub-err-act="known:open-company-api">接部门 API</button>';
+  // 「现在生成」与打开页面时的自动生成共用：生成期间「今天」栏显示等待说明，而不是「还没生成」。
+  async function generateBrief() {
+    if (briefRunning) return;
+    briefRunning = true; render();
+    try { data = await call('brief-now'); } finally { briefRunning = false; render(); }
+  }
   const call = async (channel, payload) => { const r = await ipcRenderer.invoke('company-assistant:' + channel, payload); if (r && r.ok === false) throw new Error(r.error || '操作未完成'); return r; };
   let md = null;
   const markdown = text => {
@@ -392,7 +404,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const noticeAll = (d.notices || []).filter(n => n.kind !== 'brief'), noticeList = latestNotices(d.notices, 2);
     const notices = noticeList.length ? `<div class="ca-tg"><span>提醒</span><small>${noticeAll.length}</small></div>${noticeList.map(n => `<div class="ca-notice" data-notice-id="${esc(n.id)}"><button type="button" class="ca-ti-main ca-notice-line"${n.detail?.source ? ` data-ca="source:${esc(n.detail.source)}"` : ''} title="${esc([n.title, n.text && n.text !== n.title ? n.text : ''].filter(Boolean).join('\n'))}"><span class="ca-ti-tag amber">${esc(NOTICE_NAMES[n.kind] || n.kind)}</span><span class="ca-notice-title">${esc(n.title)}</span><time>${n.kind === 'digest' ? '汇总于 ' : ''}${when(n.at)}</time></button>${n.kind === 'digest' ? require('./company-assistant-digest').digestList(n, esc) : ''}</div>`).join('')}` : '';
     let list;
-    if (!b) list = `<p class="ca-today-empty">今天的摘要还没生成。</p><button type="button" class="ca-btn small primary" data-ca="brief-now">现在生成</button>`;
+    if (!b) list = noBriefHtml({ running: briefRunning });
     else if (b.by === 'none') list = `<p class="ca-today-empty">${esc(b.note || '今天暂时没有可整理的信息。')}</p>`;
     else if (!sections.length) list = `<p class="ca-today-empty">${esc(empty)}</p>`;
     else list = sections.map(s => {
@@ -605,7 +617,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       showMessage?.(refreshNotice(data) || 'WeLink 已连接，数据已更新');
       return;
     }
-    if (verb === 'brief-now') { button.disabled = true; data = await call('brief-now'); render(); return; }
+    if (verb === 'brief-now') { button.disabled = true; await generateBrief(); return; }
     if (verb === 'done') { await call('mark-done', { source: arg }); await load(); return; }
     if (verb === 'awaiting-done') {
       const r = await call('mark-awaiting-done');
@@ -1047,7 +1059,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     try {
       await load();
       // 打开页面时今天还没有简报：当场生成（工作日、非工作日都可以手动看）。
-      if (!data.brief && connectionState(data).kind === 'online') { data = await call('brief-now'); render(); }
+      if (!data.brief && connectionState(data).kind === 'online') await generateBrief();
     } catch (error) { showMessage?.('助理状态读取失败：' + error.message); }
   }
   function close() {
@@ -1097,4 +1109,4 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   window.addEventListener('hub-pet:open-assistant', e => { void fromPet(e.detail || {}).catch(error => showMessage?.(error.message)); });
   return { open, close, isOpen: () => !!page && !page.hidden };
 }
-module.exports = { createCompanyAssistantPage, latestNotices, todayStatus, shortMeetingText, shanghaiClock, shanghaiDay, dayTitle, visibleChat, splitLegacyCoverage, answerCoverage, sourceLabels, tagSources, todayFolded, saveTodayFolded, TODAY_FOLD_KEY, secondsText, waitPhase };
+module.exports = { createCompanyAssistantPage, BRIEF_FIRST_WAIT, noBriefHtml, latestNotices, todayStatus, shortMeetingText, shanghaiClock, shanghaiDay, dayTitle, visibleChat, splitLegacyCoverage, answerCoverage, sourceLabels, tagSources, todayFolded, saveTodayFolded, TODAY_FOLD_KEY, secondsText, waitPhase };

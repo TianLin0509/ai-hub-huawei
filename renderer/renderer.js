@@ -1191,6 +1191,21 @@ diskReleasePanel = require('./disk-release-panel').attachDiskReleasePanel({
 // 底栏「问问 Hub」（2026-11-19）：照随包的使用说明书答疑，只读一次性问答（renderer/help-ask-ui.js）。
 // window.__hubHelpAsk：报错卡旁的「问问 Hub」按钮靠它带上报错文字打开面板（renderer/hub-error-card.js）；没装上时按钮不出现。
 try { const helpAsk = require('./help-ask-ui.js').attachHelpAsk({ document, ipcRenderer }); if (helpAsk) window.__hubHelpAsk = helpAsk; } catch (error) { console.warn('[help-ask] 界面初始化失败：', error.message); }
+// 底栏「用户群」弹层（r46；2026-11-28 起统一包也带）
+{
+  const userGroups = require('./welink-user-groups.js').attachWelinkUserGroups({
+    document, clipboard,
+    onOpen: () => { diskReleasePanel?.close(); memoryReleasePanel?.close(); },
+  });
+  // 一键入群（r47）：给弹层里没满的群加按钮
+  const joinUi = userGroups ? require('./welink-join-ui.js').attachWelinkJoin({ document, panel: userGroups.panel, ipcRenderer }) : null;
+  // 设置菜单「一键入群」和反馈里的「建议进群交流」（2026-11-26）复用同一个弹层：打开并直接入群（群由收件机挑没满的），
+  // 结果、补填 WeLink 账号都在弹层里。
+  if (userGroups && joinUi) {
+    window.__hubUserGroups = { open: userGroups.open, joinNow: () => { userGroups.open(); void joinUi.join('', ''); } };
+    window.__hubFeedback?.addGroupEntry?.();
+  }
+}
 // 桌宠「硬盘快满」卡片点开这里（2026-11-09）。
 window.__hubOpenDiskRelease = () => diskReleasePanel?.open();
 require('./vpn-traffic-panel').attachVpnTrafficPanel({
@@ -10177,7 +10192,7 @@ document.getElementById('btn-team')?.remove();
     document, window, ipcRenderer, selectSession: id => selectSession(id, { forceScrollBottom: true }),
     closeOtherPanels: () => {
       window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close();
-      for (const key of ['__teamHide', '__weclawHide', '__skillPlazaHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide', '__welinkBlackboardHide']) window[key]?.();
+      for (const key of ['__teamHide', '__weclawHide', '__skillPlazaHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyPptHide', '__communityHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide', '__welinkBlackboardHide']) window[key]?.();
     },
     showMessage: message => showToast(message),
   });
@@ -10195,7 +10210,7 @@ document.getElementById('btn-team')?.remove();
     document, window, ipcRenderer,
     closeOtherPanels: () => {
       window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close();
-      for (const key of ['__teamHide', '__avatarHide', '__skillPlazaHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide', '__welinkBlackboardHide']) window[key]?.();
+      for (const key of ['__teamHide', '__avatarHide', '__skillPlazaHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyPptHide', '__communityHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide', '__welinkBlackboardHide']) window[key]?.();
     },
     showMessage: message => showToast(message),
   });

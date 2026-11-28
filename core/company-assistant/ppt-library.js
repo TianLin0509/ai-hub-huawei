@@ -81,7 +81,27 @@ class PptLibrary {
     return this.previewer.scene(file, Number(page));
   }
   takeTaskReport(id) { const report = this.taskReports.get(id) || ''; this.taskReports.delete(id); return report; }
-  takeTaskResult(id) { const result = this.taskResults.get(id) || []; this.taskResults.delete(id); if (this.activeTask === id) { this.activeTask = null; this.taskEvidence.clear(); } return result; }
+  takeTaskResult(id, answerText = '') {
+    let result = this.taskResults.get(id) || [];
+    // 助理没走核验报告、直接用自己的话列了页（2026-11-28 黄区：回答里列出 4 页，页面却显示「AI 推荐 0 页」）：
+    // 只采用回答里点名、且这一问里确实读过原文的页，标明「未走核验报告」，不凭空添页。
+    if (!this.taskResults.has(id) && answerText && this.activeTask === id && this.taskEvidence.size) result = this.citedReadPages(answerText);
+    this.taskResults.delete(id); if (this.activeTask === id) { this.activeTask = null; this.taskEvidence.clear(); } return result;
+  }
+  citedReadPages(answerText) {
+    const { extractCitations } = require('./citation-check');
+    const norm = v => String(v || '').replace(/\\/g, '/').toLowerCase();
+    const base = v => norm(v).split('/').pop();
+    const out = [], seen = new Set();
+    for (const c of extractCitations(answerText)) {
+      const page = [...this.taskEvidence.values()].find(p => Number(p.ref?.page) === c.page && (c.path ? norm(p.ref?.path) === norm(c.path) : base(p.ref?.name || p.ref?.path) === base(c.name)));
+      if (!page || seen.has(page.id)) continue;
+      seen.add(page.id);
+      out.push({ id: page.id, name: page.ref.name, path: page.ref.path, page: page.ref.page, thumbnail: page.thumbnail, reason: '助理回答里点名、本次读过原文的页（助理没走核验报告，请自己对照原文确认）', sourceState: page.source_state, unverified: true });
+      if (out.length >= 10) break;
+    }
+    return out;
+  }
   // Python cannot read an Electron asar. Materialize the shipped, allowlisted files by content hash.
   runtime() {
     const root = this.workDir(true);

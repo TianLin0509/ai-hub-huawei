@@ -119,6 +119,17 @@ function resolveCodeAgentPin(opts, { dataDir, configDir, command, pool = null, f
     const confirmedDefault = sameFamily.find(id => id.toLowerCase() === String(defaultModel).toLowerCase() && id.toLowerCase() !== String(fixedModel).toLowerCase()) || '';
     const next = nameMatch.resolveName(fixedModel, sameFamily, { allowSimilar: true }).name || confirmedDefault
       || (!known.authoritative && match(defaultModel) === match(fixedModel) && defaultModel);
+    // 后台自动开的会话（助理、今日摘要、分身等，没人守着点确认框）：模型来自账号默认、不是用户明确选的，
+    // 就直接换成推荐的那个（与确认框里的「推荐」同一个），记一条 modelChange 由功能页提示一行；用户明确选过的模型照旧停下来问。
+    // 2026-11-28 黄区真机：默认模型下线时公司助理卡在「新建会话需要换个模型」确认框，没人点就一直不回。
+    const autoSession = opts.source === 'auto' || require('./auto-dispatch-rules').AUTO_PURPOSES.includes(opts.purpose);
+    const userChose = !!(opts.fixedModel || opts.codeagentUserModel || requested || opts.modelPinSource === 'user');
+    const autoPick = autoSession && !userChose && !failureReason && !opts.modelConfirmationRequired
+      ? (models.isSafeModelId(next) ? next : list.find(id => models.isSafeModelId(id) && id.toLowerCase() !== String(fixedModel).toLowerCase()) || '') : '';
+    if (autoPick) {
+      return { ...modelPinFields(opts), fixedModel: autoPick, modelPinSource: 'auto-switch',
+        modelChange: { from: fixedModel, to: autoPick, reason, at: Date.now(), auto: true }, modelChanged: true, settingsSupported };
+    }
     if (policy === 'stop-and-ask' || opts.modelConfirmationRequired) throw Object.assign(unavailableError(fixedModel, reason, list, next || match(defaultModel) || list[0]),
       { canChooseAlternative: settingsSupported && failureCode !== 'SETTINGS_WRITE_FAILED' });
     if (!models.isSafeModelId(next)) throw unavailableError(fixedModel, reason + '，没有同版本可替代的模型、账号也没有同家族的已确认默认模型，请选一个模型后继续（跨家族切换需要手动确认）', list, match(defaultModel) || '');

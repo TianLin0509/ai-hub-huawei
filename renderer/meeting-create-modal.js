@@ -309,12 +309,42 @@ function _resetMembers() {
   input.placeholder = '例如：帮我拆解这个问题，给出可执行方案';
   // 公司版在检测前会把 CodeAgent 当作已安装；等真实结果再选默认成员。
   // 等待期间的手动选人，以及关掉后重新打开的成员，都不能被旧回调覆盖。
-  _membersReady = require('./codeagent-preference').refresh(ipcRenderer).then(() => {
+  _membersReady = Promise.all([require('./codeagent-preference').refresh(ipcRenderer), _loadCodeAgentModels()]).then(() => {
     if (load !== _membersLoad || _membersEdited) return;
     _groupSlots = _cloneSlots(_defaultGroupMembers());
     _renderSlots();
     _paintMembersNote();
   });
+  // 清单还在读（新装、刚启动）：读到后补一次，成员的模型下拉不再空着。
+  _retryCodeAgentModels(load);
+}
+
+// CodeAgent 成员的模型下拉（2026-11-28 黄区真机：群聊成员模型全空，账号默认模型下线时每建一个成员弹一次「换个模型」）。
+// 启动中心单会话会主动读账号模型清单，群聊面板以前只看已经学到的运行时清单，新装或刚启动时是空的。
+// 这里同样向主进程要一次个人账号的可用模型（不可用的不列），默认选中的就是可用模型，建群时不再逐个弹确认。
+async function _loadCodeAgentModels() {
+  const { modelOptionsFor, setRuntimeModelOptions } = require('../core/model-options.js');
+  if (modelOptionsFor('codeagent').length) return true;
+  try {
+    const result = await ipcRenderer.invoke('codeagent:models', { account: 'personal' });
+    const usable = (result?.options || []).filter(option => option && option.id && !option.unavailable)
+      .map(option => ({ id: option.id, label: option.label || option.displayName || option.id }));
+    if (!usable.length) return false;
+    setRuntimeModelOptions('codeagent', usable);
+    return true;
+  } catch { return false; }
+}
+function _retryCodeAgentModels(load, left = 6) {
+  setTimeout(async () => {
+    if (load !== _membersLoad || left <= 0) return;
+    const before = require('../core/model-options.js').modelOptionsFor('codeagent').length;
+    const ok = await _loadCodeAgentModels();
+    if (!ok) { _retryCodeAgentModels(load, left - 1); return; }
+    if (before || load !== _membersLoad) return;
+    // 用户已经动过成员时只刷新下拉选项，不改他选的 AI 和顺序。
+    _syncGroupSlotsFromDom({ strict: false });
+    _renderSlots();
+  }, 5000);
 }
 
 function _slotHtml(i, spec, isGroup) {

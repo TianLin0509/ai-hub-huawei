@@ -257,12 +257,12 @@ test('增强转字复用助理，空ops明确图像算法回退，失败可恢�
   const { service, image, a, calls } = conversion(); a.ask = () => { throw new Error('会话尚未接通'); };
   const job = await service.start(image); assert.equal(job.state, 'error'); assert.ok(job.seed); assert.match(job.error, /未接通/);
   a.ask = () => ({ id: 'chat-1' }); assert.equal((await service.ask(job.id)).state, 'waiting_agent');
-  await assert.rejects(service.build({ jobId: job.id, vision: 'unavailable', ops: { fix: { 1: '不应改图' } } }), /空 ops/);
-  const result = await service.build({ jobId: job.id, vision: 'unavailable', ops: {} });
+  await assert.rejects(service.build({ jobId: job.id, round: service.job(job.id).round, vision: 'unavailable', ops: { fix: { 1: '不应改图' } } }), /空 ops/);
+  const result = await service.build({ jobId: job.id, round: service.job(job.id).round, vision: 'unavailable', ops: {} });
   assert.equal(result.state, 'done'); assert.equal(result.result.mode, 'image_fallback'); assert.match(result.step, /复核/);
-  await service.build({ jobId: job.id, vision: 'seen', ops: { confirm: [1] } });
-  await service.build({ jobId: job.id, vision: 'seen', ops: { confirm: [1] } });
-  await assert.rejects(service.build({ jobId: job.id, vision: 'seen', ops: {} }), /两轮修补/);
+  await service.build({ jobId: job.id, round: service.job(job.id).round, vision: 'seen', ops: { confirm: [1] } });
+  await service.build({ jobId: job.id, round: service.job(job.id).round, vision: 'seen', ops: { confirm: [1] } });
+  await assert.rejects(service.build({ jobId: job.id, round: service.job(job.id).round, vision: 'seen', ops: {} }), /两轮修补/);
   assert.equal(calls.filter(c => c.op === 'imgtext-build').length, 3);
 });
 
@@ -386,12 +386,219 @@ test('转字写任务中断后保留产物并阻止Agent自动重放，页面明
     if (op === 'imgtext-build' && ++builds === 1) throw Object.assign(new Error('装配中断'), { code: 'REQUEST_INTERRUPTED', resultMayBePartial: true });
     return original(op, req);
   };
-  await assert.rejects(service.build({ jobId: job.id, vision: 'seen', ops: { confirm: [1] } }), /手动重试/);
+  await assert.rejects(service.build({ jobId: job.id, round: service.job(job.id).round, vision: 'seen', ops: { confirm: [1] } }), /手动重试/);
   assert.equal(service.snapshot(job.id).needsOutputCheck, true);
-  await assert.rejects(service.build({ jobId: job.id, vision: 'seen', ops: { confirm: [1] } }), /自动装配已暂停/);
+  await assert.rejects(service.build({ jobId: job.id, round: service.job(job.id).round, vision: 'seen', ops: { confirm: [1] } }), /自动装配已暂停/);
   await assert.rejects(service.ask(job.id), /手动重试/); assert.equal(builds, 1);
   ppt.deps.pptOpenWorkdir = async dir => { opened = dir; return ''; };
   await service.openWorkdir(job.id); assert.equal(opened, service.snapshot(job.id).workdir);
   assert.equal((await service.retry(job.id, true)).state, 'done'); assert.equal(builds, 2);
   await assert.rejects(service.retry(job.id), /本轮转字结束/);
+});
+
+// 2026-11-28 黄区实测：公司模型下 CodeAgent 看图修正一张要十几分钟，期间页面不能取消、也不能换图。
+test('等CodeAgent看图修正时可以停止或直接用OCR初稿装配，停止的是这一问且之后能换图', async () => {
+  const { service, image, a, calls } = conversion();
+  const stopped = [], chats = [{ id: 'chat-1', state: 'running' }];
+  a.chat = () => chats; a.stopChat = async id => { stopped.push(id); chats[0].state = 'error'; };
+  const job = await service.start(image);
+  assert.equal(job.state, 'waiting_agent'); assert.ok(job.askedAt, '记下开始等的时刻，页面显示已等时长');
+  assert.doesNotMatch(job.step, /1–3分钟/);
+  // 不等了：停掉这一问，并用 OCR 初稿装配出可编辑 PPT
+  const built = await service.retry(job.id, true);
+  assert.deepEqual(stopped, ['chat-1']);
+  assert.equal(built.state, 'done'); assert.equal(built.result.mode, 'image_fallback'); assert.equal(built.code, '', '装配成功后不再带停止码');
+  assert.equal(calls.filter(c => c.op === 'imgtext-build').length, 1);
+  // 另一张：只停止，任务结束（可换图），之后仍可让 CodeAgent 重试
+  chats[0].state = 'running';   // 夹具里第二张沿用同一问编号
+  const second = await service.start(image);
+  const s = await service.stopAgent(second.id);
+  assert.equal(s.state, 'error'); assert.equal(s.code, 'AGENT_STOPPED'); assert.match(s.error, /OCR 初稿装配/);
+  assert.deepEqual(stopped, ['chat-1', 'chat-1']);
+  await assert.rejects(service.stopAgent(second.id), /没有在等/);
+  a.ask = () => ({ id: 'chat-2' });
+  assert.equal((await service.retry(second.id)).state, 'waiting_agent');
+});
+
+// 2026-11-28 黄区实测：CodeAgent 看图修正 10 分钟后，装配因「卡片圆角必须为 0–1000 像素」整轮失败；改了扩展名的文件报 Python 英文原文。
+test('装配前修正差异里的类型小错，不因一个圆角丢掉整轮修正；坏图给中文说明', async () => {
+  const { normalizeOps } = require('../core/company-assistant/ppt-imgtext');
+  const n = normalizeOps({ c: [[1, 2, 3, 4, '8px'], [1, 2, 3, 4, '#ffffff'], [1, 2, 3, 4, 5000], [1, 2, 3, 4, 6]], t: [[1, 2, 3, 4, '标题', 'true']], g: [[1, 2, 3, 4, 7, 0]], fix: { 1: '不动' } });
+  assert.deepEqual(n.ops.c, [[1, 2, 3, 4, 8], [1, 2, 3, 4], [1, 2, 3, 4, 1000], [1, 2, 3, 4, 6]]);
+  assert.equal(n.ops.t[0][5], true); assert.deepEqual(n.ops.g[0].slice(4), ['7', false]); assert.deepEqual(n.ops.fix, { 1: '不动' });
+  assert.equal(n.fixed.length, 6);
+  assert.equal(normalizeOps({ c: [[1, 2, 3, 4, 0]] }).fixed.length, 0, '合法差异原样不动');
+  const { service, image, a, calls } = conversion();
+  a.ask = () => ({ id: 'chat-1' });
+  const job = await service.start(image);
+  await service.build({ jobId: job.id, round: service.job(job.id).round, vision: 'seen', ops: { c: [[0, 0, 10, 10, '圆角']] } });
+  assert.deepEqual(calls.at(-1).req.ops.c, [[0, 0, 10, 10]]);
+  // 0 字节：开工前就拒绝；Doctor 读不出图：换成中文说明
+  const empty = image.replace(/slide\.png$/, 'empty.png'); require('node:fs').writeFileSync(empty, '');
+  await assert.rejects(service.start(empty), /图片打不开/);
+  const bad = conversion();
+  bad.ppt.doctor.call = async () => { throw Object.assign(new Error("cannot identify image file 'C:\\x\\not-image.png'"), { code: 'DOCTOR_FAILED' }); };
+  const failedJob = await bad.service.start(bad.image);
+  assert.equal(failedJob.state, 'error'); assert.match(failedJob.error, /图片打不开/); assert.doesNotMatch(failedJob.error, /cannot identify/);
+});
+
+test('透明 PNG 先铺白底再交给 Doctor；不透明的原样用；任务标题仍用原文件名', async () => {
+  const { flattenTransparent } = require('../core/company-assistant/ppt-imgtext');
+  const fake = pixels => {
+    let written = null;
+    return { written: () => written, ni: {
+      createFromPath: () => ({ isEmpty: () => false, getSize: () => ({ width: pixels.length / 4, height: 1 }), toBitmap: () => Buffer.from(pixels) }),
+      createFromBitmap: (b, size) => { written = { b: [...b], size }; return { toPNG: () => Buffer.from('png') }; },
+    } };
+  };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ppt-flat-'));
+  const src = path.join(dir, 'a.png'); fs.writeFileSync(src, 'x');
+  const t = fake([0, 0, 0, 0, 0, 0, 128, 128, 255, 0, 0, 255]);   // 预乘 BGRA：全透明黑、半透明红、不透明蓝
+  const out = flattenTransparent(src, path.join(dir, 'job'), t.ni);
+  assert.notEqual(out, src); assert.ok(fs.existsSync(out));
+  assert.deepEqual(t.written().b, [255, 255, 255, 255, 127, 127, 255, 255, 255, 0, 0, 255]);
+  const opaque = fake([1, 2, 3, 255]);
+  assert.equal(flattenTransparent(src, path.join(dir, 'job2'), opaque.ni), src); assert.equal(opaque.written(), null);
+  assert.equal(flattenTransparent(src.replace(/png$/, 'jpg'), dir, t.ni), src.replace(/png$/, 'jpg'), 'JPEG 没有透明通道，不处理');
+  // 接进转字任务：Doctor 拿到的是铺白底的那份，任务标题用原文件名
+  const { service, image, a, calls, ppt } = conversion();
+  ppt.deps.nativeImage = fake([0, 0, 0, 0]).ni;
+  let title = ''; a.ask = (q, o) => { title = o.taskTitle; return { id: 'chat-1' }; };
+  const job = await service.start(image);
+  assert.equal(job.flattened, true); assert.equal(job.sourceImage, image);
+  assert.match(calls.find(c => c.op === 'imgtext-seed').req.image, /source-on-white\.png$/);
+  assert.match(title, /slide\.png/);
+});
+
+// 审查 P1（2026-11-28）：停止或改走 OCR 初稿后，旧一轮 CodeAgent 迟到的 build 不能把任务改成 done、也不能覆盖初稿结果。
+test('轮次身份：停止后旧 build 被拒；初稿装配完成后迟到的 agent 结果不覆盖；新一轮用新轮次号', async () => {
+  const { service, image, a, calls } = conversion();
+  a.stopChat = async () => {};
+  const job = await service.start(image);
+  const r1 = service.job(job.id).round;
+  assert.equal(r1, 1);
+  await service.stopAgent(job.id);
+  await assert.rejects(service.build({ jobId: job.id, round: r1, vision: 'seen', ops: { confirm: [1] } }), /已停止或已被替换/);
+  assert.equal(service.snapshot(job.id).state, 'error'); assert.equal(calls.filter(c => c.op === 'imgtext-build').length, 0, '被拒的提交不调 Doctor');
+  // 页面选 OCR 初稿：完成后旧轮次再交也不采用
+  const fb = await service.retry(job.id, true);
+  assert.equal(fb.state, 'done'); assert.equal(fb.result.mode, 'image_fallback');
+  await assert.rejects(service.build({ jobId: job.id, round: r1, vision: 'seen', ops: { confirm: [1] } }), /已停止或已被替换/);
+  const after = service.snapshot(job.id);
+  assert.equal(after.builds, 1); assert.equal(after.result.mode, 'image_fallback');
+  // 不带轮次、或冒用别的轮次号，同样被拒
+  await assert.rejects(service.build({ jobId: job.id, vision: 'seen', ops: {} }), /已停止或已被替换/);
+  // 让 CodeAgent 重新修正：新轮次号 2，旧号 1 仍被拒，新号可用
+  a.ask = () => ({ id: 'chat-2' });
+  const job2 = await service.start(image);
+  await service.stopAgent(job2.id);
+  assert.equal((await service.retry(job2.id)).state, 'waiting_agent');
+  assert.equal(service.job(job2.id).round, 2);
+  await assert.rejects(service.build({ jobId: job2.id, round: 1, vision: 'seen', ops: {} }), /已停止或已被替换/);
+  assert.equal((await service.build({ jobId: job2.id, round: 2, vision: 'seen', ops: { confirm: [1] } })).state, 'done');
+});
+
+test('轮次身份：agent 装配进行中用户改了选择，写结果前再核一次，作废这份 agent 结果', async () => {
+  const { service, image, ppt } = conversion();
+  const job = await service.start(image);
+  const round = service.job(job.id).round;
+  const real = ppt.doctor.call.bind(ppt.doctor);
+  ppt.doctor.call = async (op, req) => { if (op === 'imgtext-build') service.job(job.id).agentRound = null; return real(op, req); };
+  await assert.rejects(service.build({ jobId: job.id, round, vision: 'seen', ops: { confirm: [1] } }), /已停止或已被替换/);
+  const s = service.snapshot(job.id);
+  assert.equal(s.result, undefined); assert.equal(s.builds, 0); assert.equal(s.state, 'error');
+});
+
+test('MCP 入口：模型只能以 agent 身份提交，参数里的 source 不被采信', async () => {
+  const { HubTools } = require('../core/company-assistant/hub-tools');
+  const seen = [];
+  const tools = new HubTools({ dir: os.tmpdir(), ppt: { imgtext: { build: args => { seen.push(args); return { ok: true }; } } }, toolsetFor: () => 'ppt', state: () => ({}), now: Date.now, changed() {} });
+  await tools.invoke({ name: 'ppt_imgtext', arguments: { op: 'build', jobId: 'j', round: 3, vision: 'seen', ops: {}, source: 'page' }, callerSessionId: 's' });
+  assert.deepEqual(seen[0], { jobId: 'j', ops: {}, vision: 'seen', round: 3, source: 'agent' });
+});
+
+// 审查 P2（2026-11-28）：判定不了的布尔写法不猜成 false；字段数不对属于结构错误，原样交给 Doctor 报错。
+test('normalizeOps 只转换白名单里能判定的值，结构错误原样保留', () => {
+  const { normalizeOps } = require('../core/company-assistant/ppt-imgtext');
+  const n = normalizeOps({ t: [[1, 2, 3, 4, 'a', 'maybe'], [1, 2, 3, 4, 'b', '0']], g: [[1, 2, 3, 4, '说明', 'yes?'], [1, 2, 3, 4, { x: 1 }]], c: [[1, 2, 3, 4, 'abc', 'extra'], [1, 2, 3]] });
+  assert.equal(n.ops.t[0][5], 'maybe', '判定不了的不改'); assert.equal(n.ops.t[1][5], false);
+  assert.equal(n.ops.g[0][5], 'yes?'); assert.deepEqual(n.ops.g[1][4], { x: 1 }, '对象说明不硬转文字');
+  assert.deepEqual(n.ops.c, [[1, 2, 3, 4, 'abc', 'extra'], [1, 2, 3]], '字段数不对的卡片不截断');
+  assert.deepEqual(n.fixed, ['t[2] 粗体']);
+});
+
+test('停止异常如实报告：stopChat 抛错或会话仍在跑时不报「已停止」，迟到结果仍被拒，改走初稿后提示未确认', async () => {
+  const { service, image, a } = conversion();
+  a.stopChat = async () => { throw new Error('中断命令没送到'); };
+  const job = await service.start(image);
+  const round = service.job(job.id).round;
+  const s = await service.stopAgent(job.id);
+  assert.equal(s.code, 'AGENT_STOP_FAILED'); assert.match(s.error, /没能确认 CodeAgent 已停下（中断命令没送到）/); assert.doesNotMatch(s.error, /^已停止/);
+  await assert.rejects(service.build({ jobId: job.id, round, vision: 'seen', ops: {} }), /已停止或已被替换/);
+  const fb = await service.retry(job.id, true);
+  assert.equal(fb.state, 'done'); assert.match(fb.step, /没能确认停下/);
+  // stopChat 不报错但会话仍显示在跑：同样如实说
+  const two = conversion(); two.a.stopChat = async () => {};   // chat() 夹具里一直是 running
+  const j2 = await two.service.start(two.image);
+  const s2 = await two.service.stopAgent(j2.id);
+  assert.equal(s2.code, 'AGENT_STOP_FAILED'); assert.match(s2.error, /仍显示在运行/);
+  // 底层 stopChat 把 chat 写成「已停止」，但中断抛错或会话仍忙（审查第四轮）：依据真实运行态，同样如实说
+  for (const [ret, re] of [[{ id: 'chat-1', state: 'error', interruptError: '中断命令没送到', sessionStillBusy: true }, /中断 CodeAgent 失败：中断命令没送到/],
+                           [{ id: 'chat-1', state: 'error', interruptError: '', sessionStillBusy: true }, /后台 CodeAgent 会话仍在运行/]]) {
+    const k = conversion(); const cs = [{ id: 'chat-1', state: 'running' }];
+    k.a.chat = () => cs; k.a.stopChat = async () => { cs[0].state = 'error'; return ret; };
+    const jk = await k.service.start(k.image);
+    const sk = await k.service.stopAgent(jk.id);
+    assert.equal(sk.code, 'AGENT_STOP_FAILED'); assert.match(sk.error, re);
+  }
+  // 真停了：报已停止
+  const three = conversion(); const chats = [{ id: 'chat-1', state: 'running' }];
+  three.a.chat = () => chats; three.a.stopChat = async () => { chats[0].state = 'error'; };
+  const j3 = await three.service.start(three.image);
+  assert.equal((await three.service.stopAgent(j3.id)).code, 'AGENT_STOPPED');
+});
+
+test('重复点击：连点两次「不等了」只装配一次；连点两次「停止」第二次给明确提示', async () => {
+  const { service, image, a, calls } = conversion();
+  const chats = [{ id: 'chat-1', state: 'running' }];
+  a.chat = () => chats; a.stopChat = async () => { await new Promise(r => setTimeout(r, 20)); chats[0].state = 'error'; };
+  const job = await service.start(image);
+  const results = await Promise.allSettled([service.retry(job.id, true), service.retry(job.id, true)]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  assert.match(results.find(r => r.status === 'rejected').reason.message, /请等本轮/);
+  assert.equal(calls.filter(c => c.op === 'imgtext-build').length, 1);
+  assert.equal(service.snapshot(job.id).result.mode, 'image_fallback');
+  await assert.rejects(service.stopAgent(job.id), /没有在等/);
+});
+
+test('延迟到达的旧 build：停止前已发出、停止后才到 Hub 的提交同样被拒', async () => {
+  const { service, image, a, calls } = conversion();
+  const chats = [{ id: 'chat-1', state: 'running' }];
+  a.chat = () => chats; a.stopChat = async () => { chats[0].state = 'error'; };
+  const job = await service.start(image);
+  const round = service.job(job.id).round;
+  const late = new Promise(r => setTimeout(r, 30)).then(() => service.build({ jobId: job.id, round, vision: 'seen', ops: { confirm: [1] } }));
+  await service.stopAgent(job.id);
+  await assert.rejects(late, /已停止或已被替换/);
+  assert.equal(calls.filter(c => c.op === 'imgtext-build').length, 0);
+});
+
+// 2026-11-28 黄区：AI 找页的回答里列了 4 页（文件 / 第 N 页），但没走核验报告，页面显示「AI 推荐 0 页，读过的页里没有原文对得上的」。
+test('AI 找页没走核验报告：只把回答点名且本次读过原文的页列出来，并标明未核验；走了报告的照旧', () => {
+  const { PptLibrary } = require('../core/company-assistant/ppt-library');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ppt-cited-'));
+  const lib = new PptLibrary({ dir, now: Date.now, changed() {}, settings: () => ({}) }, { pptDoctor: { status: async () => ({}), call: async () => ({}) } });
+  lib.beginTask('t1', 'chat-1');
+  lib.taskEvidence.set('s:4:10', { id: 's:4:10', ref: { name: '修改-AIRAN L2最新材料z.pptx', path: 'C:\docs\修改-AIRAN L2最新材料z.pptx', page: 10 }, thumbnail: null, source_state: 'metadata_matches_index' });
+  lib.taskEvidence.set('s:5:3', { id: 's:5:3', ref: { name: '别的.pptx', path: 'C:\docs\别的.pptx', page: 3 }, thumbnail: null });
+  const answer = ['| # | 页面 | 文件 / 页码 |', '|---|---|---|', '| 1 | 统一调度 | `修改-AIRAN L2最新材料z.pptx` / 第10页 |', '| 2 | 没读过的 | `从没读过.pptx` / 第2页 |'].join('\n');
+  const picks = lib.takeTaskResult('t1', answer);
+  assert.equal(picks.length, 1); assert.equal(picks[0].id, 's:4:10'); assert.equal(picks[0].unverified, true); assert.match(picks[0].reason, /没走核验报告/);
+  // 走了核验报告：用报告结果，不看回答文字
+  lib.beginTask('t2', 'chat-2');
+  lib.taskEvidence.set('s:4:10', { id: 's:4:10', ref: { name: '修改-AIRAN L2最新材料z.pptx', path: 'C:\docs\修改-AIRAN L2最新材料z.pptx', page: 10 } });
+  lib.taskResults.set('t2', []);
+  assert.deepEqual(lib.takeTaskResult('t2', answer), []);
+  const src = fs.readFileSync(path.join(__dirname, '../renderer/company-ppt-page.js'), 'utf8');
+  assert.match(src, /AI 点名 · 已读原文，未核验/);
 });

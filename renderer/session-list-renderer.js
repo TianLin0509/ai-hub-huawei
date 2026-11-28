@@ -21,7 +21,8 @@ const { sessionRuntimeIssue } = require('../core/session-runtime-issue.js');
 const { KIND_LABELS, ALL_AI_KINDS } = require('../core/ai-kinds.js');
 // 底栏「问问 Hub」答疑入口（2026-11-19，两版都有）：在「用户群」左边
 const helpAskUi = require('./help-ask-ui.js');
-const welinkUserGroups = null;
+// 底栏「用户群」入口（r46）：2026-11-28 起统一包（内源只在公司内网分发）也带上，宣传片片尾的一键进群靠它
+const welinkUserGroups = require('./welink-user-groups.js');
 const { sessionDisplayTitle } = require('../core/session-title-guards.js');
 // 右下角「国内正常 / 异常」只关 Kimi / DeepSeek 这类直连的国内 AI；发行版里一个都没有（公司纯净版只有 CodeAgent）就不显示
 // （2026-10-13 用户要求删掉）。

@@ -14,6 +14,7 @@ const REASONS = Object.freeze({
 function saveFailureText(result, error) {
   if (error) return `没存上：${(error && error.message) || error}。开关已恢复成原来的样子，请再点一次；还不行就点「设置 → 一键反馈」告诉维护人。`;
   if (!result) return '没存上：Hub 没有收到保存结果。开关已恢复成原来的样子，请再点一次；还不行就重启 Hub 再试。';
+  if (result.roleMissing) return `「${result.roleMissing.name}」还没下载，形象没换。在「助理 → 设置 → 桌宠」里点它旁边的「下载」，下好会自动换上。`;
   const e = result.saveError;
   if (!e) return '';
   const reason = REASONS[e.code] || e.message || '写设置文件失败';

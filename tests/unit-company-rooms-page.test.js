@@ -194,3 +194,9 @@ test('会议室页「所在地域」：默认全空、在计划页有三格输�
   assert.match(src, /'抢订设置', '会后动作', '系统', '高级', '地域'\]\) draft\[key\]/);
   assert.match(src, /patch\.地域 && state\.connected && !state\.capabilities\?\.includes\('area'\)/);
 });
+
+test('「抢不到换下一间」说明写已备候选的实测速度，不再是旧的重载换房耗时', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../renderer/company-rooms-page.js'), 'utf8');
+  assert.doesNotMatch(source, /20–30 秒/);
+  assert.match(source, /抢不到换下一间', '首选被抢走时，自动换下一间（已提前备好的候选不到 1 秒就提交，没备好的约 15 秒）/);
+});

@@ -250,7 +250,9 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, download
   // 「已修于」：更新日志里引用了这条反馈的收件编号（完整编号或末尾 8 位）就算，取最早的那个版本；没引用就不显示。
   function fixedInFor(receiptId, history) {
     const id = String(receiptId || '');
-    if (!id) return '';
+    // 只认收件机发的编号（末尾 8 位十六进制）。WeLink 送达记的是占位「WeLink」、复制送达记的是一句说明：
+    // 拿它们去更新日志里找，凡提到 WeLink 的版本都会命中，刚发的反馈就被标成「已修于 v5.6.104」（2026-11-28 黄区真机）。
+    if (!/-[a-f0-9]{8}$/.test(id)) return '';
     const tail = /-([a-f0-9]{8})$/.exec(id)?.[1] || '';
     let hit = '';
     for (const e of history) {

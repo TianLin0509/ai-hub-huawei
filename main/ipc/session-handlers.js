@@ -408,6 +408,8 @@ function registerSessionIpc(ipcMain, deps) {
       native.emit('action-error', '原生 Claude 会话请通过 Hub 输入框发送消息或停止按钮操作');
       return;
     }
+    // 用户亲手在终端里按的键：启动选模型据此判断「有人接手了」，不再替他重开菜单、删字。
+    try { require('../../core/codeagent-model-picker').noteUserInput(sessionId, data); } catch { /* 只影响选模型重试 */ }
     sessionManager.writeToSession(sessionId, data);
   });
 
@@ -1466,6 +1468,11 @@ function registerSessionIpc(ipcMain, deps) {
       sendToRenderer('session-notice', { sessionId, level: 'warning',
         message: require('../../core/model-name-match').substitutionNote(modelId, result.substituted.to) });
     }
+    // 用户在后台终端里自己选了别的模型（Hub 的菜单被他接手）：这个会话就用他选的，不再改回，也不当成失败。
+    if (result.ok && result.userPicked) {
+      picked = result.userPicked;
+      sendToRenderer('session-notice', { sessionId, level: 'info', message: `你在终端里选了 ${result.userPicked}，这个会话就用它。` });
+    }
     const automatic = isAutomaticCodeAgent(session);
     // 自动选模型的熔断计数（core/codeagent-auto-pick.js）：自动会话启动时菜单没选成记一次失败；这个号上任何一次选成就清零。
     const breakerAccount = session.codeagentPoolAccount || 'personal';
@@ -1563,7 +1570,7 @@ function registerSessionIpc(ipcMain, deps) {
       // 真选上了模型：熔断期留下的暂缓线路、启动回退标记都作废（core/codeagent-assistant-route.js matchesSession）。
       const updated = sessionManager.updateSessionMeta(sessionId, { ...(result.provider ? { codeagentModelProvider: result.provider } : {}), currentModel: { id: picked, displayName: codeagentModels.modelLabel(picked) }, codeagentRequestedModel: undefined, codeagentRouteDeferred: undefined, codeagentPickFallback: undefined, codeagentModelPick: false, codeagentPickMiss: null,
         // 用户明确选中过的模型：CLI 自己退出、Hub 原地重拉时据此再选一次（core/session-manager.js 的 relaunch）。
-        codeagentUserModel: picked, fixedModel: picked, ...(reason === 'switch' ? { modelConfirmationRequired: false, modelUnavailableReason: '' } : {}), modelPinSource: reason === 'switch' ? 'user' : session.modelPinSource || 'created',
+        codeagentUserModel: picked, fixedModel: picked, ...(reason === 'switch' ? { modelConfirmationRequired: false, modelUnavailableReason: '' } : {}), modelPinSource: reason === 'switch' || result.userPicked ? 'user' : session.modelPinSource || 'created',
         ...(reason === 'switch' ? { modelChange: null } : {}) });
       if (updated) sendToRenderer('session-updated', { session: updated });
       if (session.codeagentPickMiss) sendToRenderer('avatar:changed', {});

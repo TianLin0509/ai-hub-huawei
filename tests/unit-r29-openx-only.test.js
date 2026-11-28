@@ -468,3 +468,12 @@ test('环境体检：只走内源且内源读不到时，说内源和公司网�
   assert.match(item.cause || '', /公司网络/);
   assert.doesNotMatch(JSON.stringify({ d: item.detail, c: item.cause, s: item.steps }), /所有下载源|放行/);
 });
+
+// 2026-11-28 黄区压测：HIS 安全网关回 HTML 确认页时，提示被拦并给出下一步，不说「连不上 / 查网络」。
+test('内源请求被 HIS 确认页拦下：说清被拦和下一步，不误报网络断开', () => {
+  const openxSource = require('../core/app-update/openx-source');
+  const text = openxSource.userReason(`Unexpected token '<', "<!DOCTYPE "... is not valid JSON`);
+  assert.match(text, /安全网关（HIS）拦下/); assert.match(text, /确认访问后.*重试/); assert.doesNotMatch(text, /连不上|VPN/);
+  assert.match(openxSource.userReason('完整包大小无法确认或被网络确认页挡住'), /HIS/);
+  assert.match(openxSource.userReason('fetch failed（ECONNRESET）'), /^连不上公司内源/);
+});

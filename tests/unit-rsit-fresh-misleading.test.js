@@ -120,7 +120,8 @@ function pendingGroupModal(available = {}) {
     window.seedMembers = () => { _groupSlots = [{ kind: 'codex', model: 'custom' }]; };
     window.membersReady = () => _membersReady;
   })();`);
-  vm.runInNewContext(source, { window, document, testModal: modal,
+  // 群聊模型清单后台补读用 setTimeout；本组用例不测补读，给一个不触发的计时器。
+  vm.runInNewContext(source, { window, document, testModal: modal, setTimeout: () => 0, clearTimeout: () => {},
     require: id => id === 'electron' ? { ipcRenderer }
       : id === './codeagent-preference' ? preference.exports : localRequire(id),
   });

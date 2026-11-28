@@ -24,6 +24,17 @@ const READY_TIMEOUT_MS = 120000;
 const sha256File = file => new Promise((resolve, reject) => {
   const h = createHash('sha256'); fs.createReadStream(file).on('error', reject).on('data', b => h.update(b)).on('end', () => resolve(h.digest('hex')));
 });
+// 试运行刚结束时，杀毒或索引会扫描刚解出的 exe / dll，整个目录改名报 EPERM（2026-11-28 黄区全新用户首装实测：下载、解压、试运行都过了，
+// 最后一步改名失败，289 MB 白下）。进程级改名重试只等约 0.3 秒不够，这里对目录改名多等一会儿，最多约 20 秒。
+async function renameDirPatiently(from, to, { tries = 40, delayMs = 500, rename = (a, b) => fs.renameSync(a, b), wait = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
+  for (let i = 0; ; i += 1) {
+    try { return rename(from, to); }
+    catch (error) {
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(error?.code) || i >= tries - 1) throw error;
+      await wait(delayMs);
+    }
+  }
+}
 const minutes = sec => sec == null ? '' : sec < 90 ? `约 ${Math.max(1, Math.round(sec))} 秒` : `约 ${Math.round(sec / 60)} 分钟`;
 
 class MeetingAsr {
@@ -98,7 +109,7 @@ class MeetingAsr {
     }
     this.phase = '试运行本地识别'; this.progress = { ...(this.progress || {}), phase: 'probing', message: '正在试运行本地识别…' }; require('../app-update/progress-bus').emit('meeting-asr', this.progress);
     await this.smoke(stage);
-    fs.rmSync(this.home, { recursive: true, force: true }); fs.renameSync(stage, this.home);
+    fs.rmSync(this.home, { recursive: true, force: true }); await renameDirPatiently(stage, this.home, this.renameOptions);
     fs.writeFileSync(this.readyFile, JSON.stringify({ version: this.pack.version, engine: this.pack.engine, at: Date.now() }));
     fs.rmSync(path.join(this.root, 'download'), { recursive: true, force: true });
   }
@@ -167,4 +178,4 @@ class MeetingAsr {
   }
   close() { this.closed = true; this.abort?.abort(); if (this.child) this.child.kill(); this.child = null; if (this.installChild) this.installChild.kill(); }
 }
-module.exports = { MeetingAsr, SOURCES, PACK };
+module.exports = { MeetingAsr, SOURCES, PACK, renameDirPatiently };

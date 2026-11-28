@@ -75,13 +75,13 @@ test('装配时才报 OCR_COMPONENT_TOO_OLD：转成同一个更新态，CodeAge
   const job = await service.start(image); assert.equal(job.state, 'waiting_agent');
   component.assist = false;   // 模拟：开工时 Doctor 报够用，装配时识别组件却是旧的
   const diff = { fix: { 1: 'SRS 信道估计' } };
-  await assert.rejects(service.build({ jobId: job.id, vision: 'seen', ops: diff }), /Hub 会用这次的差异自动续跑装配，不需要重试/);
+  await assert.rejects(service.build({ jobId: job.id, round: service.job(job.id).round, vision: 'seen', ops: diff }), /Hub 会用这次的差异自动续跑装配，不需要重试/);
   const waiting = service.snapshot(job.id);
   assert.equal(waiting.state, 'needs_component'); assert.equal(waiting.resume, 'build'); assert.match(waiting.step, /一键更新后自动接着装配/); assert.equal(waiting.component, null, '不显示过时的版本号');
   assert.ok(waiting.seed, '保留已有初稿');
   // CodeAgent 再调 build 也只得到同一句说明，不会再走 Doctor。
   const before = ops(calls).length;
-  await assert.rejects(service.build({ jobId: job.id, vision: 'seen', ops: diff }), /不需要重试/); assert.equal(ops(calls).length, before);
+  await assert.rejects(service.build({ jobId: job.id, round: service.job(job.id).round, vision: 'seen', ops: diff }), /不需要重试/); assert.equal(ops(calls).length, before);
   await assert.rejects(service.retry(job.id), /本轮转字结束/, '页面的「让 CodeAgent 重试」在这个状态下不可用');
   service.updateComponent(job.id); await settle(service.jobs.get(job.id));
   const done = service.snapshot(job.id);

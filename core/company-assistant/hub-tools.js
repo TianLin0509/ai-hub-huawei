@@ -141,7 +141,8 @@ class HubTools {
     if (name === 'ppt_make') return this.a.ppt.make.submit(args, ctx);
     if (name === 'ppt_make_skeleton') return this.a.ppt.make.skeletonGuide(args.id);
     if (name === 'ppt_imgtext') {
-      if (args.op === 'build') return this.a.ppt.imgtext.build(args);
+      // 模型只能以 agent 身份提交，必须带本轮 round；source 由这里定，不接受参数里的 source。
+      if (args.op === 'build') return this.a.ppt.imgtext.build({ jobId: args.jobId, ops: args.ops, vision: args.vision, round: args.round, source: 'agent' });
       if (args.op === 'status') return { ok: true, job: this.a.ppt.imgtext.snapshot(args.jobId) };
       throw new Error('转字工具只支持 status 与 build');
     }

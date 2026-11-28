@@ -25,6 +25,8 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
   // 保存没成功（2026-11-21）：原因写在出事的那个开关旁边（替换那一行的说明小字），下次存好就清掉。
   const { saveFailureText } = require('./pet-save-status');
   let saveError = '', saveAnchor = '';
+  // 用户每次亲手换形象就加一；下载完成时只有这个数没变、形象也还是开始下载时那个，才自动换上（下载晚到不覆盖之后的选择）。
+  let roleChoices = 0;
 
   container.classList.add('pet-tab');
   container.innerHTML = '<p class="pet-tab-note">正在读取桌宠设置…</p>';
@@ -209,13 +211,23 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       if (kind === 'credit') { const r = ((packs && packs.roles) || (data && data.roles) || []).find(x => x.id === btn.dataset.id); if (r && r.credit) showCredit(r); return; }
       if (kind === 'check') { void ipcRenderer.invoke('hub-pet:roles-check').then(r => { if (r) packs = r; render(); }); return; }
       if (kind === 'download') {
-        void ipcRenderer.invoke('hub-pet:role-download', btn.dataset.id).then(async r => { if (r) packs = r; data = (await ipcRenderer.invoke('hub-pet:get-settings')) || data; render(); });
+        // 下好就直接换上（2026-11-28 真机：下完还得再点一次卡片，用户以为没换成功）；没下成照旧只刷新。
+        const id = btn.dataset.id, choiceAtStart = roleChoices, roleAtStart = data?.settings?.role;
+        void ipcRenderer.invoke('hub-pet:role-download', id).then(async r => {
+          if (r) packs = r;
+          data = (await ipcRenderer.invoke('hub-pet:get-settings')) || data;
+          // 只认这一次下载成功（不凭旧的 installed：更新失败时旧版仍算已装）。
+          const done = r?.state?.phase === 'installed' && r.state.installedId === id;
+          const untouched = roleChoices === choiceAtStart && data?.settings?.role === roleAtStart;
+          if (done && untouched && data?.settings?.role !== id) return void save({ role: id });
+          render();
+        });
         return;
       }
       return;
     }
     const cardEl = event.target.closest('.pet-tab-card.installed:not(.current)');
-    if (cardEl) void save({ role: cardEl.dataset.role });
+    if (cardEl) { roleChoices++; void save({ role: cardEl.dataset.role }); }
   });
   // 形象来源与授权（2026-11-18 r49b）：拟人形象来自社区作者，按协议要署名、写明改动、附协议全文。
   // 全部按纯文本放进去（textContent），网址只显示、可选中复制，不在 Hub 里打开。
@@ -266,7 +278,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     if (event.target.closest('button')) return;   // 卡片里的按钮（下载、形象来源）回车走按钮自己的点击，不顺带换形象
     const cardEl = event.target.closest('.pet-tab-card.installed:not(.current)');
-    if (cardEl) { event.preventDefault(); void save({ role: cardEl.dataset.role }); }
+    if (cardEl) { event.preventDefault(); roleChoices++; void save({ role: cardEl.dataset.role }); }
   });
   container.addEventListener('input', event => {
     const range = event.target.closest('input[data-pet-size]');

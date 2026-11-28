@@ -67,8 +67,10 @@ function pickerLabelFor(modelId, env = process.env) {
 }
 
 // 菜单里两行模型之间的分组标题（Built-in、Custom 等）；用量行、表头、边框不算。
+// 菜单滚动时右侧有一列滚动条（█ 等块字符，见 SCROLLBAR_ROW），标题行末尾也带着它：先去掉再认标题，
+// 否则「Built-in      █」被当成带两格空白的说明行，内置组没了分组、按供应商选模型时回车前的分组核对必然失败（2026-11-28 黄区真机）。
 function groupHeading(line) {
-  const heading = String(line || '').replace(/^[\s│┃]+|[\s│┃]+$/g, '').trim();
+  const heading = String(line || '').replace(/[\s▀-▟]+$/, '').replace(/^[\s│┃]+|[\s│┃]+$/g, '').trim();
   return heading && !/^(?:[╭╰─━┌└]|⌕|Credit|月度|忙时|闲时|Hour\b|Min\b|Day\b|Token\b|模型名称|Model\s+name)/i.test(heading)
     && !/\s{2,}|[●%]/.test(heading) && heading.length <= 100 ? heading : '';
 }
@@ -450,6 +452,61 @@ async function waitFor(screen, predicate, timeoutMs) {
   return { value: null, lines };
 }
 
+// 等画面安静：连续 quietMs 内读屏内容不变（最多等 maxMs）。CodeAgent 刚启动时 MCP 逐个连上、标题栏计数一直在变，
+// 这段时间里 CLI 整屏重画会把刚打开的模型菜单关掉（2026-11-28 黄区真机）。
+async function waitQuiet(screen, { quietMs = 3000, maxMs = 20000 } = {}) {
+  const deadline = Date.now() + maxMs;
+  let previous = null, since = Date.now();
+  while (Date.now() < deadline) {
+    const text = (await screen.lines()).join('\n');
+    if (text !== previous) { previous = text; since = Date.now(); }
+    else if (Date.now() - since >= quietMs) return true;
+    await sleep(250);
+  }
+  return false;
+}
+
+// 用户在终端里的按键（主进程 terminal-input 登记；焦点报告、光标位置回复这类终端自动应答不算）。
+const userInputAt = new Map();
+// 终端自动发回的应答与鼠标上报（焦点进出、光标位置、设备属性、OSC 颜色、SGR/X10 鼠标）：不是人在打字。
+// 带 ? 或 > 前缀的 CSI 只会是终端应答（如 DECRPM「ESC[?2026;0$y」、设备属性），按键不会发；OSC、DCS 应答同理。
+const AUTO_REPLY = /\x1b\[[IO]|\x1b\[(?!1;[2-8]R)\d+;\d+R|\x1b\[[?>][\d;$]*[a-zA-Z]|\x1b\[[\d;]*\$y|\x1b\[[\d;]*c|\x1b\[<[\d;]+[Mm]|\x1b\[M[\s\S]{3}|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[\s\S]*?\x1b\\/g;
+function noteUserInput(sid, data, at = Date.now()) {
+  if (typeof data !== 'string' || !data) return;
+  const rest = data.replace(AUTO_REPLY, '');
+  if (!rest) return;
+  // 排查用样本：控制序列按转义写出，可见文字只记长度（不记内容）。
+  const sample = rest.charCodeAt(0) === 27 ? JSON.stringify(rest.slice(0, 16)) : `text(${rest.length})`;
+  userInputAt.set(String(sid), { at, sample });
+}
+function userInputSince(sid, since) { const hit = userInputAt.get(String(sid)); return hit && hit.at >= since ? hit : null; }
+// 会话身份：同一个会话号、同一个终端进程。重拉或关闭后不再替它按键。
+// 会话执行快照：原地重拉不换会话对象、只把 modelSubmissionEpoch 加一并往同一个 pty 写重拉命令，
+// 所以要同时核对 epoch、pty、关闭/休眠状态（session-model-pin 的同一口径），再加会话对象与终端进程号兜底。
+function sessionExecution(manager, sid) {
+  const pins = require('./session-model-pin');
+  const entry = manager.sessions?.get?.(sid);
+  const info = manager.getSession?.(sid);
+  if (!entry && !info) return null;
+  return { snapshot: pins.captureSessionExecution(manager, sid), pty: entry?.pty, pid: info?.pid ?? info?.ptyPid ?? '' };
+}
+function sameExecution(start, manager, sid) {
+  if (!start) return false;
+  const pins = require('./session-model-pin');
+  if (!pins.sameSessionExecution(start.snapshot, manager, sid)) return false;
+  const entry = manager.sessions?.get?.(sid), info = manager.getSession?.(sid);
+  return entry?.pty === start.pty && (info?.pid ?? info?.ptyPid ?? '') === start.pid;
+}
+// 输入框下方状态行里的当前模型（「… (Cycle shift+tab) | DeepSeek-V4.1-Flash-1017      @  ✲  ↵  ▷ │」）。
+function statusModel(lines) {
+  const list = Array.isArray(lines) ? lines : String(lines || '').split(/\r?\n/);
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const m = /\|\s*([^|@│]+?)\s{2,}@\s/.exec(list[i]);
+    if (m) return m[1].trim();
+  }
+  return '';
+}
+
 async function waitForInput(screen, timeoutMs = 3000) {
   let previous = '', readySince = 0;
   return waitFor(screen, lines => {
@@ -781,8 +838,9 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     route.provider = row.group || ''; route.providerLabel = '';
     return same[0];
   };
-  async function openMenu() {
-    let sent = await sendToPty(sid, '/model', kind, { codeagentModelPick: true });
+  // retry：Hub 自己重开菜单时保留输入行里的草稿（有字就不发、不清），不能像首次那样先清输入行。
+  async function openMenu({ retry = false } = {}) {
+    let sent = await sendToPty(sid, '/model', kind, { codeagentModelPick: true, ...(retry ? { preserveInput: true } : {}) });
     // 补全只接受了命令文本时可补回车，菜单已开则绝不补。
     if (sent && sent.sendStatus === 'stuck') {
       const lines = await screen.lines();
@@ -799,7 +857,7 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     }
     return null;
   }
-  async function choose() {
+  async function choose({ retry = false } = {}) {
     // 已有菜单时不要再把 /model 填进搜索框。明确的模型切换可接手当前菜单。
     let existingMenu = modelDialogVisible(await screen.lines());
     if (!existingMenu && readyFirstMs > 0) {
@@ -815,7 +873,7 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     }
     attempted = true;
     if (!existingMenu) {
-      const failed = await openMenu();
+      const failed = await openMenu({ retry });
       if (failed) return failed;
     }
     const opened = await waitFor(screen, lines => parsePicker(lines, { allowNoCursor: true }), screenTimeoutMs);
@@ -943,6 +1001,7 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     }
     // 可见目标仍沿用行号差逐键移动；跨屏搜索/翻页已逐步确认。选择键之前再读一次光标，
     // 镜像尚未更新时不猜选中项，之后仍以 CLI 自己的回显核对结果。
+    if (tookOver()) return { ...(await fail('你已在终端里操作，Hub 不再替你选模型')), tookOver: true };
     const steps = target - picker.cursor;
     for (let i = 0; i < Math.abs(steps); i += 1) {
       manager.writeToSession(sid, steps > 0 ? '\x1b[B' : '\x1b[A');
@@ -950,12 +1009,25 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     }
     await sleep(300);
     const selectedLabel = picker.rows[target].label;
-    const checked = parsePicker(await screen.lines());
-    if (!checked || !exactLabel(checked.rows[checked.cursor]?.label, selectedLabel)
-        || !groupMatches(checked.rows[checked.cursor], route.provider, route.providerLabel)) return fail(`未确认光标已移到 ${selectedLabel} 的目标分组，没有选择模型`);
+    // 回车前核对光标：终端重绘（切会话、改窗口大小会让 CLI 整屏重画）的一瞬间读到的可能是半帧，稍等再读几次；
+    // 菜单整个不见了（CLI 重画时把菜单关了）标 menuVanished，由下面重开一次菜单再选（2026-11-28 黄区真机：新会话就绪后马上发第一句，
+    // 启动选模型 2/2 失败在这里，第一句被「原模型不可用」挡回）。
+    const onTarget = p => !!p && exactLabel(p.rows[p.cursor]?.label, selectedLabel) && groupMatches(p.rows[p.cursor], route.provider, route.providerLabel);
+    let checked = parsePicker(await screen.lines());
+    for (let i = 0; i < 5 && !onTarget(checked); i += 1) { await sleep(300); checked = parsePicker(await screen.lines()); }
+    if (!onTarget(checked)) {
+      const vanished = !checked && !modelDialogVisible(await screen.lines());
+      // 排查用：核对时光标所在行、各行分组与目标，写进模型日志（不含会话正文）。
+      log({ event: 'pick-check-failed', target: `${selectedLabel}@${picker.rows[target].group || '-'}#${target}/${picker.cursor}`,
+        route: route.provider || '-', vanished, cursor: checked ? `${checked.rows[checked.cursor]?.label || '-'}@${checked.rows[checked.cursor]?.group || '-'}#${checked.cursor}` : '(无菜单)',
+        rows: checked ? checked.rows.map(row => `${row.label}@${row.group || '-'}`).join('+') : '' });
+      return { ...(await fail(`未确认光标已移到 ${selectedLabel} 的目标分组，没有选择模型`)), ...(vanished ? { menuVanished: true } : {}) };
+    }
     const restoreSnapshot = dir && !keepDefault ? snapshotDefaults(dir) : [];
     const mode = picker.sessionKey && !keepDefault ? 'session' : 'default';
     const mark = typeof manager.getSessionOutputMark === 'function' ? manager.getSessionOutputMark(sid) : null;
+    // 重试那一轮在按回车前再核一次会话执行：中途被原地重拉（epoch 变了）或关掉，就不往新一轮里按键。
+    if (tookOver()) return { ...(await fail('你已在终端里操作，或会话在选模型期间被重拉/关闭，没有选择模型')), tookOver: true };
     manager.writeToSession(sid, mode === 'session' ? picker.sessionKey : '\r');
     const echo = mark == null ? null : await waitForEcho(manager, sid, mark, screenTimeoutMs, screen);
     // CLI 可能在回显之后才把默认模型写进配置：看住一段时间，被改就改回，最后核对（按 s 只改本会话时也看，防菜单行为变化）。
@@ -980,15 +1052,57 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
       ...(keepDefault ? { keptDefault: true } : {}), ...(first ? { picked: label } : {}),
       ...(substituted ? { substituted: { ...substituted, id: idForLabel(substituted.to) } } : {}) };
   }
+  // 「菜单不见了」不等于「没人选」：用户可能在后台终端里自己选了别的模型、正在打字，或者会话已经重拉/关掉。
+  // 只有同一个会话、开始以来没有用户按键、输入行是空的，才由 Hub 重开菜单再选；否则一个键都不再写。
+  const startedAt = Date.now();
+  const execution = sessionExecution(manager, sid);
+  const modelBefore = statusModel(await screen.lines().catch(() => []));
+  let handsOff = false;
+  // 每次实际按键前、以及收尾时都核一次：用户在终端里按过键，或会话被重拉/关闭，Hub 就不再写任何键。
+  const tookOver = () => !!userInputSince(sid, startedAt) || (!!execution && !sameExecution(execution, manager, sid));
+  async function retryDecision() {
+    if (!sameExecution(execution, manager, sid)) return { retry: false, why: 'session-changed' };
+    const lines = await screen.lines().catch(() => []);
+    const input = userInputSince(sid, startedAt);
+    if (input) {
+      const now = statusModel(lines);
+      if (now && modelBefore && squash(now) !== squash(modelBefore)) return { retry: false, why: 'user-picked', userPicked: now, input: input.sample };
+      return { retry: false, why: 'user-active', input: input.sample };
+    }
+    if (!promptInputReady(lines)) return { retry: false, why: 'input-not-empty' };
+    return { retry: true };
+  }
+  // 用户接手或会话换了：不再写任何键；用户在终端里选了别的模型就沿用他的选择。
+  async function handOff(stage, extra = {}) {
+    const decision = await retryDecision();
+    log({ event: 'pick-retry-skipped', reason: stage, ...extra, ...(decision.why ? { why: decision.why } : {}), ...(decision.userPicked ? { userPicked: decision.userPicked } : {}), ...(decision.input ? { input: decision.input } : {}) });
+    handsOff = true;
+    attempted = false; // 不再替用户关菜单、删字
+    if (decision.userPicked) result = { ok: true, mode: 'user', confirmed: true, userPicked: decision.userPicked, inputReady: true };
+  }
   try {
     result = await choose();
+    if (result?.tookOver) await handOff('took-over');
+    // 菜单在回车前被 CLI 重画关掉了：没按回车、什么也没选。等画面安静下来（启动时 MCP 还在连）再重开菜单选，最多再试两次。
+    for (let retry = 1; !handsOff && retry <= 2 && !result?.ok && result?.menuVanished; retry += 1) {
+      const quiet = await waitQuiet(screen);
+      const decision = await retryDecision();
+      if (!decision.retry) { await handOff('menu-vanished', { retry, quiet }); break; }
+      log({ event: 'pick-retry', reason: 'menu-vanished', retry, quiet });
+      result = await choose({ retry: true });
+      if (result?.tookOver) { await handOff('took-over', { retry }); break; }
+    }
   } catch (error) {
     if (error?.notSent) attempted = false;
     result = await fail(error && error.message ? error.message : String(error));
   } finally {
     // 发过 /model 即须负责退出，不能等“解析成功”后才承担清理责任。
     try {
-      if (!result?.loginRequired) {
+      if (handsOff || tookOver()) {
+        // 用户在终端里接手了（或会话已换）：不写任何键，只如实报告输入框现状。
+        const lines = await screen.lines().catch(() => []);
+        result = { ...result, inputReady: promptInputReady(lines), inputUsable: promptInputReady(lines) };
+      } else if (!result?.loginRequired) {
         const closed = attempted ? await closeModelMenu({ readLines: () => screen.lines(), write: key => manager.writeToSession(sid, key) }) : null;
         let ready = closed?.ok ? { value: true } : await waitForInput(screen);
         // Esc 只关掉补全列表时，「/model」还留在输入行里（2026-10-20 发布闸门实录）：没有菜单时退格清掉，再确认一次。
@@ -1170,6 +1284,8 @@ async function beforePrompt(manager, sid, { allowUnready = false, isChoiceDialog
 function resetFailure(sid) { failures.delete(sid); }
 
 module.exports = {
+  noteUserInput,
+  statusModel,
   FIRST_MENU_MODEL,
   isFirstMenuModel,
   parsePicker,
