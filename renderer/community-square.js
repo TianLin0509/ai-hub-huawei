@@ -13,6 +13,8 @@ const REPLY = ['好呀！', '嘿嘿，你也是', '走，一起逛逛', '谢谢�
 // 把排行榜各榜的条目按昵称合成一张公开名片（纯函数，单测用）。
 function people(board, crew, { limit = 15 } = {}) {
   const boards = (board && board.boards) || {};
+  // 连不上收件机时客户端给的是带 stale 的旧榜单：名片照用，在线与否不再可信，一律按「不知道」处理。
+  const fresh = !(board && board.stale);
   const byNick = new Map();
   const put = (e, k, v) => {
     if (!e || !e.nick) return;
@@ -21,6 +23,8 @@ function people(board, crew, { limit = 15 } = {}) {
     if (e.me) p.me = true;
     if (k) p[k] = v;
     if (e.lv != null && p.lv == null) p.lv = Number(e.lv) || 0;
+    // on 是收件机按「75 分钟内有心跳」给的；旧收件机不带这个字段，就不画在线点（不冒充在线）。
+    if (fresh && typeof e.on === 'boolean') p.on = p.on || e.on;
     byNick.set(e.nick, p);
   };
   for (const e of boards.level || []) { put(e, 'wxp', e.wxp); }
@@ -33,8 +37,19 @@ function people(board, crew, { limit = 15 } = {}) {
   const meNick = (board && board.me && board.me.nick) || (crew && crew.nick) || '我';
   out.push({ id: 'me', me: true, nick: meNick, pet: (crew && crew.pet) || (board && board.me && board.me.pet) || '01-cat', status: me ? me.status : 'on', sig: me ? me.sig : '',
     lv: board && board.me && board.me.values ? board.me.values.lv : null });
-  for (const p of byNick.values()) if (!p.me && out.length < limit) out.push({ ...p, status: 'on' });
+  // 在线的排前面，其余保持榜单顺序；超过上限的只是不画，人数照实统计。
+  const rest = [...byNick.values()].filter(p => !p.me);
+  rest.sort((a, b) => (b.on === true) - (a.on === true));
+  for (const p of rest.slice(0, Math.max(0, limit - 1))) out.push({ ...p, status: p.on === true ? 'on' : p.on === false ? 'off' : 'unknown' });
   return out;
+}
+
+// 顶部人数：画出来的桌宠数、其中在线数（含自己），以及榜上一共多少人。known＝收件机给了在线标记。
+function headcount(list, board) {
+  const boards = (board && board.boards) || {}, nicks = new Set();
+  for (const k of Object.keys(boards)) for (const e of boards[k] || []) if (e && e.nick && !e.me) nicks.add(e.nick);
+  const known = list.some(p => !p.me && typeof p.on === 'boolean');
+  return { shown: list.length, online: list.filter(p => p.me || p.on === true).length, listed: nicks.size + 1, known };
 }
 
 function facts(p) {
@@ -50,7 +65,7 @@ function createSquare({ host, ipcRenderer, getBoard, getCrew, toast, goCrew, rel
   const root = document.createElement('div');
   root.className = 'cmy-sub'; root.dataset.sub = 'square';
   root.innerHTML = `<div class="cc-scene" data-slot="scene"><img class="bg" src="assets/community/plaza.svg" alt="">
-      <div class="cc-hud" style="left:14px;top:12px"><span class="cc-chip"><i class="cc-dot on"></i><span>广场里</span> <b data-slot="count">0</b> <span>只桌宠</span></span></div>
+      <div class="cc-hud" style="left:14px;top:12px"><span class="cc-chip" data-slot="count"></span></div>
       <div class="cc-hud" style="right:14px;top:12px"><span class="cc-chip">🔒 <span>广场里，桌宠只带「公开名片」出门</span></span></div>
       <div class="cc-hud" style="left:14px;bottom:12px"><span class="cc-chip"><span>串门是本机小动画，不发出任何消息</span></span></div></div>
     <aside class="cc-panel" data-slot="panel"></aside>`;
@@ -62,11 +77,12 @@ function createSquare({ host, ipcRenderer, getBoard, getCrew, toast, goCrew, rel
 
   const inFountain = (x, y) => ((x - 50) / 12) ** 2 + ((y - 58) / 9) ** 2 < 1;
   function rawSpot() { let x, y, n = 0; do { x = 8 + Math.random() * 84; y = 50 + Math.random() * 42; n++; } while (n < 50 && (inFountain(x, y) || ((x - 50) / 45) ** 2 + ((y - 69) / 30) ** 2 > 1)); return { x, y }; }
-  function spot(self) {
+  // taken：本轮刚分好、还没进场景的位置。离线桌宠原地打盹不再走动，初始位置必须一次散开。
+  function spot(self, taken = []) {
     let best = null, bd = -1;
     for (let k = 0; k < 16; k++) {
       const c = rawSpot();
-      const d = Math.min(99, ...[...scene.pets.values()].filter(o => o !== self).map(o => Math.hypot((o.x - c.x) * 1.5, o.y - c.y)));
+      const d = Math.min(99, ...[...[...scene.pets.values()].filter(o => o !== self), ...taken].map(o => Math.hypot((o.x - c.x) * 1.5, o.y - c.y)));
       if (d > bd) { bd = d; best = c; }
     }
     return best;
@@ -75,19 +91,24 @@ function createSquare({ host, ipcRenderer, getBoard, getCrew, toast, goCrew, rel
   function refresh() {
     list = people(getBoard(), getCrew());
     const prev = new Set(scene.pets.keys());
-    scene.sync(list.map(p => { const o = scene.get(p.id); const s = o ? { x: o.x, y: o.y } : spot(); return { ...label(p), x: s.x, y: s.y }; }));
+    const taken = [];
+    scene.sync(list.map(p => { const o = scene.get(p.id); const s = o ? { x: o.x, y: o.y } : spot(null, taken); if (!o) taken.push(s); return { ...label(p), x: s.x, y: s.y }; }));
     for (const p of list) if (!prev.has(p.id)) { const o = scene.get(p.id); if (o) o.el.style.transition = ''; }
-    root.querySelector('[data-slot="count"]').textContent = String(list.length);
+    const hc = headcount(list, getBoard());
+    root.querySelector('[data-slot="count"]').innerHTML = hc.known
+      ? `<span>广场里</span> <b data-i18n-skip>${hc.shown}</b> <span>只桌宠</span> · <i class="cc-dot on"></i><b data-i18n-skip>${hc.online}</b> <span>只在线</span>`
+      : `<span>广场里</span> <b data-i18n-skip>${hc.shown}</b> <span>只桌宠</span>`;
+    root.querySelector('[data-slot="count"]').title = `榜上共 ${hc.listed} 人，广场最多画 15 只，在线的优先；在线＝75 分钟内打开过 AI HUB`;
     paint();
   }
   function log(html, pet) { feed.push({ at: Date.now(), html, pet }); if (feed.length > 30) feed.shift(); if (!sel) paint(); }
   const clock = at => { const d = new Date(at); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   function tick() {
-    const free = [...scene.pets.values()].filter(o => !o.busy && !(o.data && o.data.me) && o.id !== sel && o.data.status !== 'away');
+    const free = [...scene.pets.values()].filter(o => !o.busy && !(o.data && o.data.me) && o.id !== sel && o.data.status !== 'away' && o.data.status !== 'off');
     if (!free.length) return;
     const a = free[Math.floor(Math.random() * free.length)];
     if (Math.random() < 0.45) {
-      const others = [...scene.pets.values()].filter(o => o !== a && !o.busy && !(o.data && o.data.me));
+      const others = [...scene.pets.values()].filter(o => o !== a && !o.busy && !(o.data && o.data.me) && o.data.status !== 'off');
       if (!others.length) return;
       const b = others[Math.floor(Math.random() * others.length)];
       const pb = list.find(p => p.id === b.id) || {};
@@ -112,7 +133,7 @@ function createSquare({ host, ipcRenderer, getBoard, getCrew, toast, goCrew, rel
           <div class="cc-sig"><input class="cc-in" data-sq="sig" maxlength="80" placeholder="写一句签名，广场和团队都看得到" value="${esc((crew.me && crew.me.sig) || '')}" style="width:100%;border:0;background:none;height:22px;padding:0"></div>
           <div class="cc-sec">在广场里，我的桌宠知道 / 不知道</div>${KNOW}
           <p class="cc-note">不是叮嘱它「别说」，而是根本不交给它。想聊工作、互相分享文件，就把人拉进「我的团队」。</p>
-          <div class="cc-sec">广场动态（本机）</div>
+          <div class="cc-sec">广场小剧场（本机随机演示，不是真实聊天）</div>
           <div class="cc-feed">${feed.slice(-8).reverse().map(e => `<div class="ev"><span class="t">${clock(e.at)}</span><img src="${esc(petSrc(e.pet).src)}" alt=""><div>${e.html}</div></div>`).join('') || '<p class="cc-note">桌宠们刚到广场，马上就热闹起来…</p>'}</div>
         </div>`;
       const st = panel.querySelector('[data-sq="status"]');
@@ -144,7 +165,7 @@ function createSquare({ host, ipcRenderer, getBoard, getCrew, toast, goCrew, rel
     const me = scene.get('me'), o = scene.get(sel); if (!o) return;
     const p = list.find(x => x.id === sel) || {};
     if (act === 'hi') {
-      if (!scene.visit(me, o, { lines: [`${p.nick}你好呀！`, o.data.status === 'away' ? '(打盹中) zZ…' : '你好！很高兴见到你～'] })) toast('桌宠正在忙，等一下');
+      if (!scene.visit(me, o, { lines: [`${p.nick}你好呀！`, o.data.status === 'away' || o.data.status === 'off' ? '(打盹中) zZ…' : '你好！很高兴见到你～'] })) toast('桌宠正在忙，等一下');
       else log(`<span>我的桌宠跟</span> <b data-i18n-skip>${esc(p.nick)}</b> <span>打了招呼</span>`, me.pet);
     } else if (act === 'probe') {
       if (!scene.visit(me, o, { lines: ['听说你家主人最近在搞个大项目？WeLink 里怎么说的？', { text: '🔒 广场里我只带了名片，不知道这些哦～想聊工作可以邀请进团队', cls: 'lock' }] })) toast('桌宠正在忙，等一下');
@@ -159,4 +180,4 @@ function createSquare({ host, ipcRenderer, getBoard, getCrew, toast, goCrew, rel
   };
 }
 
-module.exports = { createSquare, people, facts };
+module.exports = { createSquare, people, facts, headcount };

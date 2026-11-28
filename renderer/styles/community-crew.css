@@ -43,7 +43,7 @@
 .cc-pet.sel .ring{animation:cc-ring 1.6s ease-out infinite}
 @keyframes cc-ring{0%{transform:scale(.7);opacity:.9}100%{transform:scale(1.25);opacity:0}}
 .cc-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:0}
-.cc-dot.on{background:var(--hw-green)}.cc-dot.busy{background:var(--hw-amber)}.cc-dot.away,.cc-dot.off{background:var(--hw-text-3)}
+.cc-dot.on{background:var(--hw-green)}.cc-dot.busy{background:var(--hw-amber)}.cc-dot.away,.cc-dot.off{background:var(--hw-text-3)}.cc-dot.unknown{display:none}
 .cc-bub{position:absolute;bottom:100%;left:50%;transform:translateX(-50%) translateY(6px);margin-bottom:2px;background:var(--hw-surface);border:1px solid var(--hw-line-strong);border-radius:13px;padding:7px 11px;font-size:12.3px;line-height:1.5;width:max-content;max-width:220px;box-shadow:var(--hw-e2);opacity:0;transition:opacity .25s,transform .25s;pointer-events:none;z-index:5;color:var(--hw-text-1);white-space:pre-wrap}
 .cc-bub.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .cc-bub::after{content:"";position:absolute;left:50%;bottom:-6px;width:10px;height:10px;background:inherit;border-right:1px solid var(--hw-line-strong);border-bottom:1px solid var(--hw-line-strong);transform:translateX(-50%) rotate(45deg)}
