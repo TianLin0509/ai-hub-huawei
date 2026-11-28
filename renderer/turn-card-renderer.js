@@ -572,6 +572,9 @@ function renderTurnSpeed(turn) {
 function renderCardActions(turn, context = {}) {
   const user = turn.role === 'user', activity = turn.phase === 'activity';
   const copy = activity ? '' : '<button class="ta-btn" data-action="copy" title="复制" aria-label="复制这条消息">复制</button>'
+    // 2026-11-28：复制旁的下拉给「复制为图片」，把整张卡片按界面样式复制成图片。
+    + '<details class="card-actions-menu card-copy-menu"><summary class="card-actions-more card-copy-caret" title="更多复制方式" aria-label="更多复制方式">▾</summary>'
+    + '<div class="card-actions-popover card-copy-popover"><button class="ta-btn" data-action="copy-image" title="把这张卡片按界面样式复制成图片">复制为图片</button></div></details>'
     + '<button class="ta-btn ta-quote" data-action="quote" title="引用到输入框：发送时带上来源，让 AI 知道你说的是哪一段" aria-label="引用这条消息">引用</button>';
   const multi = '<button class="ta-btn ta-multi" data-action="multi-select">多选</button>';
   let fork = '';
@@ -1393,6 +1396,31 @@ function mountSessionTurnCard(sessionId, turn, opts = {}) {
 if (!options.root) win._mountSessionTurnCard = mountSessionTurnCard;
 
 
+// 长消息悬停按钮：只复制这段长消息（文字口径与卡片「复制」相同：用户看到的正文），或复制为图片。
+async function copyLongMessage(button) {
+  const frame = button.closest('.conversation-long-frame');
+  if (!frame || button.disabled) return;
+  const text = require('./visible-card-text').copyableCardText(frame.querySelector('.conversation-full-text'));
+  const original = button.textContent, originalTitle = button.title;
+  const reset = (label, title) => {
+    button.textContent = label; if (title) button.title = title;
+    setTimeout(() => { button.textContent = original; button.title = originalTitle; button.disabled = false; }, 1800);
+  };
+  button.disabled = true;
+  if (button.dataset.action === 'long-copy') {
+    try { await clipboardApi.writeText(text); reset('已复制'); }
+    catch (error) { reset('复制失败'); console.warn('[long-copy]', error); }
+    return;
+  }
+  button.textContent = '生成中…';
+  const imageCopy = require('./message-image-copy');
+  const result = await imageCopy.copyElementAsImage(frame, { doc, win, fallbackText: text,
+    copyText: value => clipboardApi.writeText(value) });
+  const shown = imageCopy.describeResult(result);
+  reset(shown.label, shown.notice || button.title);
+  if (shown.notice && typeof options.notify === 'function') options.notify(shown.notice, result.ok ? 'info' : 'error');
+}
+
 // click handler — code-copy + code-expand/collapse
 listen('click', (e) => {
   if (!options.root && e.target.closest('[data-split-secondary]')) return;
@@ -1405,6 +1433,12 @@ listen('click', (e) => {
       .map(card=>require('./visible-card-text').copyableCardText(card.querySelector('.turn-body'))).filter(Boolean).join('\n\n');
     Promise.resolve(clipboardApi.writeText(text)).then(()=>{responseCopy.textContent='已复制';})
       .catch(error=>{responseCopy.textContent='复制失败';console.warn('[conversation-response-copy]',error);});
+    return;
+  }
+  const longCopy = e.target.closest('[data-action="long-copy"],[data-action="long-copy-image"]');
+  if (longCopy) {
+    e.preventDefault();e.stopPropagation();
+    void copyLongMessage(longCopy);
     return;
   }
   const messageCopy = e.target.closest('[data-action="conversation-copy"]');

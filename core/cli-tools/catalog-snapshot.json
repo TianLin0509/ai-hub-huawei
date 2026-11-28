@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "publishedAt": "2026-11-26T17:38:38.743Z",
+  "publishedAt": "2026-11-28T04:20:15.845Z",
   "components": [
     {
       "id": "claude",
@@ -202,7 +202,35 @@
           "--version"
         ]
       }
+    },
+    {
+      "id": "hermes",
+      "name": "Hermes Agent（含 Python）",
+      "version": "0.19.0",
+      "kind": "tgz",
+      "license": "MIT（hermes-agent）；Python 运行时 PSF；依赖各自许可",
+      "preferOfficial": false,
+      "files": [
+        {
+          "name": "hermes-agent-0.19.0-py3.12-win-x64.tgz",
+          "bytes": 46178608,
+          "sha256": "b3fc3ccc61f53270fe5b89ca9478b7690121b1bdaad731420d35e2ebb114ff1c",
+          "url": "hermes/0.19.0/hermes-agent-0.19.0-py3.12-win-x64.tgz"
+        }
+      ],
+      "install": {
+        "bin": "python/python.exe",
+        "requires": [
+          "git"
+        ],
+        "versionArgs": [
+          "--version"
+        ],
+        "check": [
+          "python/Lib/site-packages/acp_adapter/__main__.py"
+        ]
+      }
     }
   ],
-  "signature": "2dd41204ab5788dce73b1ab03be08d503b3fbdd9b3d061b7ee4e75e5ad920a7717616f1dc9361d6aecf334028b21436ce7c0453db014419dd6cb8f7a465b060f"
+  "signature": "b99f7c870faaaec0461c3588f933ce618671198ca16a350620079488535eadb4ea6a670a3c62a8e06a38611eb4b528a5eaaba680b389a060a531641a1a689107"
 }

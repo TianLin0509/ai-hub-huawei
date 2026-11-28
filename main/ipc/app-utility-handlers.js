@@ -148,6 +148,40 @@ function registerAppUtilityIpc(ipcMain, deps) {
       return { ok: true, size: copied.getSize() };
     } catch (error) { return { ok: false, error: error.message }; }
   });
+  // 「复制为图片」（2026-11-28）：渲染进程按界面上的实际像素逐屏截取消息区域，拼好后交这里写剪贴板。
+  // 一次「复制为图片」从第一屏截图起就占住剪贴板顺序号：截图、拼图期间用户又复制了别的，就让位新内容。
+  let imageIsCurrent = null;
+  ipcMain.handle('message-image:capture', async (event, rect) => {
+    try {
+      const r = rect || {};
+      if (r.first) imageIsCurrent = writeClipboardText.beginExternalWrite();
+      if (![r.x, r.y, r.width, r.height].every(Number.isFinite) || r.width <= 0 || r.height <= 0) throw new Error('截图区域无效');
+      const x = Math.max(0, Math.floor(r.x)), y = Math.max(0, Math.floor(r.y));
+      const box = { x, y, width: Math.ceil(r.x + r.width) - x, height: Math.ceil(r.y + r.height) - y };
+      const image = await event.sender.capturePage(box);
+      if (!image || image.isEmpty()) throw new Error('窗口当前不可见，未能截到画面');
+      if (imageIsCurrent && !imageIsCurrent()) return { ok: false, reason: 'superseded', error: '期间有新的复制操作，已保留新内容' };
+      return { ok: true, png: image.toPNG() };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+  ipcMain.handle('message-image:write', async (_event, png) => {
+    const isCurrent = imageIsCurrent || writeClipboardText.beginExternalWrite();
+    imageIsCurrent = null;
+    try {
+      const nativeImage = deps.nativeImage || require('electron').nativeImage;
+      const image = nativeImage.createFromBuffer(Buffer.from(png || []));
+      if (image.isEmpty()) throw new Error('生成的图片为空');
+      const expected = image.toPNG();
+      const written = await writeClipboardText.retry(() => {
+        deps.clipboard.writeImage(image);
+        const copied = deps.clipboard.readImage();
+        return !copied.isEmpty() && copied.toPNG().equals(expected);
+      }, isCurrent);
+      if (written.reason === 'superseded') return { ok: false, reason: 'superseded', error: '期间有新的复制操作，已保留新内容' };
+      if (!written.ok) throw new Error('图片写入剪贴板失败');
+      return { ok: true, size: image.getSize() };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
   registerPreviewImmersiveIpc(ipcMain, deps);
   const sampleSystemResourceUsage = createSystemResourceSampler(deps.os || systemOs);
   const systemTelemetry = deps.systemTelemetry || createSystemTelemetry();

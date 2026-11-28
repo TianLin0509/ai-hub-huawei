@@ -39,9 +39,10 @@
     "sources": []
   },
   "releaseNotes": [
-    "新增 Hermes Agent 会话：启动中心选 Hermes，一键安装（内源组件，自带 Python），走公司模型线路或自有接口，对话在卡片里进行，支持关掉后恢复同一会话"
+    "长消息悬停出「复制 / 复制为图片」，可只复制这一段长消息",
+    "卡片「复制」旁新增下拉「复制为图片」，按界面样式把整张卡片复制成图片（超长内容自动拼接）"
   ],
-  "version": "5.6.146",
+  "version": "5.6.147",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

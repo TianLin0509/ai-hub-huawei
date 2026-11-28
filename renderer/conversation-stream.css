@@ -238,3 +238,32 @@
 
 /* 英文界面（session 组 2026-11-20）：等待提示的括号由全角「（」换成半角「(」后前面要空一格；中文不受影响 */
 html[lang="en"] .wait-progress-hint { margin-left: .3em; }
+/* 长消息悬停复制与「复制为图片」（2026-11-28） */
+.conversation-long-frame { position: relative; }
+.conversation-long-actions {
+  position: absolute; top: 8px; right: 10px; display: flex; gap: 2px; z-index: 2;
+  background: var(--bg-card, #1b232c); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 1px;
+  opacity: 0; pointer-events: none; transition: opacity .12s;
+}
+.conversation-long-frame:hover > .conversation-long-actions,
+.conversation-long-actions:focus-within { opacity: 1; pointer-events: auto; }
+.conversation-long-copy { border: 0; background: transparent; color: var(--fg-muted, #98a4b5); font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-family: inherit; }
+.conversation-long-copy:hover { background: rgba(var(--rgb-overlay), .08); color: var(--fg-default, #c3cddc); }
+.conversation-long-copy:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.multi-select-active .conversation-long-actions { display: none; }
+.card-copy-menu .card-copy-caret { padding: 2px 4px; margin-left: -4px; }
+.card-copy-menu .card-copy-popover { width: 128px; }
+/* 截图期间隐藏悬停按钮与浮层，图片里只留消息本身 */
+.hub-image-capture-target .turn-actions,
+.hub-image-capture-target .conversation-long-actions,
+.hub-image-capture-target .conversation-progress-actions,
+.hub-image-capture-target .conversation-progress-expand,
+.hub-image-capture-target .conversation-message-copy,
+.hub-image-capture-target .code-copy,
+body.hub-image-capturing #card-jump-latest,
+body.hub-image-capturing .split-jump-latest,
+body.hub-image-capturing .mr-gc-scroll-bottom,
+body.hub-image-capturing .preview-notice { visibility: hidden !important; }
+.hub-image-capture-target * { transition: none !important; animation: none !important; }
+.hub-image-capture-target .conversation-long-message > summary { display: none; }
+.hub-image-capture-target .conversation-long-message > .conversation-full-text { margin-top: 0; }

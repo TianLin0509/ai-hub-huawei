@@ -22,7 +22,10 @@ function renderMessageBody(text, {isUser=false, plainProgress=false, foldLong=tr
   // Keep block Markdown outside summary so tables/lists/code remain valid HTML.
   return `<div class="conversation-long-frame"><details class="conversation-long-message"${collapseLong?'':' open'}><summary><span>长消息 · ${raw.length.toLocaleString('zh-CN')} 字 · </span><span class="conversation-expand-label">展开全文</span><span class="conversation-collapse-label">收起全文</span></summary>`
     + `<div class="conversation-full-text">${body}</div></details>`
-    + `<div class="conversation-long-preview" data-copy-exclude>${body}</div></div>`;
+    + `<div class="conversation-long-preview" data-copy-exclude>${body}</div>`
+    // 2026-11-28：悬停长消息出「复制 / 复制为图片」，只复制这一块。
+    + '<div class="conversation-long-actions" data-copy-exclude><button type="button" class="conversation-long-copy" data-action="long-copy" title="只复制这段长消息的文字">复制</button>'
+    + '<button type="button" class="conversation-long-copy" data-action="long-copy-image" title="把这段长消息按界面样式复制成图片">复制为图片</button></div></div>';
 }
 function gapLabel(ms) {
   const minutes = Math.floor(ms / 60000);

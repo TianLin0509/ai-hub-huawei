@@ -2985,6 +2985,7 @@ const turnCardRenderer = createTurnCardRenderer({
   onTurnPresentation: syncTurnPresentationToSession,
   updateStreamingIndicator: (sessionId) => _updateStreamingIndicator(sessionId),
   renderMathInElement: window.renderMathInElement,
+  notify: (message, level) => showPreviewNotice(message, level),
 });
 require('./card-prefix-fork').configureStatus((channel, payload) => ipcRenderer.invoke(channel, payload),
   () => turnCardRenderer.refreshCardActions());
@@ -4111,6 +4112,25 @@ document.addEventListener('click', async (e) => {
       btn.disabled = false;
       setTimeout(() => { btn.textContent = orig; }, 1500);
     }
+    return;
+  }
+
+  if (action === 'copy-image') {
+    // 复制为图片（2026-11-28）：整张卡片按界面真实像素截成图；失败退回复制文字。
+    if (btn.disabled) return;
+    // 下拉菜单点完就收起，进度与结果写在卡片头看得见的「复制」按钮上。
+    const shownBtn = card.querySelector('.turn-actions .ta-btn[data-action="copy"]') || btn;
+    const orig = shownBtn.textContent;
+    btn.disabled = true;
+    shownBtn.textContent = '生成中…';
+    const imageCopy = require('./message-image-copy');
+    const result = await imageCopy.copyElementAsImage(card, { doc: document, win: window,
+      fallbackText: copyableCardText(card.querySelector('.turn-body')),
+      copyText: text => clipboardController.copyText(text, { source: 'card', silent: true }) });
+    const shown = imageCopy.describeResult(result);
+    shownBtn.textContent = shown.label;
+    if (shown.notice) showPreviewNotice(shown.notice, result.ok ? 'info' : 'error');
+    setTimeout(() => { shownBtn.textContent = orig; btn.disabled = false; }, 1500);
     return;
   }
 
@@ -11250,6 +11270,7 @@ function createSecondarySessionView(sessionId, panel, options = {}) {
       openAttachment: (target, opts) => openPathInHub(target, opts),
       readToolResult: reference => ipcRenderer.invoke(reference.source === 'claude-stream-json' ? 'claude-native:tool-result' : reference.source === 'claude-transcript-file' ? 'claude-transcript:tool-result' : reference.source === 'codex-app-server' ? 'codex-native:tool-result' : 'acp:tool-result', reference),
       renderMathInElement: window.renderMathInElement,
+      notify: (message, level) => showPreviewNotice(message, level),
     },
     services: {
       ipc: ipcRenderer,
