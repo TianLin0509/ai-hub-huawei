@@ -13,6 +13,7 @@
 // 普通新建默认沿用 CLI 模型；明确选模型时第一条消息等待结果。失败保护正文，不把未知菜单当作已关闭。
 const fs = require('node:fs');
 const path = require('node:path');
+const { withoutAnnouncement } = require('./group-chat-cli-ready-detector');
 
 const CURSOR_GLYPHS = '❯›▶>';
 // 行首可能残留没擦干净的旧字符（「erva4. Sonnet」，2026-10-14 替身实录），所以「编号.」不要求在行首；
@@ -458,7 +459,8 @@ async function waitQuiet(screen, { quietMs = 3000, maxMs = 20000 } = {}) {
   const deadline = Date.now() + maxMs;
   let previous = null, since = Date.now();
   while (Date.now() < deadline) {
-    const text = (await screen.lines()).join('\n');
+    // 顶部公告横幅在滚动重画，不算画面在变（A-08）。
+    const text = withoutAnnouncement(await screen.lines()).join('\n');
     if (text !== previous) { previous = text; since = Date.now(); }
     else if (Date.now() - since >= quietMs) return true;
     await sleep(250);
@@ -511,7 +513,7 @@ async function waitForInput(screen, timeoutMs = 3000) {
   let previous = '', readySince = 0;
   return waitFor(screen, lines => {
     if (!promptInputReady(lines)) { readySince = 0; return false; }
-    const text = lines.join('\n');
+    const text = withoutAnnouncement(lines).join('\n');
     if (!readySince || text !== previous) { previous = text; readySince = Date.now(); }
     // Esc 后输入框必须真实恢复且稳定；不能只睡一拍就把正文当 Alt+键送进去。
     return Date.now() - readySince >= 320;
@@ -1284,6 +1286,8 @@ async function beforePrompt(manager, sid, { allowUnready = false, isChoiceDialog
 function resetFailure(sid) { failures.delete(sid); }
 
 module.exports = {
+  waitQuiet,
+  waitForInput,
   noteUserInput,
   statusModel,
   FIRST_MENU_MODEL,

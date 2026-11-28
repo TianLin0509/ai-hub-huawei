@@ -45,6 +45,7 @@ async function main() {
     entryPath: path.resolve(__dirname, '..'), cwd: path.dirname(exe), extraEnv: {
       CLAUDE_HUB_COMPANY_ASSISTANT: '1', CLAUDE_HUB_WELINK_CLI: welinkStub, CLAUDE_HUB_HOME_DIR: path.join(root, 'home'),
       AI_HUB_QUIET_UPDATE: '0', AI_HUB_UPDATE_STARTUP_DELAY_MS: String(24 * 3600 * 1000), DEEPSEEK_API_KEY: '' } });
+  await require('./helpers/isolation-guard').guardIsolatedHub(hub, root);   // 5 秒内发现用到生产数据目录就只结束这个主进程并报错
   for (let i = 0; !c; i++) { try { c = await connectFirstPage(hub, target => /index\.html/.test(target.url), { waitMainMs: 15000 }); } catch (error) { if (i >= 8) throw error; await sleep(3000); } }
   await c.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
 

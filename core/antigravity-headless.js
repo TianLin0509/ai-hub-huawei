@@ -1,6 +1,6 @@
 'use strict';
 const {spawn}=require('child_process');
-const {resolveCommand,cliEnv}=require('./antigravity-config');
+const {resolveCommand,cliEnv,backgroundEnv}=require('./antigravity-config');
 function runPrompt(prompt,{env,profileId,timeoutMs=90000,spawnImpl=spawn}={}){
   const profiles=require('./antigravity-subscription-profiles');
   const base=env || process.env;
@@ -13,6 +13,8 @@ function runPrompt(prompt,{env,profileId,timeoutMs=90000,spawnImpl=spawn}={}){
     env=cliEnv(profiles.applyProfileEnv(base,profile));
   }
   return new Promise((resolve,reject)=>{
+    // Unattended (dream consolidation): never open a Google sign-in tab, never start the updater.
+    try{env=backgroundEnv(env);}catch(error){return reject(Error('Antigravity 后台调用无法准备免弹窗环境：'+error.message));}
     const child=spawnImpl(resolveCommand(env),['--input-format','stream-json','--output-format','stream-json'],{env,windowsHide:true,stdio:['pipe','pipe','pipe']});
     let done=false,buffer='',stderr='',result=null;
     const finish=(error,value)=>{if(done)return;done=true;clearTimeout(timer);if(error)reject(error);else resolve(value);};

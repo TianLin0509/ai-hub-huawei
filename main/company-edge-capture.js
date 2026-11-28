@@ -61,17 +61,20 @@ async function runInEdge({ url, readyUrl, script, accept = null, signal = null, 
   const started = Date.now();
   const result = { ok: false, via: 'edge', value: null, needsLogin: false, error: '', finalHost: '', netError: '', tookMs: 0, loginCopy: null };
   if (!findEdge(env)) { result.error = '本机没有找到 Edge'; return result; }
-  let edge = null, ws = null, deadline = started + timeoutMs;
+  let edge = null, ws = null, deadline = started + timeoutMs, onAbort = null;
   try {
+    if (signal?.aborted) throw new Error('已取消');
     // 起 Edge 最多等 45 秒（默认 20 秒）：公司真机上全新资料第一次冷启动，调试端口 36 秒才出来（2026-11-24 探针）。
     edge = await launchHeadlessEdge({ startWaitMs: START_WAIT_MS, purpose: tag === 'hub-w3' ? '门户待办取数' : '内网页面取数', tag, env, logger, signal, maxLifeMs: timeoutMs + 60000, prepare: tmp => { result.loginCopy = copyLogin(tmp, env); } });
     running.add(edge);
     deadline = Date.now() + timeoutMs; // 排队等名额的时间不算进取数期限（审查 #4）
     let page = null;
     for (let i = 0; i < 20 && !page; i += 1) {
+      if (signal?.aborted) throw new Error('已取消');
       try { page = (await getJson(`http://127.0.0.1:${edge.port}/json/list`)).find((t) => t.type === 'page'); } catch { /* 还没起来 */ }
       if (!page) await delay(300);
     }
+    if (signal?.aborted) throw new Error('已取消');
     if (!page) throw new Error('无头 Edge 没有启动');
     ws = new WebSocket(page.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => {
@@ -83,17 +86,29 @@ async function runInEdge({ url, readyUrl, script, accept = null, signal = null, 
     // 每个请求最多等到总期限；连接断开时，所有在等的请求立刻以 closed 收尾。
     let closed = false;
     const send = (method, params = {}) => {
-      if (closed) return Promise.resolve({ closed: true });
+      if (closed || signal?.aborted) return Promise.resolve({ closed: true });
       id += 1; const n = id;
       const p = new Promise((resolve) => { pending.set(n, resolve); try { ws.send(JSON.stringify({ id: n, method, params })); } catch { pending.delete(n); resolve({ closed: true }); } });
       return Promise.race([p, delay(Math.max(1000, deadline - Date.now())).then(() => { pending.delete(n); return { timeout: true }; })]);
     };
     ws.onclose = () => { closed = true; for (const r of pending.values()) r({ closed: true }); pending.clear(); };
+    onAbort = () => {
+      closed = true;
+      for (const r of pending.values()) r({ closed: true });
+      pending.clear();
+      try { ws?.close(); } catch { /* 已关 */ }
+      try { edge?.closeSync(); } catch { /* 已关 */ }
+    };
+    if (signal) {
+      if (signal.aborted) { onAbort(); throw new Error('已取消'); }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
       if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); }
     };
     await send('Page.enable');
+    if (signal?.aborted) throw new Error('已取消');
     const nav = await send('Page.navigate', { url });
     result.netError = netCode(nav?.result?.errorText);
     // accept(value) 返回假表示页面还没准备好（比如单点登录还没跳完），过一会儿在同一页再执行一次。
@@ -103,6 +118,8 @@ async function runInEdge({ url, readyUrl, script, accept = null, signal = null, 
       if (signal?.aborted) { lastError = '已取消'; break; }
       if (closed || edge.closed) { lastError = '和无头 Edge 的连接断了'; break; }
       st = (await send('Runtime.evaluate', { expression: PAGE_STATE, returnByValue: true }))?.result?.result?.value || {};
+      if (signal?.aborted) { lastError = '已取消'; break; }
+      if (closed || edge.closed) { lastError = '和无头 Edge 的连接断了'; break; }
       result.finalHost = st.host || result.finalHost;
       if (st.errorPage) {
         if (st.netError) result.netError = st.netError;
@@ -122,10 +139,12 @@ async function runInEdge({ url, readyUrl, script, accept = null, signal = null, 
       }
       loginSince = 0;
       if (!onTarget || st.ready !== 'complete') continue;
+      if (signal?.aborted || closed || edge.closed) { lastError = signal?.aborted ? '已取消' : '和无头 Edge 的连接断了'; break; }
       const r = await Promise.race([
         send('Runtime.evaluate', { expression: script, returnByValue: true, awaitPromise: true }),
         delay(Math.max(5000, deadline - Date.now())).then(() => ({ timeout: true })),
       ]);
+      if (signal?.aborted) { lastError = '已取消'; break; }
       if (r.timeout) { lastError = '页面里的查询超时'; break; }
       if (r.closed) { lastError = '和无头 Edge 的连接断了'; break; }
       if (r.result?.exceptionDetails) { lastError = '页面里的查询出错：' + String(r.result.exceptionDetails.exception?.description || r.result.exceptionDetails.text || '').slice(0, 160); continue; }
@@ -141,6 +160,7 @@ async function runInEdge({ url, readyUrl, script, accept = null, signal = null, 
   } catch (e) {
     result.error = /^spawn /.test(String(e.message)) ? `无头 Edge 启动失败（${e.code || e.message}）` : e.message;
   } finally {
+    if (signal && onAbort) signal.removeEventListener('abort', onAbort);
     try { ws?.close(); } catch { /* 已关 */ }
     if (edge) { running.delete(edge); await edge.close(); }
   }

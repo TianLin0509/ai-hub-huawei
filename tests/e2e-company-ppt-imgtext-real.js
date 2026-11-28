@@ -19,7 +19,7 @@ const stressDir = arg('--stress');
 const waitMin = Number(arg('--wait-min') || 8);
 const fullAgent = Number(arg('--full-agent') ?? 1);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ppt-imgtext-real-'));
-const out = arg('--out') || path.join(root, 'out'), cac = path.join(root, 'cac'), dataDir = path.join(root, 'data');
+const out = arg('--out') || path.join(root, 'out'), cac = path.join(root, 'cac-home', '.cac'), dataDir = path.join(root, 'data');
 const j = JSON.stringify, sleep = ms => new Promise(r => setTimeout(r, ms));
 const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.on('error', reject); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
 const report = { startedAt: new Date().toISOString(), root, exe, runs: [], stress: [], checks: [], screenshots: [], timeline: [] };
@@ -50,6 +50,8 @@ const convState = () => c.eval(`(() => {const m=document.querySelector('[data-pp
 
 function prepare() {
   for (const d of [out, cac, dataDir]) fs.mkdirSync(d, { recursive: true });
+  // 根下 ~/.cac.json 放到副本目录旁：CodeAgent 新版模型清单只在那里，Hub 对 *.cac 目录读同级 .cac.json（m1 ff9f96b30；只复制目录会误判「默认模型下线」）。
+  try { fs.copyFileSync(path.join(os.homedir(), '.cac.json'), path.join(path.dirname(cac), '.cac.json')); } catch { /* 没有就算了 */ }
   const real = path.join(os.homedir(), '.cac');
   if (fs.existsSync(real)) for (const name of fs.readdirSync(real)) {
     const src = path.join(real, name);
@@ -215,6 +217,7 @@ async function main() {
       CLAUDE_HUB_COMPANY_ASSISTANT: '1', CLAUDE_HUB_WELINK_CLI: welinkStub, AI_HUB_CODEAGENT_CONFIG_DIR: cac, CLAUDE_HUB_HOME_DIR: path.join(root, 'home'),
       // 不让隔离副本自己检查或静默换装新版本（真实内源仍可用于组件下载）。
       AI_HUB_QUIET_UPDATE: '0', AI_HUB_UPDATE_STARTUP_DELAY_MS: String(24 * 3600 * 1000), DEEPSEEK_API_KEY: '' } });
+  await require('./helpers/isolation-guard').guardIsolatedHub(hub, root);   // 5 秒内发现用到生产数据目录就只结束这个主进程并报错
   report.pid = hub.pid;
   for (let i = 0; !c; i++) {
     try { c = await connectFirstPage(hub, target => /index\.html/.test(target.url), { waitMainMs: 15000 }); }

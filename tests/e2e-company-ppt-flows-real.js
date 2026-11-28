@@ -10,9 +10,9 @@ const { connectFirstPage } = require('./helpers/cdp-client');
 delete process.env.ELECTRON_RUN_AS_NODE;
 const argv = process.argv.slice(2);
 const arg = name => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : null; };
-const exe = arg('--exe'), skipAi = argv.includes('--skip-ai'), aiOnly = argv.includes('--ai-only');
+const exe = arg('--exe'), skipAi = argv.includes('--skip-ai'), aiOnly = argv.includes('--ai-only'), makeOnly = argv.includes('--make-only');   // --make-only：只跑 F15 一句话三版
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ppt-flows-real-'));
-const out = arg('--out') || path.join(root, 'out'), cac = path.join(root, 'cac'), dataDir = path.join(root, 'data');
+const out = arg('--out') || path.join(root, 'out'), cac = path.join(root, 'cac-home', '.cac'), dataDir = path.join(root, 'data');
 const j = JSON.stringify, sleep = ms => new Promise(r => setTimeout(r, ms));
 const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.on('error', reject); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
 const report = { startedAt: new Date().toISOString(), root, checks: [], metrics: {}, screenshots: [], timeline: [] };
@@ -39,6 +39,8 @@ const scrollOverflow = sel => c.eval(`(() => { const e = document.querySelector(
 
 function prepare() {
   for (const d of [out, cac, dataDir]) fs.mkdirSync(d, { recursive: true });
+  // 根下 ~/.cac.json 放到副本目录旁：CodeAgent 新版模型清单只在那里，Hub 对 *.cac 目录读同级 .cac.json（m1 ff9f96b30；只复制目录会误判「默认模型下线」）。
+  try { fs.copyFileSync(path.join(os.homedir(), '.cac.json'), path.join(path.dirname(cac), '.cac.json')); } catch { /* 没有就算了 */ }
   const real = path.join(os.homedir(), '.cac');
   if (fs.existsSync(real)) for (const name of fs.readdirSync(real)) {
     const src = path.join(real, name);
@@ -80,6 +82,7 @@ async function main() {
     entryPath: path.resolve(__dirname, '..'), cwd: path.dirname(exe), extraEnv: {
       CLAUDE_HUB_COMPANY_ASSISTANT: '1', CLAUDE_HUB_WELINK_CLI: welinkStub, AI_HUB_CODEAGENT_CONFIG_DIR: cac, CLAUDE_HUB_HOME_DIR: path.join(root, 'home'),
       AI_HUB_QUIET_UPDATE: '0', AI_HUB_UPDATE_STARTUP_DELAY_MS: String(24 * 3600 * 1000), DEEPSEEK_API_KEY: '' } });
+  await require('./helpers/isolation-guard').guardIsolatedHub(hub, root);   // 5 秒内发现用到生产数据目录就只结束这个主进程并报错
   for (let i = 0; !c; i++) { try { c = await connectFirstPage(hub, target => /index\.html/.test(target.url), { waitMainMs: 15000 }); } catch (error) { if (i >= 8) throw error; await sleep(3000); } }
   await c.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
 
@@ -102,7 +105,7 @@ async function main() {
   log('Doctor', report.doctorStatus);
 
   // ---- F13 找页 ----
-  if (!aiOnly) {
+  if (!aiOnly && !makeOnly) {
   const kws = [['SRS 测量 PMI 精度', 'mixed-cn-en'], ['AI for RRM 调度增益', 'ai-rrm'], ['MU-MIMO 配对', 'mumimo'], ['zqxjv乱码不存在的词9x7', 'no-result']];
   for (const [q, l] of kws) await keyword(q, l);
   const k = report.metrics.keyword;
@@ -115,7 +118,7 @@ async function main() {
   await keyword('「」<>&;%$#@!'.repeat(3) + 'x'.repeat(300), 'special-long');
   check('F13 特殊字符+超长输入不报错', !/错误|异常|Error/i.test(report.metrics.keyword.at(-1).notice), report.metrics.keyword.at(-1));
   }
-  if (!skipAi) {
+  if (!skipAi && !makeOnly) {
     // 用关键词已确认在库里有命中的主题（「SRS 测量 PMI 精度」30 页、「AI for RRM 调度增益」6 页）
     const aiQueries = (arg('--ai-queries') || '介绍 SRS 测量和 PMI 精度的那页|AI for RRM 调度增益的结果页').split('|');
     report.metrics.aiSearch = [];
@@ -145,6 +148,7 @@ async function main() {
   }
 
   if (aiOnly) return;
+  if (!makeOnly) {
   // ---- F14 素材 / 团队素材包 ----
   await click('[data-ppt-tab="materials"]');
   await waitFor(`!!document.querySelector('[data-pptm="refresh"], [data-pptm="team-pack"]')`, 30000);
@@ -173,6 +177,8 @@ async function main() {
   await shot('f14-map').catch(() => {});
   check('F14 库地图打开有内容或给出建图入口', report.metrics.map.nodes > 0 || report.metrics.map.groups > 0 || report.metrics.map.build, report.metrics.map);
 
+  }
+
   // ---- F15 做页：一句话三版 ----
   if (!skipAi) {
     await click('[data-ppt-tab="make"]');
@@ -198,7 +204,22 @@ async function main() {
     }
     await shot('f15-end').catch(() => {});
     const files = (() => { try { const d = path.join(dataDir, 'company-assistant'); const found = []; const walk = p => { for (const e of fs.readdirSync(p, { withFileTypes: true })) { const f = path.join(p, e.name); if (e.isDirectory()) walk(f); else if (/\.pptx$/i.test(e.name)) found.push({ f: path.relative(dataDir, f), kb: Math.round(fs.statSync(f).size / 1024) }); } }; walk(d); return found; } catch (e) { return [String(e)]; } })();
-    report.metrics.make = { firstSeconds: first, allSeconds: all, notes: notes.slice(0, 25), pptx: files.slice(0, 10) };
+    // 逐版核对（2026-11-28 负责人 P1：5 个文件里 3 个几乎相同，查是不是同一版重交）：按方案按钮的 jobId 取每版最后交付的文件、
+    // 提交次数与骨架；每次提交（含按自查提醒修改）都会新写一个文件，所以「文件数」不等于「版数」，比较的是各版最终文件。
+    const ids = await c.eval(`[...document.querySelectorAll('[data-pptk="variant"]')].map(b => b.dataset.id)`).catch(() => []);
+    const versions = [];
+    for (const id of ids) {
+      const r = await c.eval(`require('electron').ipcRenderer.invoke('company-assistant:ppt-make-status', { jobId: ${JSON.stringify(id)} }).catch(e => ({ error: String(e) }))`).catch(e => ({ error: String(e) }));
+      const j = r && r.job || {};
+      versions.push({ variant: j.variant, skeleton: j.skeleton, skeletonId: j.skeletonId, state: j.state, rev: j.rev, submits: j.submits, file: j.path ? path.basename(j.path) : '', title: j.spec && String(j.spec.title || '').slice(0, 60), specText: j.spec ? JSON.stringify(j.spec) : '', error: r && r.error });
+    }
+    const sim = (a, b) => { const g = t => { const m = new Map(); for (let i = 0; i < t.length - 1; i++) { const k = t.slice(i, i + 2); m.set(k, (m.get(k) || 0) + 1); } return m; }; const A = g(a), B = g(b); let x = 0, n = 0; for (const [k, v] of A) { x += Math.min(v, B.get(k) || 0); n += v; } for (const v of B.values()) n += v; return n ? Math.round(200 * x / n) / 100 : 0; };
+    const pairs = [];
+    for (let i = 0; i < versions.length; i++) for (let k = i + 1; k < versions.length; k++) pairs.push([versions[i].variant, versions[k].variant, sim(versions[i].specText, versions[k].specText)]);
+    const distinctFiles = new Set(versions.map(v => v.file).filter(Boolean)).size, distinctSkel = new Set(versions.map(v => v.skeletonId).filter(Boolean)).size;
+    for (const v of versions) delete v.specText;
+    report.metrics.make = { firstSeconds: first, allSeconds: all, notes: notes.slice(0, 25), pptx: files.slice(0, 10), versions, versionSimilarity: pairs };
+    check('F15 三版是三个不同的方案：各自的最终文件不同、骨架不同、页面说明两两相似度 < 0.9', versions.length >= 3 && distinctFiles === versions.length && distinctSkel === versions.length && pairs.every(x => x[2] < 0.9), { versions, pairs });
     check('F15 一句话 15 分钟内出第一版', first != null, { first });
     check('F15 三版都出来', all != null, { all, notes: notes.slice(-3) });
     check('F15 生成了可编辑 PPTX 文件', files.some(x => typeof x === 'object'), files.slice(0, 5));

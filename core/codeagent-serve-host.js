@@ -105,32 +105,37 @@ class ServeHost extends EventEmitter {
   }
   // 故障恢复时用：只结束自己这个进程树，按记录的 pid 和端口找，不按命令行匹配。
   async restart() {
-    const proc = this.proc, port = this.port;
+    const proc = this.proc, port = this.port, token = this.token;
     this.proc = null;
     await this._endJob(this.jobKey, JOB_END_WAIT_MS);
     if (proc) { await serve.killTree(proc.pid); const owner = await serve.portOwner(port); if (owner) await serve.killTree(owner); }
+    if (proc && token) await serve.killByToken(token).catch(() => []);
     return this.ensure();
   }
   async stop() {
     this.stopped = true;
     clearTimeout(this.idleTimer);
     hosts.delete(hostKey(this.configDir));
-    const proc = this.proc, port = this.port;
+    const proc = this.proc, port = this.port, token = this.token;
     this.proc = null;
     await this._endJob(this.jobKey, JOB_END_WAIT_MS);
     if (!proc) return;
     await serve.killTree(proc.pid);
     const owner = await serve.portOwner(port);
     if (owner) await serve.killTree(owner);
+    // 外层 cmd 已断开时进程树和端口都可能落空：再按本次启动的随机 token 精确补一刀，不碰别的实例的 serve。
+    if (token) await serve.killByToken(token).catch(() => []);
   }
   stopSync() {
     this.stopped = true;
     clearTimeout(this.idleTimer);
-    const proc = this.proc, port = this.port;
+    const proc = this.proc, port = this.port, token = this.token;
     this.proc = null;
     // 盒子尽力结束（异步，Hub 退出时内核关句柄同样会结束），同步结束照旧兜底。
     void this._endJob();
     if (proc) serve.killServeSync(proc.pid, port);
+    // 退出路径不能等：后台按 token 再查一次，进程树和端口都没找到时由它收尾。
+    if (proc && token) serve.killByTokenInBackground(token);
   }
 }
 

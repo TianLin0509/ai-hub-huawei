@@ -24,12 +24,17 @@ const STATE_TEXT = {
   offline: '暂时连不上统计服务，下个小时自动再试',
   disabled: '已关闭社区统计',
   paused: '社区统计暂停中',
+  // 2026-11-28 绿区实测：收件机在黄区，绿区电脑任何端口都连不过去（ping、445、18767 全不通，机器名也解析不了）。
+  isolated: '本机所在网络连不到社区收件机（与办公网隔离，例如绿区），社区数据暂不可用，其他功能不受影响',
+  boardReadOnly: '已从公司内源同步全员榜单（只读，当前所在网络暂无法上报你的统计）',
 };
 
 function createCommunityClient({
   receiverAddress, buildPayload, isEnabled = () => true, host = null,
   fetchImpl = (...args) => globalThis.fetch(...args), now = Date.now, random = Math.random,
   timers = { setTimeout, clearTimeout }, timeoutMs = REQUEST_TIMEOUT_MS, logger = console,
+  // 可选：连不上收件机且判定为网络隔离（如绿区）时，从内源黑板读取只读榜单 ({ boardReleaseId }) => { ok, board }。
+  readBlackboard = null,
   // 最近一次榜单的落盘位置；不传就只记在内存里（单测）。
   cacheFile = '',
   // 每次心跳结果、开关变化后推一次 { state, online, at }（底栏与左栏绿点只靠它更新）。
@@ -50,7 +55,9 @@ function createCommunityClient({
     diskLoaded = true;
     try {
       const raw = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-      if (!cached && raw && raw.board && raw.board.boards && Number(raw.at) > 0) cached = { at: Number(raw.at), board: raw.board };
+      if (!cached && raw && raw.board && raw.board.boards && Number(raw.at) > 0) {
+        cached = { at: Number(raw.at), board: raw.board, readOnly: raw.readOnly === true };
+      }
     } catch { /* 还没有缓存 */ }
   }
   function saveDisk() {
@@ -67,9 +74,15 @@ function createCommunityClient({
   };
   function setLast(state, note = '') { last = { state, note, at: now() }; summary(state); }
 
-  async function addressUrls() {
-    try { const a = receiverAddress ? await receiverAddress.resolve() : null; return a && Array.isArray(a.urls) ? a.urls : []; }
-    catch { return []; }
+  async function addressInfo() {
+    try {
+      const a = receiverAddress ? await receiverAddress.resolve() : null;
+      return {
+        urls: a && Array.isArray(a.urls) ? a.urls : [],
+        boardReleaseId: Number(a && a.boardReleaseId) || 0,
+        openxReachable: !!(a && a.openxReachable),
+      };
+    } catch { return { urls: [], boardReleaseId: 0, openxReachable: false }; }
   }
 
   async function request(url, init) {
@@ -85,17 +98,47 @@ function createCommunityClient({
       if (!res.ok || !json || typeof json !== 'object') return { ok: false, error: `收件机返回 ${res.status}` };
       return { ok: true, json };
     } catch (e) {
-      return { ok: false, error: ctl.signal.aborted ? `${Math.round(timeoutMs / 1000)} 秒内没有回复` : `连不上（${(e.cause && e.cause.code) || e.message}）` };
+      // 对方回了拒绝/重置（ECONNREFUSED/ECONNRESET）＝网络是通的、只是收件机没开，不算隔离（审查 P3）。
+      const code = (e && e.cause && e.cause.code) || '';
+      return { ok: false, net: !ctl.signal.aborted && /^(ECONNREFUSED|ECONNRESET)$/.test(code) ? false : true, error: ctl.signal.aborted ? `${Math.round(timeoutMs / 1000)} 秒内没有回复` : `连不上（${(e.cause && e.cause.code) || e.message}）` };
     } finally { timers.clearTimeout(t); controllers.delete(ctl); }
   }
-
-  function remember(board) {
-    if (board && typeof board === 'object' && board.boards) { cached = { at: now(), board }; diskLoaded = true; saveDisk(); }
+  // 收件地址按顺序试（IP 在前、计算机名全称在后）：前一个连不上或报错就试下一个，免得收件机换了 IP 就整体失联。
+  // 全部都是网络层不通（超时、拒绝、解析不了）→ isolated：多半是所在网络与收件机隔离（绿区），界面如实说，不说「暂时」。
+  async function requestAny(urls, suffix, init, my) {
+    let r = { ok: false, error: '没有收件地址' }, allNet = true;
+    for (const base of urls) {
+      if (!stillWanted(my)) break;
+      r = await request(base + suffix, init);
+      if (r.ok) return r;
+      if (!r.net) allNet = false;
+    }
+    return allNet && urls.length > 0 ? { ...r, isolated: true } : r;
   }
-  // 远程刹车：心跳回复和榜单回复里的 pause:true 一样处理——本次运行内停发、清掉定时器（审查 P2）。
+
+  function remember(board, { at = now(), readOnly = false } = {}) {
+    if (board && typeof board === 'object' && board.boards) {
+      cached = { at: Number(at) > 0 ? Number(at) : now(), board, ...(readOnly ? { readOnly: true } : {}) };
+      diskLoaded = true; saveDisk();
+    }
+  }
+  async function tryBlackboard(my, boardReleaseId) {
+    if (typeof readBlackboard !== 'function' || !stillWanted(my)) return null;
+    const ctl = new AbortController();
+    controllers.add(ctl);
+    try {
+      const r = await readBlackboard({ boardReleaseId, signal: ctl.signal });
+      if (!r || !r.ok || !r.board || ctl.signal.aborted || !stillWanted(my)) return null;
+      remember(r.board, { at: Number(r.board.at) > 0 ? Number(r.board.at) : now(), readOnly: true });
+      return r.board;
+    } catch { return null; }
+    finally { controllers.delete(ctl); }
+  }
+  // 远程刹车：心跳回复和榜单回复里的 pause:true 一样处理——本次运行内停发、清掉定时器并中止在途请求（审查 P1/P2）。
   function brake() {
     paused = true; epoch++;
     if (timer) { timers.clearTimeout(timer); timer = null; }
+    for (const ctl of controllers) ctl.abort();
     setLast('paused');
   }
   const stillWanted = my => my === epoch && isEnabled() && !paused;
@@ -115,15 +158,35 @@ function createCommunityClient({
       setLast('ok');
       return { sent: true, state: 'ok', local: true };
     }
-    const urls = await addressUrls();
+    const { urls, boardReleaseId, openxReachable } = await addressInfo();
     // 等地址期间用户关了开关或收到了刹车：不发。
     if (!stillWanted(my)) return { sent: false, state: isEnabled() ? 'paused' : 'disabled' };
-    if (!urls.length) { setLast('outside'); return { sent: false, state: 'outside' }; }
-    const r = await request(urls[0] + PULSE_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    if (my !== epoch) return { sent: false, state: isEnabled() ? 'paused' : 'disabled' };
-    if (!r.ok) { setLast('offline', r.error); return { sent: false, state: 'offline' }; }
+    if (!urls.length) {
+      if (openxReachable) {
+        const bb = await tryBlackboard(my, boardReleaseId);
+        if (!stillWanted(my)) return { sent: false, state: isEnabled() ? 'paused' : 'disabled' };
+        if (bb) {
+          setLast('ok', STATE_TEXT.boardReadOnly);
+          return { sent: false, state: 'ok', isolated: true, boardReadOnly: true };
+        }
+      }
+      setLast('outside');
+      return { sent: false, state: 'outside' };
+    }
+    const r = await requestAny(urls, PULSE_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, my);
+    if (!stillWanted(my)) return { sent: false, state: isEnabled() ? 'paused' : 'disabled' };
+    if (!r.ok) {
+      const bb = r.isolated ? await tryBlackboard(my, boardReleaseId) : null;
+      if (!stillWanted(my)) return { sent: false, state: isEnabled() ? 'paused' : 'disabled' };
+      if (bb) {
+        setLast('ok', STATE_TEXT.boardReadOnly);
+        return { sent: false, state: 'ok', isolated: true, boardReadOnly: true };
+      }
+      setLast('offline', r.isolated ? STATE_TEXT.isolated : r.error);
+      return { sent: false, state: 'offline', ...(r.isolated ? { isolated: true } : {}) };
+    }
     if (r.json.pause === true) { brake(); return { sent: true, state: 'paused' }; }
-    remember(r.json.board);
+    remember(r.json.board, { readOnly: false });
     setLast('ok');
     return { sent: true, state: 'ok' };
   }
@@ -155,7 +218,12 @@ function createCommunityClient({
 
   const empty = state => ({ ok: true, state, note: STATE_TEXT[state] || '', at: 0, isHost: false, online: 0, activeNow: 0, today: 0, week: 0, total: 0,
     todayDelta: 0, weekDelta: 0, versions: [], boards: { level: [], wxp: [], wtok: [], streak: [], ach: [] }, me: null, minK: 5 });
-  const fromCache = extra => ({ ...cached.board, state: 'ok', isHost: false, at: cached.at, ...(now() - cached.at > STALE_MS ? { stale: true } : {}), ...extra });
+  const fromCache = extra => ({
+    ...cached.board, state: 'ok', isHost: false, at: cached.at,
+    ...(now() - cached.at > STALE_MS ? { stale: true } : {}),
+    ...(cached.readOnly ? { isolated: true, boardReadOnly: true, note: STATE_TEXT.boardReadOnly } : {}),
+    ...extra,
+  });
 
   // 社区页要数据。force=true 时忽略 10 分钟缓存（页面上的「刷新」）；cachedOnly=true 时只读内存或磁盘里的快照，绝不触网。
   async function getBoard({ force = false, cachedOnly = false, iid = '' } = {}) {
@@ -166,15 +234,33 @@ function createCommunityClient({
     if (cachedOnly) return cached ? fromCache() : empty('offline');
     if (!force && cached && now() - cached.at < BOARD_TTL_MS) return fromCache();
     const my = epoch;
-    const urls = await addressUrls();
+    const { urls, boardReleaseId, openxReachable } = await addressInfo();
     // 等地址期间关了开关或收到刹车：不发榜单请求（复审 P2）。
     if (!stillWanted(my)) return isEnabled() ? empty('paused') : empty('disabled');
-    if (!urls.length) return empty('outside');
-    const r = await request(urls[0] + BOARD_PATH + (iid ? `?iid=${encodeURIComponent(iid)}` : ''), { method: 'GET' });
+    if (!urls.length) {
+      if (openxReachable) {
+        const bb = await tryBlackboard(my, boardReleaseId);
+        if (!stillWanted(my)) return isEnabled() ? empty(paused ? 'paused' : 'offline') : empty('disabled');
+        if (bb) {
+          summary('ok');
+          return fromCache({ isolated: true, boardReadOnly: true, note: STATE_TEXT.boardReadOnly });
+        }
+        if (cached) return fromCache({ stale: true, isolated: true, note: STATE_TEXT.isolated });
+      }
+      return empty('outside');
+    }
+    const r = await requestAny(urls, BOARD_PATH + (iid ? `?iid=${encodeURIComponent(iid)}` : ''), { method: 'GET' }, my);
     if (r.ok && r.json.pause === true) { brake(); return empty('paused'); }
     if (my !== epoch) return isEnabled() ? empty(paused ? 'paused' : 'offline') : empty('disabled');
-    if (r.ok && r.json.boards) { remember(r.json); summary('ok'); return fromCache(); }
+    if (r.ok && r.json.boards) { remember(r.json, { readOnly: false }); summary('ok'); return fromCache(); }
+    const bb = r.isolated ? await tryBlackboard(my, boardReleaseId) : null;
+    if (!stillWanted(my)) return isEnabled() ? empty(paused ? 'paused' : 'offline') : empty('disabled');
+    if (bb) {
+      summary('ok');
+      return fromCache({ isolated: true, boardReadOnly: true, note: STATE_TEXT.boardReadOnly });
+    }
     // 取不到：有旧榜单就给旧的并在灰字里说明，没有就给 offline。
+    if (r.isolated) return cached ? fromCache({ stale: true, isolated: true, note: STATE_TEXT.isolated }) : { ...empty('offline'), isolated: true, note: STATE_TEXT.isolated };
     if (cached) return fromCache({ stale: true, note: STATE_TEXT.offline });
     return { ...empty('offline'), note: r.error ? `${STATE_TEXT.offline}（${r.error}）` : STATE_TEXT.offline };
   }

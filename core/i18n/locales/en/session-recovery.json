@@ -24,5 +24,6 @@
   "等待结果超时，服务端结果未知，请在后台终端查看。": "Timed out waiting for the result. The server result is unknown. Check the background terminal.",
   "这个会话之前没有记下 CodeAgent 的对话编号，接不上原来的对话，这次是一段新对话，AI 不记得之前聊过的内容。": "This session never recorded its CodeAgent conversation ID, so the earlier conversation can't be resumed. This is a new conversation and the AI won't remember what was said before.",
   "没有找到这个会话之前的对话记录（可能已被清理或配置目录换过），这次是一段新对话，AI 不记得之前聊过的内容。": "The earlier conversation history for this session was not found (it may have been cleaned up, or the config folder changed). This is a new conversation and the AI won't remember what was said before.",
-  "和 CodeAgent 的连接断了一下，已自动接上；这一轮还在后台进行，答完会自动显示在这里。": "The connection to CodeAgent dropped briefly and has reconnected. This turn is still running in the background; the answer will appear here when it finishes."
+  "和 CodeAgent 的连接断了一下，已自动接上；这一轮还在后台进行，答完会自动显示在这里。": "The connection to CodeAgent dropped briefly and has reconnected. This turn is still running in the background; the answer will appear here when it finishes.",
+  "已核对，继续": "Checked, continue"
 }

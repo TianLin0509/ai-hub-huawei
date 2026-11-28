@@ -263,3 +263,40 @@ test('复审 P2：取榜单等地址期间关掉开关，不发出带编号的�
   assert.equal((await p).state, 'disabled');
   assert.equal(calls.length, 0, '关掉之后没有发出榜单请求');
 });
+
+test('收件地址按顺序试：IP 连不上就试计算机名；全部网络层不通 = 隔离网络（绿区），如实说明', async () => {
+  const calls = [];
+  let mode = 'second-ok';
+  const client = C.createCommunityClient({ timeoutMs: 50,
+    receiverAddress: { resolve: async () => ({ urls: ['http://10.0.0.1:18767', 'http://pc.example.test:18767'] }) },
+    buildPayload: () => pulseOf(1),
+    fetchImpl: async (url) => { calls.push(url);
+      if (url.startsWith('http://10.0.0.1') || mode === 'all-down') throw Object.assign(new Error('x'), { cause: { code: 'ETIMEDOUT' } });
+      if (mode === 'http-500') return { status: 500, ok: false, text: async () => '{}' };
+      return { status: 200, ok: true, text: async () => JSON.stringify({ ok: true, online: 2, boards: { level: [] }, board: { online: 2, boards: { level: [] } } }) }; } });
+  const ok = await client.pulse();
+  assert.equal(ok.state, 'ok');
+  assert.deepEqual(calls, ['http://10.0.0.1:18767/community/v1/pulse', 'http://pc.example.test:18767/community/v1/pulse']);
+  // 全部连不上：offline + isolated，说明文字点出网络隔离；有旧榜单就给旧的
+  mode = 'all-down'; calls.length = 0;
+  const bad = await client.pulse();
+  assert.equal(bad.state, 'offline');
+  assert.equal(bad.isolated, true);
+  assert.match(client.status().note, /隔离/);
+  const b = await client.getBoard({ force: true });
+  assert.equal(b.isolated, true);
+  assert.equal(b.stale, true);
+  assert.equal(calls.length, 4, '心跳与榜单各试两个地址');
+  // 收件机回了 HTTP 错误（连得上）：不算隔离
+  mode = 'http-500';
+  const r = await client.getBoard({ force: true });
+  assert.notEqual(r.isolated, true);
+});
+
+test('收件机没开（对方回拒绝）：网络是通的，不标隔离', async () => {
+  const client = C.createCommunityClient({ timeoutMs: 50, receiverAddress: { resolve: async () => ({ urls: ['http://10.0.0.1:18767'] }) }, buildPayload: () => pulseOf(1),
+    fetchImpl: async () => { throw Object.assign(new Error('x'), { cause: { code: 'ECONNREFUSED' } }); } });
+  const r = await client.pulse();
+  assert.equal(r.state, 'offline');
+  assert.notEqual(r.isolated, true);
+});

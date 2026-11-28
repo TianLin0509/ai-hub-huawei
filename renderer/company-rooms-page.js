@@ -68,6 +68,22 @@ function dayLabel(iso) {
   const day = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay();
   return `${m[2]}-${m[3]} 周${WEEK[day]}`;
 }
+// kind: pri | sec | ghost | danger; extra: size class or attributes.
+const button = (op, title, kind = 'sec', extra = '') => `<button type="button" class="cr-btn cr-btn-${kind}${extra.startsWith(' ') ? '' : ' ' + extra}" data-cr-op="${op}"${extra.startsWith(' ') ? extra : ''}>${title}</button>`;
+// 「从页面读取」卡在登录页（2026-11-27 反馈）：组件只回一句错误（「页面停在了登录页」或「…可能登录已失效…」），
+// 登录状态仍显示「未检查」，旁边只有「重新读取」，同事以为只能去开免密。认出是登录问题时把「登录」按钮放在旁边：
+// 弹出的浏览器里用工号密码或扫码登一次，登录状态存进会议室自己的浏览器资料，不必开免密。
+// "Read from page" stuck on the sign-in page: offer the Sign in button next to Retry; password or QR sign-in works without passwordless login.
+const ROOM_READ_LOGIN = /停在了登录页|登录已失效|登录失效/;
+function roomPickerHtml(r = {}, chosen = []) {
+  if (r.state === 'running') return '<p class="cr-picker-note">正在读取网页上的会议室，通常约 20 秒…</p>';
+  if (r.error) {
+    const login = ROOM_READ_LOGIN.test(String(r.error));
+    return `<div class="cr-picker"><p class="cr-error">${escape(r.error)}</p>${login ? '<p class="cr-picker-note" data-cr-slot="read-login-hint">会议室网页还没登录。点「登录」会弹出浏览器，用工号密码或扫码登一次即可（不必开免密），登好后再点「重新读取」。</p>' + button('login', '登录', 'pri', 'cr-btn-sm') : ''}${button('read-rooms', '重新读取', 'sec', 'cr-btn-sm')}</div>`;
+  }
+  if (r.state !== 'done') return '';
+  return `<div class="cr-picker">${r.names?.length ? `<p class="cr-picker-note">从网页读到 ${r.names.length} 间，勾选后加入：</p><div class="cr-picker-list">${r.names.map(name => `<label class="cr-check"><input type="checkbox" data-cr-found="${escape(name)}"${chosen.includes(name) ? ' disabled' : ''}>${escape(name)}</label>`).join('')}</div>${button('add-selected', '加入所选', 'pri', 'cr-btn-sm')}` : '<p class="cr-picker-note">没有读取到会议室，请确认登录和网页筛选条件后重试。</p>'}</div>`;
+}
 function resultTone(status) { return status === '成功' ? 'green' : status === '失败' ? 'red' : ''; }
 function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage }) {
   let host, gate = null, footer, state = {}, draft = copy(DEFAULTS), tab = 'overview', dirty = false, busy = false, polling = false, timer, clockTimer, generation = 0, loaded = false, logCleared = '', logsShown = null;
@@ -92,8 +108,6 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     if (result?.ok === false) throw Error(result.error || '会议室操作未完成');
     return result;
   };
-  // kind: pri | sec | ghost | danger; extra: size class or attributes.
-  const button = (op, title, kind = 'sec', extra = '') => `<button type="button" class="cr-btn cr-btn-${kind}${extra.startsWith(' ') ? '' : ' ' + extra}" data-cr-op="${op}"${extra.startsWith(' ') ? extra : ''}>${title}</button>`;
   const nav = document.createElement('button');
   nav.id = 'btn-company-rooms'; nav.type = 'button'; nav.className = 'btn-shell-nav'; nav.title = '会议室 · 自动抢订与计划'; nav.setAttribute('aria-label', '会议室');
   nav.innerHTML = '<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 21V3h13v18M2 21h20M17 7h3v14M8 7h5M8 11h5M8 15h5"/></svg></span><span class="btn-label">会议室</span>';
@@ -384,7 +398,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       const signature = JSON.stringify(r);
       if (picker.dataset.signature !== signature) {
         picker.dataset.signature = signature;
-        picker.innerHTML = r.state === 'running' ? '<p class="cr-picker-note">正在读取网页上的会议室，通常约 20 秒…</p>' : r.error ? `<div class="cr-picker"><p class="cr-error">${escape(r.error)}</p>${button('read-rooms', '重新读取', 'sec', 'cr-btn-sm')}</div>` : r.state === 'done' ? `<div class="cr-picker">${r.names?.length ? `<p class="cr-picker-note">从网页读到 ${r.names.length} 间，勾选后加入：</p><div class="cr-picker-list">${r.names.map(name => `<label class="cr-check"><input type="checkbox" data-cr-found="${escape(name)}"${draft.优先会议室.includes(name) ? ' disabled' : ''}>${escape(name)}</label>`).join('')}</div>${button('add-selected', '加入所选', 'pri', 'cr-btn-sm')}` : '<p class="cr-picker-note">没有读取到会议室，请确认登录和网页筛选条件后重试。</p>'}</div>` : '';
+        picker.innerHTML = roomPickerHtml(r, draft.优先会议室);
       }
       updatePlanSide();
     }
@@ -558,4 +572,4 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
   document.addEventListener('click', e => { if (e.target.closest('#scene-rail button:not(#btn-company-rooms)')) close(); });
   return { open, close };
 }
-module.exports = { createCompanyRoomsPage, roomReadiness, planSummary };
+module.exports = { createCompanyRoomsPage, roomReadiness, planSummary, roomPickerHtml };

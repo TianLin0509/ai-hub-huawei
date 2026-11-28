@@ -40,6 +40,7 @@ function createDiagCounter(file, now) {
 }
 
 function createCommunityService({ dataDir, edition, version, profileController, receiverAddress, isEnabled, setEnabledFlag, getHost = () => null,
+  onHostPaused = () => {},
   fetchImpl, logger = console, now = Date.now, sendToRenderer = () => {}, timers = { setTimeout, clearTimeout }, clientOptions = {} } = {}) {
   let iid = '';
   const diag = createDiagCounter(path.join(dataDir, 'community', 'diag-counts.json'), now);
@@ -58,7 +59,12 @@ function createCommunityService({ dataDir, edition, version, profileController, 
     board: () => getHost().store.board(installId(), { includeDaily: true }),
   };
   const emit = summary => { try { sendToRenderer('community:summary', summary); } catch { /* 窗口没开 */ } };
+  const readViaLogin = require('./openx-login-board').createOpenxBoardReader({ logger });
+  const defaultBlackboard = typeof fetchImpl === 'function'
+    ? ({ boardReleaseId, signal } = {}) => require('../core/community/openx-board').readBlackboard({ releaseId: boardReleaseId, fetchImpl, readViaLogin, signal })
+    : null;
   const client = createCommunityClient({ receiverAddress: edition ? receiverAddress : null, buildPayload: payload, isEnabled, host, fetchImpl, logger, now,
+    readBlackboard: clientOptions.readBlackboard !== undefined ? clientOptions.readBlackboard : defaultBlackboard,
     cacheFile: path.join(dataDir, 'community', 'board-cache.json'), onSummary: emit, ...clientOptions });
 
   // 收件机收到别人的心跳：在线数可能变了，最多每分钟推一次（1000 台每小时各一次也只是每分钟一条）。
@@ -109,6 +115,7 @@ function createCommunityService({ dataDir, edition, version, profileController, 
     'set-host-paused': (req = {}) => {
       const h = getHost(); if (!h || !h.isHost()) return { ok: false, error: '本机不是收件机' };
       const s = h.store.setPaused(req.paused === true);
+      if (s.paused) try { onHostPaused(true); } catch { /* 停止黑板发布出错不阻断暂停 */ }
       return { ...settings(), paused: s.paused };
     },
   };

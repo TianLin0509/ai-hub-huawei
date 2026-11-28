@@ -127,8 +127,14 @@ class HubControl(base.HubControl):
 
     def status(self):
         while not self.results.empty():
-            op, value, error = self.results.get_nowait()
+            op, value, error, login_lost = self.results.get_nowait()
             self.work = None
+            # 读会议室停在登录页（2026-11-27）：和登录预检、抢订一样把登录状态记为失效，
+            # Hub 才会显示「登录已失效」横幅并经桌宠提醒；以前只回一句错误，状态一直是「未检查」。
+            # Reading rooms hit the sign-in page: mark login invalid like precheck/booking do.
+            if login_lost:
+                self.w.login_state = False
+                self.w.login_checked_at = datetime.now()
             if op == 'read-rooms':
                 self.read_result = {'state': 'error' if error else 'done', 'names': value or [], 'error': error}
             else:
@@ -163,9 +169,10 @@ class HubControl(base.HubControl):
             self.test_result = {'state': 'running', 'error': ''}
         def run():
             try:
-                self.results.put((op, fn(), ''))
+                self.results.put((op, fn(), '', False))
             except Exception as exc:
-                self.results.put((op, None, str(exc)))
+                # engine 的 LoginRequired：按类名认，不为此提前加载 engine（它会拉起 playwright）。
+                self.results.put((op, None, str(exc), type(exc).__name__ == 'LoginRequired'))
         threading.Thread(target=run, daemon=True).start()
 
     def invoke(self, op, args):

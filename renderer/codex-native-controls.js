@@ -258,7 +258,14 @@ function createCodexNativeControls({ sessionId, invoke, document: doc = document
       view.addEventListener('click', async () => {
         try { await openBackstage(); } catch (err) { error.textContent = err.message; }
       });
-      row.append(node('p', runtime.submission.error), view, error);
+      row.append(node('p', runtime.submission.error), view);
+      // 连接已恢复（例如后台服务退出后重新接上）：核对过后台终端里的结果，就能接着发下一句；不替用户重发上一轮。
+      if (runtime.connection === 'connected' && !['running', 'waiting'].includes(runtime.state)) {
+        const review = node('button', '已核对，继续'); review.type = 'button'; review.setAttribute('data-e2e-review-unknown', '1');
+        review.addEventListener('click', () => action({ action: 'review-submission', submissionId: runtime.submission.id, epoch: runtime.epoch }, row, error));
+        row.append(review);
+      }
+      row.append(error);
       children.push(row);
     }
     const queued=runtime?.queued || [];

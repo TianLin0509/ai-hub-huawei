@@ -159,8 +159,12 @@ class CodeAgentServeSession extends AcpSession {
     // 正在重订时再断线也必须记下，不能让 recovering 守卫吞掉。
     if (this.recovering) { this.recoveryAgain = true; return; }
     this.recovering = true;
+    // 断线恢复每一步留一行主日志（2026-11-28 黄区：共享 serve 被结束后没恢复，日志里只有「send threw: ACP 未连接」，无从定位）。
+    const trace = step => console.warn(`[codeagent-serve] ${String(this.id || '').slice(0, 8)} recover ${step}`);
+    trace(`start: ${error?.message || error} active=${!!this.active} clientClosed=${!!client.closed}`);
     const fallBack = reason => {
       if (this.fellBack) return;
+      trace(`fallback: ${reason}`);
       this.fellBack = true;
       serveFallback.recordFailure(this.host?.configDir, reason);
       this.emit('serve-fallback', { reason, phase: 'runtime', hasThread: !!this.threadId, pendingPrompts: this._snapshotPendingPrompts() });
@@ -179,14 +183,23 @@ class CodeAgentServeSession extends AcpSession {
         if (this.closed || this.client !== client) return;
         if (client.closed) {
           this.closeTerminal();
-          if (this.active) {
+          // serve 进程已经没了（宿主报退出，不是请求超时或事件流断开）：这一轮不可能再从它收到终态。
+          // 以前执行中只提示、不重连，会话停在「执行中 + 未连接」，之后每一句都报「ACP 未连接」，点「重发」也一样
+          // （2026-11-28 黄区 F05-3，3 分钟不恢复）。现在这一轮照样记结果不明（不自动重发），同时起新 serve 接上同一个对话。
+          const serveGone = /serve 已退出/.test(String(error?.message || '')) || (!!this.host && 'running' in this.host && !this.host.running);
+          if (this.active && !serveGone) {
             this.notice('CodeAgent 连接已断开，当前轮次结果不明，请核对原生会话。');
-          } else {
-            try { await this.reconnect(); }
-            catch (recoverError) { fallBack(recoverError.message); }
+            return;
           }
+          if (this.active) {
+            this.notice('CodeAgent 后台服务退出了，这一轮结果不明（没有自动重发）；已重新接上，请核对后再继续。');
+            clearTimeout(this.active.timer); clearTimeout(this.active.cancelTimer);
+          }
+          try { await this.reconnect(); trace('reconnected'); }
+          catch (recoverError) { fallBack(recoverError.message); }
           return;
         }
+        trace(`resubscribe try=${this.failures.length}`);
         try {
           await client._subscribe();
           // 给 close/error 回调机会，检查仍是同一条存活订阅。
@@ -198,7 +211,7 @@ class CodeAgentServeSession extends AcpSession {
             // 终态可能落在断开的空档里：马上按 CodeAgent 会话记录核对一次，答完了就直接收尾。
             void client.reconcileNow?.();
           }
-        } catch (recoverError) { error = recoverError; this.recoveryAgain = true; }
+        } catch (recoverError) { trace(`resubscribe failed: ${recoverError?.message || recoverError}`); error = recoverError; this.recoveryAgain = true; }
       } while (this.recoveryAgain);
     } finally { this.recovering = false; }
   }

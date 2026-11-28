@@ -1,15 +1,15 @@
 {
   "app": "mishu-terminator",
-  "version": "2.1.7",
+  "version": "2.1.8",
   "shell": 1,
   "date": "2026-11-28",
   "notes": [
-    "提前抢订天数放宽到 1–120 天，提交前核对表单日期"
+    "读取会议室停在登录页时把登录状态记为失效"
   ],
   "code": {
-    "file": "msz-code-2.1.7.zip",
-    "size": 82842,
-    "sha256": "3e98ef231882e4b1fb21cf3b0d2550187db0556512c46f7ed1f041670f071ed2"
+    "file": "msz-code-2.1.8.zip",
+    "size": 83158,
+    "sha256": "97b65a4c6bfe5308be2387823c049fd998ca544b76131ceee19697fc4b4d1ea5"
   },
-  "signature": "7dcb9ffaf0add65a55cf4d1eea90c8370f1a99086b46562d41a9bb37e3d4e63e8864768b78424ec02b887a363609931ded2be19898a404b74c7c87197dd3c30a"
+  "signature": "dd892bfb8f79159a9c72b9c71ce565ca7173d7e4a7e77cb20ea7d7bec3a3f21c3c7f571d3e10cabaf923f9701d5de29023a4fc10f2c7961aa7ebcee263d2ef05"
 }

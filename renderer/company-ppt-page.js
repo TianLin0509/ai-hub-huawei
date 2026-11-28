@@ -245,7 +245,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     const elapsed = seconds((ai.endedAt || Date.now()) - ai.startedAt);
     const mark = '<span class="pptw-ai-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2.5l2.2 6.3 6.3 2.2-6.3 2.2L12 19.5l-2.2-6.3L3.5 11l6.3-2.2z"/></svg></span>';
     const head = running
-      ? `<header class="pptw-ai-head">${mark}<div><h3>AI 正在帮你找<span class="pptw-dots" aria-hidden="true"><i></i><i></i><i></i></span></h3><small>「${esc(ai.query)}」 · 已用 <b data-ppt-elapsed>${elapsed}</b>，整体通常 1–3 分钟；下面的关键词命中可以先看</small></div></header>`
+      ? `<header class="pptw-ai-head">${mark}<div><h3>AI 正在帮你找<span class="pptw-dots" aria-hidden="true"><i></i><i></i><i></i></span></h3><small>「${esc(ai.query)}」 · 已用 <b data-ppt-elapsed>${elapsed}</b>，公司模型要逐页读原文核对，通常 5–15 分钟；下面的关键词命中可以先看</small></div></header>`
       : ai.state === 'error'
         ? `<header class="pptw-ai-head">${mark}<div><h3>AI 这次没找完</h3><small>${esc(ai.error || '助理检索未完成')}${backstage.backstageLinkHtml({ sessionId: ai.chat?.sessionId || '', from: 'ppt' })}</small></div><button type="button" class="pptw-btn sec sm" data-ppt="ai-retry">再让 AI 找一次</button></header>`
         : `<header class="pptw-ai-head">${mark}<div><h3>AI 推荐 ${picks.length} 页<span class="pptw-ai-ok">${picks.length && picks.every(c => c.unverified) ? '读过原文，助理没走核验报告，请对照原文确认' : '已逐页读原文核对'}</span></h3><small>「${esc(ai.query)}」 · 用时 ${elapsed}${queries.length ? ` · 试了 ${queries.length} 种说法、读了 ${readPages.length} 页` : ''}</small></div>${ai.report ? '<button type="button" class="pptw-btn ghost sm" data-ppt="open-report">核验报告与原文引用</button>' : ''}</header>`;

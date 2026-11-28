@@ -35,3 +35,43 @@ test('no matches: nothing is killed', { skip: process.platform !== 'win32' }, as
   assert.deepEqual(pids, []);
   assert.deepEqual(killed, []);
 });
+
+test('killByTokenInBackground: hidden powershell, exact token, refuses bad tokens', { skip: process.platform !== 'win32' }, () => {
+  const spawned = [];
+  const spawnImpl = (file, args, opts) => { spawned.push({ file, args, opts }); return { unref() {} }; };
+  assert.equal(serve.killByTokenInBackground(TOKEN, { spawnImpl }), true);
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0].file, 'powershell.exe');
+  assert.equal(spawned[0].opts.windowsHide, true);
+  assert.ok(spawned[0].args.at(-1).includes(`--token ${TOKEN}`));
+  assert.match(spawned[0].args.at(-1), /Name <> 'powershell\.exe'/);
+  for (const bad of ['', 'abc', "x' OR 1=1"]) assert.equal(serve.killByTokenInBackground(bad, { spawnImpl }), false);
+  assert.equal(spawned.length, 1);
+});
+
+test('shared serve host: stop / stopSync also clean up by its own token (outer cmd already gone)', async () => {
+  const { ServeHost } = require('../core/codeagent-serve-host');
+  const orig = { killTree: serve.killTree, portOwner: serve.portOwner, killServeSync: serve.killServeSync, killByToken: serve.killByToken, killByTokenInBackground: serve.killByTokenInBackground };
+  const seen = [];
+  Object.assign(serve, {
+    killTree: async () => {}, portOwner: async () => null, killServeSync: () => {},
+    killByToken: async t => { seen.push(['async', t]); return []; },
+    killByTokenInBackground: t => { seen.push(['bg', t]); return true; },
+  });
+  try {
+    const mk = token => Object.assign(new ServeHost({ configDir: 'x', jobQos: () => ({ terminate: async () => null }) }), { proc: { pid: 1 }, port: 2, token });
+    await mk(TOKEN).stop();
+    mk('cd'.repeat(32)).stopSync();
+    const idle = mk(TOKEN); idle.proc = null; idle.stopSync();
+    assert.deepEqual(seen, [['async', TOKEN], ['bg', 'cd'.repeat(32)]]);
+  } finally { Object.assign(serve, orig); }
+});
+
+test('different tokens never match each other', { skip: process.platform !== 'win32' }, async () => {
+  const a = 'ab'.repeat(32), b = 'cd'.repeat(32), queries = [];
+  const runner = async (_file, args) => { queries.push(args.at(-1)); return { stdout: '' }; };
+  await serve.killByToken(a, { runner, kill: async () => {} });
+  await serve.killByToken(b, { runner, kill: async () => {} });
+  assert.ok(queries[0].includes(`--token ${a}`) && !queries[0].includes(b));
+  assert.ok(queries[1].includes(`--token ${b}`) && !queries[1].includes(a));
+});

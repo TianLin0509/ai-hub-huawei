@@ -3155,7 +3155,7 @@ console.log(`[low-overhead] 判定=${optionalFeatures.installKind()} 低开销�
 // 关窗口最小化到托盘（2026-11-12）：开关也放「可选功能」，默认关。
 var trayController = null;
 // 社区统计（2026-11-24，main/community-service.js）：发送端与收件机本机的存储，下面建好后填进来。
-var communityServiceRef = null, communityHostRef = null;
+var communityServiceRef = null, communityHostRef = null, communityBoardAbort = () => {};
 // 界面语言（2026-11-20）：默认中文，设置里选 English 才切英文；对话框/菜单/托盘/通知统一按词典翻译（main/i18n-main.js）。
 try {
   require('./main/i18n-main').installMainI18n({
@@ -3626,6 +3626,9 @@ function companyWeclawFetch(testEnvKey) {
 // 公司版「帖子」（原「论坛」，2026-10-18；2026-11-12 加公司发文）：每天同步公司发文、稼先社区、心声社区并附 AI 摘要，数据只留在本机 Hub 数据目录。
 // 只在公司版启用（core/company-forum/gate.js）。取数用 Hub 自己的隐藏浏览器窗口（main/company-forum-browser.js）。
 let companyForumService = null, companyForumBrowser = null, companyForumEdge = null;
+// 论坛、考勤、门户共用的登录体检（R60，2026-11-27）：登好、要登录时各记一行 cookie 个数与剩余有效期（不记名字和值），进一键反馈。
+let companyLoginCheckInst = null;
+function companyLoginCheck() { return (companyLoginCheckInst ||= require('./core/company-forum/cookie-health').createLoginCheck({ dataDir: getHubDataDir() })); }
 try {
   if (require('./core/company-forum/gate').companyForumEnabled()) {
     const { CompanyForum } = require('./core/company-forum/service');
@@ -3635,7 +3638,7 @@ try {
       const saved = require('./core/session-store').loadSessionFile(id, { strict: true });
       return saved ? { ...saved, id: saved.hubId || id } : null;
     };
-    companyForumBrowser = require('./main/company-forum-browser').createForumBrowser({ BrowserWindow, BaseWindow, session: require('electron').session });
+    companyForumBrowser = require('./main/company-forum-browser').createForumBrowser({ BrowserWindow, BaseWindow, session: require('electron').session, loginCheck: companyLoginCheck() });
     // 取数先借本机 Edge 的登录状态（无头，不弹窗）：公司电脑上三个站点都能免密自动登录，不用再手动登录（2026-11-12）。
     // CLAUDE_HUB_FORUM_EDGE=0 关掉；测试把站点指到本机假站点时默认不用，=1 才用。
     companyForumEdge = process.env.CLAUDE_HUB_FORUM_EDGE === '0' || (process.env.CLAUDE_HUB_FORUM_SITES && process.env.CLAUDE_HUB_FORUM_EDGE !== '1') ? null
@@ -3674,7 +3677,7 @@ let companyAttendanceService = null, companyAttendanceBrowser = null;
 try {
   if (require('./core/company-attendance/gate').companyAttendanceEnabled()) {
     const { CompanyAttendance } = require('./core/company-attendance/service');
-    companyAttendanceBrowser = companyForumBrowser || require('./main/company-forum-browser').createForumBrowser({ BrowserWindow, BaseWindow, session: require('electron').session });
+    companyAttendanceBrowser = companyForumBrowser || require('./main/company-forum-browser').createForumBrowser({ BrowserWindow, BaseWindow, session: require('electron').session, loginCheck: companyLoginCheck() });
     companyAttendanceService = new CompanyAttendance({
       dataDir: getHubDataDir(),
       noTimer: process.env.CLAUDE_HUB_ATTENDANCE_TIMER === '0',
@@ -3710,7 +3713,7 @@ let companyW3Service = null, companyW3Browser = null;
 const W3_TEST_GRACE_MS = HIDDEN_E2E_DATA_DIR_SAFE && process.env.CLAUDE_HUB_E2E_WINDOW_MODE && Number(process.env.CLAUDE_HUB_W3_LOGIN_GRACE_MS) > 0 ? Number(process.env.CLAUDE_HUB_W3_LOGIN_GRACE_MS) : 0;
 function companyW3HubBrowser() {
   return companyForumBrowser || companyAttendanceBrowser
-    || (companyW3Browser ||= require('./main/company-forum-browser').createForumBrowser({ BrowserWindow, BaseWindow, session: require('electron').session }));
+    || (companyW3Browser ||= require('./main/company-forum-browser').createForumBrowser({ BrowserWindow, BaseWindow, session: require('electron').session, loginCheck: companyLoginCheck() }));
 }
 try {
   if (require('./core/company-w3/gate').companyW3Enabled()) {
@@ -5397,7 +5400,7 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
           fetchImpl: (...args) => require('electron').net.fetch(...args),
           isEnabled: () => optionalFeatures.get('community'),
           setEnabledFlag: on => applyOptionalFeature('community', on).then(() => broadcastOptionalFeatures()),
-          getHost: () => communityHostRef, sendToRenderer,
+          getHost: () => communityHostRef, onHostPaused: paused => { if (paused) communityBoardAbort(); }, sendToRenderer,
           // AI_HUB_COMMUNITY_PULSE_MS 只供隔离 E2E 缩短首次与之后的间隔；正式实例忽略。
           clientOptions: isIsolatedHub() && Number(process.env.AI_HUB_COMMUNITY_PULSE_MS) > 0
             ? { firstDelayMs: Number(process.env.AI_HUB_COMMUNITY_PULSE_MS), periodMs: Number(process.env.AI_HUB_COMMUNITY_PULSE_MS) } : {} });

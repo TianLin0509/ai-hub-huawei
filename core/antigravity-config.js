@@ -191,28 +191,59 @@ function windowsCmdLine(command, args) {
 // "not recognized", so that is turned back into ENOENT; on timeout the whole tree
 // (cmd and agy, which boots a language server) is killed, not just cmd.
 const NOT_FOUND = /is not recognized as an internal or external command|不是内部或外部命令/i;
+// Background agy runs never open a browser (home Hub ed36568e, ported 2026-11-28 after the
+// HUB-H trial window opened a pair of Google sign-in tabs every 5 minutes). When the account
+// token has expired, `agy -p /usage`, `/credits` and `agy models` fall back to interactive
+// OAuth and open the sign-in page through `rundll32`. Hidden children get a no-op rundll32
+// first on PATH, so agy only prints its sign-in prompt and the query fails as "not signed in".
+// Interactive sessions and the explicit login keep the real PATH and still open the browser.
+const NO_BROWSER_STUB = '@exit /b 0\r\n';
+function noBrowserDir({dir = path.join(os.tmpdir(), 'ai-hub-agy-no-browser'), fsImpl = fs} = {}) {
+  const file = path.join(dir, 'rundll32.cmd');
+  try { if (fsImpl.readFileSync(file, 'utf8') === NO_BROWSER_STUB) return dir; } catch {}
+  fsImpl.mkdirSync(dir, {recursive: true});
+  fsImpl.writeFileSync(file, NO_BROWSER_STUB);
+  return dir;
+}
+function backgroundEnv(env, {platform = process.platform, stubDir = noBrowserDir} = {}) {
+  // agy only honours "true" (home Hub, verified 2026-11-04): background runs never start the
+  // self-updater, whose console window would pop up over whatever the person is doing.
+  const out = {...env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true'};
+  if (platform !== 'win32') return out;
+  const key = Object.keys(out).find(k => k.toLowerCase() === 'path') || 'Path';
+  for (const k of Object.keys(out)) if (k !== key && k.toLowerCase() === 'path') delete out[k];
+  out[key] = stubDir() + path.win32.delimiter + (out[key] || '');
+  return out;
+}
+// agy's own sign-in prompt when it cannot (or, with the stub, did not) open the browser.
+// Not the bare accounts.google.com host: an eligibility check or a proxy error can carry it too.
+const LOGIN_REQUIRED = /please sign in|not signed in|sign in to view|not logged in|interactive oauth/i;
 function runCli(command, args, env, timeout = 15000, {platform = process.platform, execFileImpl = require('child_process').execFile,
-  killTree = pid => require('child_process').execFile('taskkill', ['/T', '/F', '/PID', String(pid)], {windowsHide: true}, () => {})} = {}) {
+  killTree = pid => require('child_process').execFile('taskkill', ['/T', '/F', '/PID', String(pid)], {windowsHide: true}, () => {}), stubDir} = {}) {
   return new Promise((resolve, reject) => {
     const viaCmd = platform === 'win32';
     const file = viaCmd ? (env.ComSpec || env.COMSPEC || 'cmd.exe') : command;
     const argv = viaCmd ? ['/d', '/s', '/c', windowsCmdLine(command, args)] : args;
-    let timedOut = false, timer = null;
+    let timedOut = false, timer = null, settled = false;
+    try { env = backgroundEnv(env, {platform, ...(stubDir ? {stubDir} : {})}); }
+    catch (error) { return reject(Object.assign(Error('Antigravity 后台查询无法准备免弹窗环境：' + error.message), {code: error.code})); }
     const child = execFileImpl(file, argv,
       {env, windowsHide: true, windowsVerbatimArguments: viaCmd, timeout: viaCmd ? 0 : timeout, maxBuffer: 1024 * 1024, encoding: 'utf8'},
       (error, stdout, stderr) => {
-        clearTimeout(timer);
-        if (timedOut) return reject(Object.assign(Error('Antigravity 查询超时'), {code: 'ETIMEDOUT', killed: true}));
+        settled = true; clearTimeout(timer);
+        // With the no-op rundll32 agy waits for an OAuth callback until killed: keep its output so
+        // callers can still tell "not signed in" from a plain timeout.
+        if (timedOut) return reject(Object.assign(Error('Antigravity 查询超时'), {code: 'ETIMEDOUT', killed: true, stdout, stderr}));
         if (error && (!Number.isInteger(error.code) || error.killed)) return reject(error);
         if (viaCmd && error?.code === 1 && NOT_FOUND.test(String(stderr)))
           return reject(Object.assign(Error('找不到 Antigravity 命令：' + command), {code: 'ENOENT'}));
         resolve({code: error?.code || 0, stdout, stderr});
       });
-    if (viaCmd && timeout > 0) timer = setTimeout(() => {
+    if (viaCmd && timeout > 0 && !settled) timer = setTimeout(() => {
       timedOut = true;
       if (child?.pid) killTree(child.pid);
       setTimeout(() => { try { child?.kill(); } catch {} }, 3000).unref?.();  // taskkill 失败时至少停掉 cmd，回调一定会到
     }, timeout);
   });
 }
-module.exports = {ENGINE, UUID, DEFAULT_MODEL, home, configRoot, resolveCommand, cliEnv, runCli, windowsCmdLine, ensureWorkspaceTrusted, latestConversation, isAntigravity, launchArgs, launchCommand, eventsFile, receiptsFile, migrateConfiguration, installHooks};
+module.exports = {ENGINE, UUID, DEFAULT_MODEL, home, configRoot, resolveCommand, cliEnv, runCli, backgroundEnv, noBrowserDir, LOGIN_REQUIRED, windowsCmdLine, ensureWorkspaceTrusted, latestConversation, isAntigravity, launchArgs, launchCommand, eventsFile, receiptsFile, migrateConfiguration, installHooks};

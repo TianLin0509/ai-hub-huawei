@@ -82,6 +82,13 @@ async function killByToken(token, { runner = run, kill = killTree } = {}) {
   for (const pid of pids) await kill(pid, { runner });
   return pids;
 }
+// Hub 退出路径用：不等结果，另起一个后台 PowerShell 按 token 查到就结束（它不随 Hub 退出）。
+// 共享 serve 的外层 cmd 先断开时，进程树和端口两路都可能落空，退出后 serve 带着约 500 MB 常驻（2026-11-28 黄区 Lite）。
+function killByTokenInBackground(token, { spawnImpl = spawn } = {}) {
+  if (process.platform !== 'win32' || !/^[a-f0-9]{32,}$/i.test(String(token || ''))) return false;
+  const script = `Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%--token ${token}%' AND Name <> 'powershell.exe'" | ForEach-Object { taskkill /T /F /PID $_.ProcessId | Out-Null }`;
+  try { spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { windowsHide: true, stdio: 'ignore', detached: false }).unref(); return true; } catch { return false; }
+}
 
 async function portOwner(port) {
   if (process.platform !== 'win32') return null;
@@ -398,4 +405,4 @@ function tempServePids() { return [...activeServes.keys()]; }
 // 选模型、启动传参仍跟 serveEnabled 走，不受这里影响。
 function quotaReadEnabled(env = process.env) { return env.AI_HUB_CODEAGENT_SERVE !== '0'; }
 
-module.exports = { SERVE_EMPTY_MODELS, killByToken, tempServeJobKeys: () => [...tempServeJobs.values()], spawnServe, serveEnv, prepareShadowHome, applyShadowHome, stripMcpServers, withAccountServe, tempServePids, SHADOW_DIR_NAME, killServeSync, killTree, serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };
+module.exports = { SERVE_EMPTY_MODELS, killByToken, killByTokenInBackground, tempServeJobKeys: () => [...tempServeJobs.values()], spawnServe, serveEnv, prepareShadowHome, applyShadowHome, stripMcpServers, withAccountServe, tempServePids, SHADOW_DIR_NAME, killServeSync, killTree, serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };

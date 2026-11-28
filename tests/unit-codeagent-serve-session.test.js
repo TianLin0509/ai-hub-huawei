@@ -819,3 +819,47 @@ test('R61 审查：上一轮按记录补出的回答，不会被下一轮当成�
   await until(() => session.runtime.state === 'completed' && agentText(session) !== '好的', '第二轮按记录收尾');
   assert.equal(agentText(session), '好的，已改好');
 });
+
+// S-09（2026-11-28 黄区 F05-3）：执行中 serve 进程退出（不是事件流断开）——以前只提示不重连，之后每句都报「ACP 未连接」。
+test('S-09：执行中 serve 进程退出：本轮记结果不明、不自动重发，同时接上新 serve，之后能继续用', async t => {
+  const { serve, session } = await setup(t);
+  serve.onPrompt = () => { serve.busy(); serve.reply('答到一半'); };
+  const turn = session.send('长任务').catch(() => {});
+  await until(() => serve.promptCount === 1, '已提交');
+  serve.emit('exit', new Error('CodeAgent serve 已退出'));
+  await until(() => session.runtime.connection === 'connected' && !session.active, '已重连', 5000);
+  await turn;
+  assert.equal(serve.promptCount, 1, '不自动重发');
+  serve.onPrompt = () => { serve.busy(); serve.reply('接上了'); serve.idle(); };
+  assert.equal(session.runtime.submission.status, 'unknown', '上一轮如实标结果不明');
+  // 用户核对过（界面上的「已核对」），就能接着发。
+  session.reviewUnknownSubmission(session.runtime.submission.id, session.runtime.epoch);
+  await session.send('继续').catch(error => assert.fail(error.message));
+  await until(() => serve.promptCount === 2, '新一句发出');
+});
+
+test('S-09：结果不明且已重新连上：出现「已核对，继续」，点它发 review-submission；执行中不出现', async () => {
+  const { createCodexNativeControls } = require('../renderer/codex-native-controls');
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.handlers = {}; this.attrs = {}; }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    append(...children) { for (const c of children) { c.parent = this; this.children.push(c); } }
+    insertBefore(child, next) { child.parent = this; const i = this.children.indexOf(next); this.children.splice(i < 0 ? this.children.length : i, 0, child); }
+    addEventListener(type, fn) { this.handlers[type] = fn; }
+    querySelectorAll() { return this.children.filter(c => c.tag === 'button'); }
+    get childElementCount() { return this.children.length; }
+    get lastElementChild() { return this.children.at(-1); }
+    remove() { this.parent.children.splice(this.parent.children.indexOf(this), 1); }
+  }
+  const calls = [];
+  const controls = createCodexNativeControls({ sessionId: 'fixture', document: { createElement: tag => new Element(tag) },
+    invoke: async (channel, payload) => { calls.push([channel, payload]); return { ok: true }; }, openBackstage: async () => {} });
+  const runtime = { connection: 'connected', state: 'idle', epoch: 3, submission: { id: 'sub-1', status: 'unknown', error: 'serve 退出，结果不明' } };
+  controls.update({ runtimeBackend: 'acp', codeagentRunMode: 'serve', nativeRuntime: runtime });
+  const review = controls.element.children[0].children.find(e => e.tag === 'button' && e.textContent === '已核对，继续');
+  assert.ok(review, '出现「已核对，继续」');
+  await review.handlers.click();
+  assert.deepEqual(calls, [['codex:native-action', { sessionId: 'fixture', action: 'review-submission', submissionId: 'sub-1', epoch: 3 }]]);
+  controls.update({ runtimeBackend: 'acp', codeagentRunMode: 'serve', nativeRuntime: { ...runtime, state: 'running', epoch: 4 } });
+  assert.ok(!controls.element.children[0].children.some(e => e.textContent === '已核对，继续'), '执行中不出现');
+});

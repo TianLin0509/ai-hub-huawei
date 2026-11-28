@@ -230,12 +230,16 @@ function slimFeedback({ info = {}, description = '', contact = '', logsDir, data
   const where = [ctx.view ? `页面「${ctx.view}」` : '', ctx.kind ? (VIEW_NAMES[String(ctx.kind).replace(/-resume$/, '')] || `${ctx.kind} 会话`) : ''].filter(Boolean).join('，');
   const life = lifecycleSummary({ dataDir, fsModule });
   const upd = updateSummary({ dataDir, fsModule });
+  // 公司网页登录体检（R60）：记录不是报错行，下面的关键错误筛不到，单独摘一行。
+  let webLogin = '';
+  try { webLogin = require('./company-forum/cookie-health').feedbackSummary({ dataDir, now, fsModule }); } catch { webLogin = ''; }
   const state = [
     where ? `- 出问题时在：${where}` : '',
     info.runtime ? `- 运行快照：${String(info.runtime).slice(0, 400)}` : '',
     info.mcpDiagnostics ? `- MCP：${String(info.mcpDiagnostics).replace(/\s+/g, ' ').slice(0, 200)}` : '',
     life ? `- ${life}` : '',
     upd ? `- 上次一键更新：${upd}` : '',
+    webLogin ? `- 网页登录体检：${webLogin.slice(0, 400)}` : '',
   ].filter(Boolean);
   if (info.mcpDiagnostics) items.push({ name: '本会话 MCP 诊断', detail: String(info.mcpDiagnostics) });
   if (state.length) items.push({ name: '当时的状态', detail: '页面/会话类型、运行快照、最近启动与更新结果' });

@@ -55,6 +55,52 @@ const AGY_DIALOG_BLOCKERS = [/Choose your color scheme/i, /Terms of Service & Da
 
 const CODEAGENT_DIALOG_BLOCKERS = [/版本更新提醒/, /Quick safety check/i, /Confirm Enter\s*\|/i];
 
+// CodeAgent 顶部公告横幅（2026-11-28 黄区实录：「★ 公告 ｜ 📢📢 预告同步：CodeAgent 桌面版正在最后打磨中， Close(Alt+X)」）。
+// 横幅文字在一行里滚动、不停重画，终端尾部和整屏文字一直在变，「画面稳定」永远等不到，输入框早已就绪也判成未就绪。
+// 它不挡输入：稳定判断时把它当成可忽略的一行，不去按 Alt+X 关它（那是用户界面上的操作）。
+const CODEAGENT_ANNOUNCEMENT = /★\s*公告|Close\(Alt\+X\)/;
+// 整屏文字（逐行）里去掉公告横幅那一行，供「画面是否稳定」比较。
+function withoutAnnouncement(lines) {
+  return (Array.isArray(lines) ? lines : String(lines || '').split(/\r?\n/)).filter(line => !CODEAGENT_ANNOUNCEMENT.test(line));
+}
+// 原始 PTY 字节流里去掉「公告横幅那一行」的重画（只剔这一行，其余输出照常参与稳定判断）。
+// 横幅行号：找公告字样（含滚动残片里常见的 📢 / 预告同步）前面最近一次光标定位 ESC[行;列H（同一行内、400 字以内）。
+// 认不出行号就原样返回——宁可照旧判未就绪，也不放过横幅之外的真实输出（Codex 审查 P1：只比输入框附近会漏掉之后的 MCP 连接输出）。
+const ANNOUNCEMENT_PIECE = /★\s*公告|Close\(Alt\+X\)|📢|预告同步/g;
+function bannerRow(raw) {
+  const rows = new Map();
+  for (const hit of raw.matchAll(ANNOUNCEMENT_PIECE)) {
+    const before = raw.slice(Math.max(0, hit.index - 400), hit.index);
+    const moves = [...before.matchAll(/\x1b\[(\d+)(?:;\d+)?[Hf]/g)];
+    const last = moves.at(-1);
+    if (!last || /\n/.test(before.slice(last.index))) continue;
+    rows.set(last[1], (rows.get(last[1]) || 0) + 1);
+  }
+  let best = null, n = 0;
+  for (const [row, count] of rows) if (count > n) { best = row; n = count; }
+  return best;
+}
+// 一段写入去掉颜色 / 清行后的可见文字，空白压成一个空格。
+const visibleText = segment => segment.replace(/\x1b\[[0-9;:]*[A-Za-z]/g, '').replace(/\s+/g, ' ').trim();
+function stripAnnouncementWrites(raw) {
+  raw = String(raw || '');
+  if (!CODEAGENT_ANNOUNCEMENT.test(raw.slice(-50000))) return raw;
+  const row = bannerRow(raw.slice(-50000));
+  if (!row) return raw;
+  // 横幅那一行上的每一段写入（定位到该行之后、直到下一个非颜色 / 非清行的控制序列为止）。
+  const write = new RegExp(`\\x1b\\[${row}(?:;\\d+)?[Hf](?:[^\\x1b\\n]|\\x1b\\[[0-9;:]*[mK])*`, 'g');
+  // 已见的公告原文：带公告标记的那些写入的可见文字。滚动会把首尾接起来，所以再拼一遍比对。
+  const known = [...raw.matchAll(write)].map(m => visibleText(m[0])).filter(text => { ANNOUNCEMENT_PIECE.lastIndex = 0; return ANNOUNCEMENT_PIECE.test(text); });
+  const isBanner = text => {
+    if (!text) return true; // 纯空白（清格子），不算真实输出
+    ANNOUNCEMENT_PIECE.lastIndex = 0;
+    if (ANNOUNCEMENT_PIECE.test(text)) return true;
+    return known.some(k => (k + ' ' + k).includes(text));
+  };
+  // 只剔除能对上公告原文的写入；同一行后来被真实输出复用（例如公告关掉后写 Connecting MCP）的照常保留（审查第二轮）。
+  return raw.replace(write, segment => (isBanner(visibleText(segment)) ? '' : segment));
+}
+
 const BLOCKERS = {
   gemini: [/not signed in/i, /Select login method/i, /sign in to continue/i, /Do you trust the contents of this project/i, /esc to dismiss/i, ...AGY_DIALOG_BLOCKERS, ...CHOICE_DIALOG_BLOCKERS],
   claude: [...CHOICE_DIALOG_BLOCKERS],
@@ -126,7 +172,8 @@ function isReady(sessionId, kind, buf, options = {}) {
   if (_onceTrue.has(sessionId)) return true;
   const need = MARKERS[kind];
   if (!need) return true; // 未注册 kind（如 powershell）默认 ready
-  buf = terminalText(buf);
+  const raw = String(buf || '');
+  buf = terminalText(raw);
   const blockers = BLOCKERS[kind] || [];
   // 2026-09-08：PTY 是**追加**的字节流，清屏只是一个控制序列 —— 早先那句
   // `Booting MCP server` / `esc to interrupt` 会一直留在 buffer 里。原来按
@@ -156,7 +203,8 @@ function isReady(sessionId, kind, buf, options = {}) {
   }
   // 稳定 = 画面末尾的文字不再变化。TUI 空闲时也会重画同一屏（光标闪烁、同步刷新），
   // 字节长度一直在涨，用长度判稳定对 Claude / Codex 永远不成立。
-  const signature = buf.slice(-240).replace(/\s+/g, ' ');
+  // CodeAgent 显示着公告横幅时，尾部是横幅那一行的滚动重画：签名前只剔掉这一行的重画，其余输出（MCP 连接等）照常算变化。
+  const signature = (kind === 'codeagent' ? terminalText(stripAnnouncementWrites(raw)) : buf).slice(-240).replace(/\s+/g, ' ');
   // 2026-10-09：稳定窗口原来从「第一次来问」才开始计时，CLI 早已安静几秒也要再干等
   //   1.5s（新会话第一条消息实测点发送后 1541ms 才开始写）。调用方给出 PTY 最后一次
   //   输出的时刻：那之后没有任何字节进来，画面必然没变，这段时间同样算稳定。
@@ -238,4 +286,7 @@ module.exports = {
   STALEABLE_BLOCKERS,
   MIN_BUF_LEN,
   STABLE_MS,
+  CODEAGENT_ANNOUNCEMENT,
+  withoutAnnouncement,
+  stripAnnouncementWrites,
 };

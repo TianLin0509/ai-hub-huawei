@@ -1,9 +1,11 @@
 'use strict';
-const {resolveCommand,cliEnv,runCli}=require('./antigravity-config');
+const {resolveCommand,cliEnv,runCli,LOGIN_REQUIRED}=require('./antigravity-config');
 const crypto=require('node:crypto');
 // `agy models` starts a full language server and refreshes OAuth (5-15 s). The
 // new-session dialog asks on open and again on submit, so share one call.
-const SUCCESS_TTL_MS=10*60*1000,FAILURE_TTL_MS=60*1000;
+// Not signed in: hold the answer 30 minutes instead of re-running every minute (2026-11-28);
+// a pending explicit login passes force and is never held back.
+const SUCCESS_TTL_MS=10*60*1000,FAILURE_TTL_MS=60*1000,LOGIN_REQUIRED_TTL_MS=30*60*1000;
 const cached=new Map(),inflight=new Map();
 const NAMESPACE_ENV=/^(?:HOME|USERPROFILE|APPDATA|LOCALAPPDATA|CLAUDE_HUB_HOME_DIR|AI_HUB_ANTIGRAVITY_COMMAND|AI_HUB_ANTIGRAVITY_HOME|AI_HUB_ANTIGRAVITY_PROFILE|SSH_TTY|SSH_CLIENT|SSH_CONNECTION|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_STATE_HOME|XDG_RUNTIME_DIR|(?:AGY|ANTIGRAVITY|GEMINI|GOOGLE)_.+)$/i;
 function namespaceKey({profileId='default',home='',authScope='',env}){
@@ -26,10 +28,14 @@ async function fetchModelCatalog({env,runImpl}){
   if(env.CLAUDE_HUB_HOME_DIR&&!env.AI_HUB_ANTIGRAVITY_COMMAND)return {ok:false,models:[],error:'隔离 Hub 不读取真实 Antigravity 账号'};
   try{
     const r=await runImpl(resolveCommand(env),['models'],env,30000),models=parseModels(r.stdout);
-    const loginRequired=/please sign in|not signed in|sign in to view|not logged in/i.test(r.stdout+'\n'+r.stderr);
+    const loginRequired=LOGIN_REQUIRED.test(r.stdout+'\n'+r.stderr);
     if(r.code!==0||!models.length)return {ok:false,models:[],loginRequired,error:loginRequired?'请先完成 Antigravity Google 登录':'未收到有效的 Antigravity 模型清单'};
     return {ok:true,models,source:'agy models',observedAt:Date.now()};
-  }catch(error){return {ok:false,models:[],error:error.message};}
+  }catch(error){
+    // Killed while waiting for an OAuth callback (no-op rundll32): still "not signed in".
+    const loginRequired=LOGIN_REQUIRED.test(String(error?.stdout||'')+'\n'+String(error?.stderr||''));
+    return {ok:false,models:[],loginRequired,error:loginRequired?'请先完成 Antigravity Google 登录':error.message};
+  }
 }
 // account-adapters' gemini check passes its own default runner (plain execFile of
 // agy.exe), which flashes a Windows Terminal window from Electron; swap that one
@@ -41,7 +47,7 @@ function readModelCatalog({env=process.env,runImpl=runCli,force=false,now=Date.n
   try {effectiveEnv=cliEnv(env);key=namespaceKey({profileId,home,authScope,env:effectiveEnv});}
   catch(error){return Promise.resolve({ok:false,models:[],error:error.message});}
   const entry=cached.get(key);
-  if(!force&&entry&&now()-entry.at<(entry.value.ok?SUCCESS_TTL_MS:FAILURE_TTL_MS))return Promise.resolve(entry.value);
+  if(!force&&entry&&now()-entry.at<(entry.value.ok?SUCCESS_TTL_MS:entry.value.loginRequired?LOGIN_REQUIRED_TTL_MS:FAILURE_TTL_MS))return Promise.resolve(entry.value);
   if(inflight.has(key))return inflight.get(key);
   const task=fetchModelCatalog({env:effectiveEnv,runImpl:backgroundRunner(runImpl)}).then(value=>{
     if(inflight.get(key)===task)cached.set(key,{at:now(),value});return value;

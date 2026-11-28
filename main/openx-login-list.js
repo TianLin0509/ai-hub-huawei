@@ -12,11 +12,16 @@ const { findEdge } = require('./edge-headless');
 const PAGE_SIZE = 100;
 const MAX_PAGES = 3;
 const DETAIL_COUNT = 8;
+// 组件版本另取详情的上限（同一轮正在找的组件版本名 / 指定 id）。
+const MAX_WANTED = 8;
 // 页面里点一次顶栏「登录」前先等这么久（下载页允许匿名浏览、没自动跳单点登录时；与下载记账同一做法）。
 const CLICK_LOGIN_AFTER_MS = 4000;
 
-function buildLoginListScript({ apiPath, projectId, pageSize = PAGE_SIZE, maxPages = MAX_PAGES, detailCount = DETAIL_COUNT, clickLoginAfterMs = CLICK_LOGIN_AFTER_MS } = {}) {
-  const cfg = JSON.stringify({ apiPath: String(apiPath || ''), projectId: Number(projectId) || 0, pageSize, maxPages, detailCount, clickLoginAfterMs });
+// want：这一轮正在找的组件版本名（如 ppt-doctor-2.0.7，已去掉开头的 v）；detailIds：指定要取详情的版本 id。
+function buildLoginListScript({ apiPath, projectId, pageSize = PAGE_SIZE, maxPages = MAX_PAGES, detailCount = DETAIL_COUNT, clickLoginAfterMs = CLICK_LOGIN_AFTER_MS, want = [], detailIds = [] } = {}) {
+  const wants = (Array.isArray(want) ? want : []).map(w => String(w || '').trim().replace(/^v/i, '').toLowerCase()).filter(Boolean).slice(0, MAX_WANTED);
+  const ids = (Array.isArray(detailIds) ? detailIds : []).map(String).filter(Boolean).slice(0, MAX_WANTED);
+  const cfg = JSON.stringify({ apiPath: String(apiPath || ''), projectId: Number(projectId) || 0, pageSize, maxPages, detailCount, clickLoginAfterMs, wants, ids, maxWanted: MAX_WANTED });
   return `(async () => {
     const cfg = ${cfg};
     let token = '';
@@ -59,7 +64,11 @@ function buildLoginListScript({ apiPath, projectId, pageSize = PAGE_SIZE, maxPag
     const records = [data.records, ...rest].flat().filter(x => x && x.id != null).map(trim);
     // 最近几个程序版本（版本名以数字版本号开头，不含 member-*）的附件列表；by_id 匿名可读时这些是多取的，被收紧时靠它找清单和更新包。
     const apps = records.filter(x => /^v?\\d+\\.\\d+\\.\\d+(?:\\s|$)/i.test(x.version.trim())).slice(0, cfg.detailCount);
-    const details = (await Promise.all(apps.map(x => get(cfg.apiPath + 'by_id?id=' + encodeURIComponent(x.id)).then(r => {
+    // 正在找的组件版本（版本名相同，或「<版本名> 后缀」），以及指定 id 的版本，也一起取详情（不重复取）。
+    const norm = v => String(v || '').trim().replace(/^v/i, '').toLowerCase();
+    const wanted = records.filter(x => !apps.includes(x) && (cfg.ids.includes(String(x.id)) || cfg.wants.some(w => norm(x.version) === w || norm(x.version).startsWith(w + ' '))));
+    const pick = apps.concat(wanted.slice(0, cfg.maxWanted));
+    const details = (await Promise.all(pick.map(x => get(cfg.apiPath + 'by_id?id=' + encodeURIComponent(x.id)).then(r => {
       if (!good(r)) return null;
       const d = r.body.data;
       const pkgs = Array.isArray(d.binaryPackages) ? d.binaryPackages : [];
@@ -85,7 +94,7 @@ function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); 
 // 返回注入给 openx-source.setLoginLister 的函数：({ projectId, timeoutMs }) → { ok, records, details, name } 或 { ok:false, reason, permanent }。
 function createOpenxLoginLister({ env = process.env, logger = console, runInEdge = capture.runInEdge, findEdgeFn = findEdge,
   pageUrl = () => openxSource.downloadPageUrl(), apiUrl = openxConfig.api } = {}) {
-  return async ({ projectId = openxSource.PROJECT_ID, timeoutMs = openxSource.LOGIN_BUDGET_MS } = {}) => {
+  return async ({ projectId = openxSource.PROJECT_ID, timeoutMs = openxSource.LOGIN_BUDGET_MS, want = [], detailIds = [] } = {}) => {
     if (!openxSource.active(env)) return { ok: false, reason: '不是公司版，不借 Edge 登录', permanent: true };
     if (!findEdgeFn(env)) return { ok: false, reason: '本机没有找到 Edge 浏览器', permanent: true };
     const url = String(pageUrl() || '');
@@ -98,7 +107,7 @@ function createOpenxLoginLister({ env = process.env, logger = console, runInEdge
     const startedAt = Date.now();
     let r;
     try {
-      r = await runInEdge({ url, readyUrl: new RegExp('^https://' + escapeRe(host) + '/', 'i'), script: buildLoginListScript({ apiPath, projectId }),
+      r = await runInEdge({ url, readyUrl: new RegExp('^https://' + escapeRe(host) + '/', 'i'), script: buildLoginListScript({ apiPath, projectId, want, detailIds }),
         accept: v => !!v && !v.needsLogin, signal, timeoutMs: Math.max(1000, budget - 2000), loginGraceMs: Math.max(1000, budget - 3000),
         tag: 'hub-edge-openx-list', logger, env });
     } catch (error) { r = { ok: false, error: error && error.message ? error.message : String(error) }; }

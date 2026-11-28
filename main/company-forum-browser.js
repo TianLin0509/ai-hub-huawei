@@ -66,8 +66,10 @@ const DETAIL_SCRIPT = `(() => {
   return { finalUrl: location.href, title: document.title, textLength: body.length, text: text.slice(0, 8000) };
 })()`;
 
-function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, partition = 'persist:company-forum', logger = console } = {}) {
+function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, partition = 'persist:company-forum', logger = console, loginCheck = null } = {}) {
   let owner = null, loginWin = null, loginSite = '', busy = Promise.resolve();
+  // 登录体检（core/company-forum/cookie-health.js）：只记 cookie 个数与剩余有效期；不等它、出错也不影响取数和登录。
+  const checkLogin = (stage, url, opts) => { try { if (loginCheck && session) void loginCheck.record(session.fromPartition(partition), stage, url, opts); } catch { /* 体检不影响主流程 */ } };
   function ensureOwner() {
     if (!BaseWindow) return null;
     if (owner && !owner.isDestroyed?.()) return owner;
@@ -135,7 +137,7 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
   function serial(fn) { const p = busy.then(fn, fn); busy = p.catch(() => {}); return p; }
 
   // loginGraceMs：单点登录常先显示几秒登录页再自动跳回（公司考勤约 5–10 秒），登录页要连续停留这么久才判「需要登录」。
-  function capture({ url, clickText = '', clickUnless = null, sections = [], api = null, maxMs = 25000, loginGraceMs = 0 }) {
+  function capture({ url, base = '', clickText = '', clickUnless = null, sections = [], api = null, maxMs = 25000, loginGraceMs = 0 }) {
     return serial(async () => {
       const win = makeWindow();
       const t = tap(win, api);
@@ -150,7 +152,8 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
           while (onLogin(page) && Date.now() - since < loginGraceMs) { await delay(2000); page = await run(win, collectScript(sections)) || page; }
           if (!onLogin(page)) { await settle(win, { minMs: 1000, maxMs }); page = await run(win, collectScript(sections)) || page; }
         }
-        if (onLogin(page)) return { ...page, needsLogin: true, json: [] };
+        // 论坛经统一登录入口进站时 url 是登录入口、base 才是目标站：体检按目标站分组（审查 P2）。
+        if (onLogin(page)) { checkLogin('needs-login', base || url); return { ...page, needsLogin: true, json: [] }; }
         const haveData = clickUnless && t.out.some(r => clickUnless.test(String(r.url)));
         if (clickText && !haveData && await run(win, clickScript(clickText))) { await settle(win, { minMs: 2000, maxMs: 15000 }); page = await run(win, collectScript(sections)) || page; }
         await delay(300); // 最后几个接口的响应体
@@ -214,6 +217,7 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
         if (signal?.aborted) throw CANCEL;
         if (!result.ok) {
           result.needsLogin = !!loginSince || lastError === '页面还没登录好';
+          if (result.needsLogin) checkLogin('needs-login', url);
           result.error = result.needsLogin ? `需要登录（停在 ${result.finalHost || '登录页'}）` : (lastError || `页面没有打开（停在 ${result.finalHost || '空白页'}）`);
         }
       } catch (error) {
@@ -260,7 +264,7 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
         if (win.isDestroyed() || done) return;
         if (!fine) { okSince = 0; return; }
         if (!okSince) okSince = Date.now();
-        if (Date.now() - okSince >= 3000) finish(true);
+        if (Date.now() - okSince >= 3000) { checkLogin('login-ok', base || url, { flush: true }); finish(true); }
       }
       void load(win, url).catch(error => { logger.warn?.('[company-forum] login load', error.message); finish(false, '登录页面没打开：' + error.message); });
     });

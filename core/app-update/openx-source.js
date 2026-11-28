@@ -59,7 +59,7 @@ let state = freshState();
 function freshState() {
   return { unreachableUntil: 0, list: null, listAt: 0, listing: null, head: null, headTotal: 0, headAt: 0, heading: null, okAt: 0, listPartialReason: '',
     projectName: '', details: new Map(), bad: new Set(), lastReason: '', indexMode: false, indexId: indexOverrideFromEnv() ?? INDEX_RELEASE_ID, localVersion: '',
-    loginMode: false, loginTry: null, loginInfo: null };
+    loginMode: false, loginTry: null, loginInfo: null, loginWants: new Set(), detailTries: new Map() };
 }
 
 // R63（2026-11-28）：第三条路——版本索引读不到（或过期）、匿名列表又要求登录时，借本人 Edge 的登录查一次版本列表。
@@ -82,8 +82,11 @@ function listViaLogin({ projectId, onLogin, now = Date.now }) {
   const lister = loginLister;
   const startedAt = now();
   const entry = { at: startedAt, settled: false, ok: false, permanent: false, promise: null };
+  // P0（2026-11-28 黄区实测）：内源 by_id 也要求登录后，组件（ppt-doctor-*、room-runtime-* 等）的附件详情匿名拿不到。
+  // 同一轮里正在找的组件版本名（find 记下的 want）一并交给页面脚本，在同一个无头 Edge 会话里顺带取它们的详情。
+  const want = [...state.loginWants].slice(0, 8);
   entry.promise = Promise.resolve()
-    .then(() => lister({ projectId, timeoutMs: LOGIN_BUDGET_MS }))
+    .then(() => lister({ projectId, timeoutMs: LOGIN_BUDGET_MS, want }))
     .then(normalizeLoginResult, error => ({ ok: false, reason: errText(error) || '借 Edge 登录查询出错' }))
     .then(r => {
       entry.settled = true; entry.at = now(); entry.ok = !!r.ok; entry.permanent = !r.ok && !!r.permanent;
@@ -110,6 +113,29 @@ function useLoginList(r) {
     state.details.set(rec ? rec.id : d.id, packagesOf(d, rec || d));
   }
   return { records: r.records, total: r.records.length, login: true };
+}
+// 已有的登录结果里没有这一版的详情（例如 10 分钟内先查过程序更新、再装组件），匿名 by_id 又要求登录：
+// 再借一次 Edge 登录只取这一版的详情。同一个版本同一时刻只开一次，结果按 LOGIN_REUSE_MS 复用（没取到的也是，免得反复开 Edge）。
+function detailViaLogin({ projectId, rec, now = Date.now }) {
+  const key = String(rec.id), t = state.detailTries.get(key);
+  if (t && (!t.settled || now() - t.at <= LOGIN_REUSE_MS)) return t.promise;
+  if (!loginLister) return Promise.resolve(null);
+  const lister = loginLister;
+  const entry = { at: now(), settled: false, promise: null };
+  entry.promise = Promise.resolve()
+    .then(() => lister({ projectId, timeoutMs: LOGIN_BUDGET_MS, want: [normVersion(rec.version)], detailIds: [rec.id] }))
+    .then(normalizeLoginResult, error => ({ ok: false, reason: errText(error) || '借 Edge 登录查询出错' }))
+    .then(r => {
+      entry.settled = true; entry.at = now();
+      if (!r.ok) return null;
+      const d = r.details.find(x => String(x.id) === key);
+      if (!d) return null;
+      const packages = packagesOf(d, rec);
+      state.details.set(rec.id, packages);
+      return packages;
+    });
+  state.detailTries.set(key, entry);
+  return entry.promise;
 }
 function loginFailedError(base, reason) {
   const error = new Error(`${errText(base)}；借 Edge 登录也没查到：${reason}`);
@@ -252,13 +278,14 @@ async function find({ file, version, release, strict = false, fetchImpl, signal,
     markDown(error, now);
     return miss(failText(error));
   };
+  const want = normVersion(release || version);
+  if (want) state.loginWants.add(want);   // 要借 Edge 登录查列表时，在同一个会话里顺带取这一版的详情
   let records;
   try { records = await loadHead({ fetchImpl, api, projectId, timeoutMs: listTimeoutMs, now }); } catch (error) { return unreachable(error); }
 
   // 版本名对得上的先查，其余按发布时间从新到旧；最多再查 MAX_DETAIL_QUERIES 个没缓存过的版本。
   // release（r24）：组件在内源上的专属版本名（如 room-runtime-2.1.0，见 releaseName），优先于组件自身的版本号；
   // 「<版本名> 后缀」（如 r21 的「v5.6.34 更新包」、日后重发）也算对得上。
-  const want = normVersion(release || version);
   const same = r => { const n = normVersion(r.version); return n === want || n.startsWith(want + ' '); };
   const time = r => Date.parse(r.releaseTime || '') || 0;
   // 成员版程序包（r56，2026-11-19）：内源上以 member-v<版本> 单独成版（文件名与公开版相同、内容不同），
@@ -293,7 +320,12 @@ async function find({ file, version, release, strict = false, fetchImpl, signal,
       } catch (error) {
         // 列表能取到说明内源是通的：单个版本详情超时或出错只放弃这一次查找，不把整个内源标成连不上（r44 审查）。
         if (signal && signal.aborted) return miss('已取消');
-        return miss(`内源版本详情没取到：${error && error.message ? error.message : error}`);
+        // P0：by_id 要求登录时借 Edge 登录取这一版的详情（组件首装与更新；程序版本的详情 R63 已在列表那一趟取过）。
+        if (isAuthError(error) && loginLister) packages = await detailViaLogin({ projectId, rec, now }).catch(() => null);
+        if (!packages) {
+          const tail = isAuthError(error) && loginLister ? '；借 Edge 登录也没取到这一版的详情' : '';
+          return miss(`内源版本详情没取到：${error && error.message ? error.message : error}${tail}`);
+        }
       }
     }
     const hit = packages.find(p => p && String(p.originalFileName || '').toLowerCase() === key && safeUrl(p.url));
@@ -504,6 +536,7 @@ function diagnostics({ now = Date.now } = {}) {
 function clearDown({ relogin = false } = {}) {
   state.unreachableUntil = 0; state.bad.clear(); state.listAt = 0; state.headAt = 0; state.okAt = 0;
   if (relogin && state.loginTry && state.loginTry.settled) state.loginTry = null;
+  if (relogin) for (const [k, t] of state.detailTries) if (t.settled) state.detailTries.delete(k);
 }
 
 // 内源现在的状态：up（10 分钟内连上过）/ down（5 分钟内连不上过）/ unknown（还没探测）。
@@ -904,4 +937,4 @@ function _reset({ indexId, localVersion } = {}) {
   verifiedReleases.clear();
 }
 
-module.exports = { setLoginLister, LOGIN_BUDGET_MS, LOGIN_REUSE_MS, isAuthError, parseIndex, INDEX_MARK, INDEX_RELEASE_ID, indexIdFromEnv, indexOverrideFromEnv, loadIndex, setLocalVersion, AUTH_TEXT, active, userReason, NETWORK_HINT, findLatestFull, listAppReleases, RELEASES_MAX, fetchManifest, MANIFEST_BUDGET_MS, MANUAL_MANIFEST_BUDGET_MS, OFFLINE_TEXT, OFFLINE_PROXY_TEXT, slowText, isOfflineError, isProxyError, diagnostics, clearDown, EDITION_ON, releaseName, memberReleaseName, isMemberRelease, find, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, projectName, downloadPageUrl, resolveDownloadPageUrl, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS, LIST_TIMEOUT_MS, LIST_PAGE_SIZE };
+module.exports = { isTimeoutError, setLoginLister, LOGIN_BUDGET_MS, LOGIN_REUSE_MS, isAuthError, parseIndex, INDEX_MARK, INDEX_RELEASE_ID, indexIdFromEnv, indexOverrideFromEnv, loadIndex, setLocalVersion, AUTH_TEXT, active, userReason, NETWORK_HINT, findLatestFull, listAppReleases, RELEASES_MAX, fetchManifest, MANIFEST_BUDGET_MS, MANUAL_MANIFEST_BUDGET_MS, OFFLINE_TEXT, OFFLINE_PROXY_TEXT, slowText, isOfflineError, isProxyError, diagnostics, clearDown, EDITION_ON, releaseName, memberReleaseName, isMemberRelease, find, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, projectName, downloadPageUrl, resolveDownloadPageUrl, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS, LIST_TIMEOUT_MS, LIST_PAGE_SIZE };

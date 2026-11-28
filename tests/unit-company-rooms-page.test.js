@@ -33,9 +33,9 @@ function rig(t) {
   return { root, now, assistant, rooms, write };
 }
 
-test('signed room adapter is version 2.1.7 and the shipped payload matches its hash', () => {
+test('signed room adapter is version 2.1.8 and the shipped payload matches its hash', () => {
   const manifest = component.manifest(path.join(bundle, 'control.json'));
-  assert.equal(manifest.version, '2.1.7');
+  assert.equal(manifest.version, '2.1.8');
   assert.ok(component.verified(path.join(bundle, manifest.code.file), manifest.code));
 });
 
@@ -151,6 +151,29 @@ test('空计划或明确登录失效不可启动，重启后的未检查状态�
   assert.equal(roomReadiness({ 优先会议室: ['会议室 A'] }, { loginState: true }).ready, true);
   assert.equal(roomReadiness({ 优先会议室: ['  '] }, { loginState: true }).ready, false);
   assert.equal(roomReadiness({ 优先会议室: ['会议室 A'] }, { loginState: true, loginNeeded: true }).ready, false);
+});
+
+test('「从页面读取」停在登录页时，旁边给「登录」按钮和不必开免密的说明；别的错误只给重新读取', () => {
+  const { roomPickerHtml } = require('../renderer/company-rooms-page');
+  // 组件（engine.py wait_for_form）实际回的两种登录类错误
+  for (const error of ['页面停在了登录页', '等了 45 秒仍没看到预定表单（可能登录已失效，或内网/VPN 没连上）']) {
+    const html = roomPickerHtml({ state: 'error', names: [], error });
+    assert.match(html, /data-cr-op="login"/);
+    assert.match(html, /工号密码或扫码/);
+    assert.match(html, /不必开免密/);
+    assert.match(html, /data-cr-op="read-rooms"/);
+  }
+  // 浏览器资料夹被占用的提示里也有「登录」二字，但不是登录问题，不给登录按钮
+  for (const error of ['登录用的浏览器资料夹正被另一个浏览器窗口占用，请关掉它后重试', '找不到可用的浏览器（Edge、Chrome 都没启动成功）：x']) {
+    const html = roomPickerHtml({ state: 'error', names: [], error });
+    assert.doesNotMatch(html, /data-cr-op="login"/);
+    assert.match(html, /data-cr-op="read-rooms"/);
+  }
+  assert.match(roomPickerHtml({ state: 'running' }), /正在读取/);
+  const done = roomPickerHtml({ state: 'done', names: ['A101', 'B<2>'] }, ['A101']);
+  assert.match(done, /data-cr-found="A101" disabled/);
+  assert.match(done, /B&lt;2&gt;/);
+  assert.equal(roomPickerHtml({}), '');
 });
 
 test('抢订计划一句话说明：写清什么时候抢、抢哪天哪个时段、按什么顺序', () => {

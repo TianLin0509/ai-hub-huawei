@@ -310,7 +310,9 @@ function _resetMembers() {
   // 公司版在检测前会把 CodeAgent 当作已安装；等真实结果再选默认成员。
   // 等待期间的手动选人，以及关掉后重新打开的成员，都不能被旧回调覆盖。
   _membersReady = Promise.all([require('./codeagent-preference').refresh(ipcRenderer), _loadCodeAgentModels()]).then(() => {
-    if (load !== _membersLoad || _membersEdited) return;
+    if (load !== _membersLoad) return;
+    // 用户已经动过成员（加人、换 AI）：不改他的选择，只把还空着的模型下拉补上。
+    if (_membersEdited) { _refillEmptyModelSelects(); return; }
     _groupSlots = _cloneSlots(_defaultGroupMembers());
     _renderSlots();
     _paintMembersNote();
@@ -324,6 +326,12 @@ function _resetMembers() {
 // 这里同样向主进程要一次个人账号的可用模型（不可用的不列），默认选中的就是可用模型，建群时不再逐个弹确认。
 async function _loadCodeAgentModels() {
   const { modelOptionsFor, setRuntimeModelOptions } = require('../core/model-options.js');
+  const wc = window.WorkspaceController;
+  // 公司版 CodeAgent 的成员下拉读启动中心同一份模型卡清单（公司模型 / 沿用本机 CLI 配置），没打开过启动中心时它是空的：先读一次。
+  if (wc?.resolveSessionTuning && wc?.loadModelCatalog) {
+    if (!(wc.resolveSessionTuning('codeagent')?.modelOptions || []).length) { try { await wc.loadModelCatalog('codeagent'); } catch { /* 读不到下面再试 */ } }
+    if ((wc.resolveSessionTuning('codeagent')?.modelOptions || []).length) return true;
+  }
   if (modelOptionsFor('codeagent').length) return true;
   try {
     const result = await ipcRenderer.invoke('codeagent:models', { account: 'personal' });
@@ -337,14 +345,17 @@ async function _loadCodeAgentModels() {
 function _retryCodeAgentModels(load, left = 6) {
   setTimeout(async () => {
     if (load !== _membersLoad || left <= 0) return;
-    const before = require('../core/model-options.js').modelOptionsFor('codeagent').length;
     const ok = await _loadCodeAgentModels();
+    if (load !== _membersLoad) return;
     if (!ok) { _retryCodeAgentModels(load, left - 1); return; }
-    if (before || load !== _membersLoad) return;
-    // 用户已经动过成员时只刷新下拉选项，不改他选的 AI 和顺序。
-    _syncGroupSlotsFromDom({ strict: false });
-    _renderSlots();
+    _refillEmptyModelSelects();
   }, 5000);
+}
+// 只在有下拉还空着时重画：先从界面读回用户已选的成员和 AI，再按新清单重画。
+function _refillEmptyModelSelects() {
+  if (!_modalEl || ![..._modalEl.querySelectorAll('.mcm-model-select')].some(select => !select.options.length)) return;
+  _syncGroupSlotsFromDom({ strict: false });
+  _renderSlots();
 }
 
 function _slotHtml(i, spec, isGroup) {

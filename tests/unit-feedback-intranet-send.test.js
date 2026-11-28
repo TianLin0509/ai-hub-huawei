@@ -155,7 +155,7 @@ test('receiver address is read from the fixed inner-source release and cached; u
   });
   const a = createReceiverAddress({ dataDir: dir, fetchImpl: good.fetchImpl, config: CFG });
   const r = await a.resolve();
-  assert.deepEqual(r, { urls: ['http://10.20.30.41:18767'], from: 'openx', openxReachable: true, reason: '' });
+  assert.deepEqual(r, { urls: ['http://10.20.30.41:18767'], boardReleaseId: 0, from: 'openx', openxReachable: true, reason: '' });
   assert.ok(good.seen.some(u => /by_id\?id=7$/.test(u)), '查的是 feedback-receiver 那个版本');
   assert.ok(!good.seen.some(u => /by_id\?id=1$/.test(u)), '不去翻别的版本');
   assert.deepEqual(JSON.parse(fs.readFileSync(cacheFile(dir), 'utf8')).urls, ['http://10.20.30.41:18767']);

@@ -210,6 +210,11 @@ class CompanyProxyService {
     fs.mkdirSync(path.dirname(this.logPath()), { recursive: true });
     const stateFile = path.join(this.proxy().proxyDir(this.dataDir), 'proxy-state.json');
     const env = { ...process.env, AI_HUB_COMPANY_PROXY_KEY: endpoint.key };
+    // 个人账号目录用 Hub 认定的那一个（AI_HUB_CODEAGENT_CONFIG_DIR / 设置 / 采用的继承值 / 默认 ~/.cac），显式交给反代：
+    // 反代读凭据、首次签名探测起的 CodeAgent 都按 CODEAGENT3_CONFIG_DIR 走，原样继承时会落到用户环境变量或默认 ~/.cac，
+    // 而不是 Hub 会话实际用的目录（2026-11-28 公司真机：隔离实例的签名探测起的 serve 用了真实 ~/.cac）。
+    try { const dir = require('../core/codeagent-config').resolveCodeAgentConfig(process.env).configDir; if (dir) env.CODEAGENT3_CONFIG_DIR = dir; }
+    catch (error) { this.logger.warn?.('[company-proxy] CodeAgent config dir not resolved: ' + error.message); }
     // Hub 认定的 CodeAgent 安装目录（自动发现 / 手选的那份，能跟进 npm 转发入口）交给反代，作为它查找安装目录的第一个候选。
     delete env.AI_HUB_CODEAGENT_INSTALL_DIR;
     try { const dir = require('../core/codeagent-config').codeagentInstallDir(process.env); if (dir) env.AI_HUB_CODEAGENT_INSTALL_DIR = dir; }

@@ -374,7 +374,8 @@ async function launchIsolatedHub({
   if (!Array.isArray(extraArgs) || extraArgs.some(a => typeof a !== 'string' || /^--user-data-dir(?:=|$)/i.test(a))) {
     throw new Error('extraArgs must be strings and must not override --user-data-dir');
   }
-  const args = [entryPath, `--remote-debugging-port=${port}`, ...extraArgs];
+  // 显式指定隔离的 --user-data-dir（与 main-bootstrap 切换的目录一致；2026-11-28 事故后加，防止任何情况下落到默认的生产 userData）。
+  const args = [entryPath, `--remote-debugging-port=${port}`, `--user-data-dir=${path.join(env.CLAUDE_HUB_DATA_DIR, 'electron-userdata')}`, ...extraArgs];
   // 关键：spawn 立即拿 PID，detached:false 让 child 跟随 parent 退出
   const child = spawn(executablePath, args, {
     env,

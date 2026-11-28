@@ -29,6 +29,8 @@ const LINE = {
   offline: '暂时连不上社区，显示的是上次取到的数据，下一小时自动再试',
   paused: '社区收集已暂停',
   error: '暂时取不到社区数据，稍后再看',
+  isolated: '本机网络连不到社区收件机，显示的是上次取到的数据，每小时自动再试',
+  boardReadOnly: '已从公司内源同步全员榜单（只读，当前所在网络暂无法上报你的统计）',
 };
 
 // 心跳里的桌宠是短名（shiba），图片按完整编号存（07-shiba）。
@@ -69,9 +71,14 @@ function viewModel(data, board = 'level') {
   const vMax = Math.max(1, ...versions.map(v => v.n));
   const delta = v => (v == null ? '' : (v >= 0 ? '+' : '') + num(v));
   const host = d.host || null;
+  const boardReadOnly = !!d.boardReadOnly;
+  const line = d.stale
+    ? ((d.isolated ? LINE.isolated : (d.note || LINE[state])) || '')
+    : (boardReadOnly ? LINE.boardReadOnly : d.isolated ? (showData ? LINE.isolated : '') : LINE[state]) || '';
   return {
     state, showData, isHost: !!d.isHost, hasBoards, board: cur.id, hint: cur.hint, total, minK: Number(d.minK) || 5,
-    line: LINE[state] || '', updated: clock(d.at),
+    line,
+    isolated: !!d.isolated, boardReadOnly, updated: clock(d.at),
     nick: (d.me && d.me.nick) || '', nickThumb: me ? me.thumb : '',
     stats: { online: num(d.online), activeNow: num(d.activeNow), today: num(d.today), week: num(d.week), todayDelta: delta(d.todayDelta), weekDelta: delta(d.weekDelta) },
     podium: list.slice(0, 3).map(deco), rows: list.slice(3).map(deco), meRow,
@@ -148,7 +155,8 @@ function boardHtml(vm) {
 
 function meHtml(vm) {
   const me = vm.me;
-  const top = me ? `<div class="cmy-mctop">${petImg(me.thumb, me.nick, 'pet')}<div><div class="nm" data-i18n-skip>${esc(me.nick)}</div><div class="lv">${badge(me.rankN)}<span>Lv.${num(me.lv)}</span> · <span>${esc(me.rankName)}</span></div></div></div>` : '<p class="cmy-empty">第一次同步后显示</p>';
+  const emptyMe = vm.boardReadOnly ? '当前所在网络暂无法上报个人数据（只读模式）' : '第一次同步后显示';
+  const top = me ? `<div class="cmy-mctop">${petImg(me.thumb, me.nick, 'pet')}<div><div class="nm" data-i18n-skip>${esc(me.nick)}</div><div class="lv">${badge(me.rankN)}<span>Lv.${num(me.lv)}</span> · <span>${esc(me.rankName)}</span></div></div></div>` : `<p class="cmy-empty">${emptyMe}</p>`;
   return `<div class="cmy-card cmy-mecard"><h3>我的位置</h3>${top}
       <div class="cmy-ranks">${vm.ranks.map(r => `<div data-cmy-board="${r.id}"><span>${esc(r.name)}</span><b>${r.rank ? `第 ${num(r.rank)} 名` : '未上榜'}</b></div>`).join('')}</div>
       ${vm.beat != null ? `<div class="cmy-beat"><span>等级超过了</span> <b>${num(vm.beat)}</b> <span>位同事（共 ${num(vm.total)} 人）</span></div>` : ''}
@@ -159,6 +167,7 @@ function pageHtml(vm) {
   const head = headHtml(vm);
   if (vm.state === 'outside') return `${head}<div class="cmy-emptybox"><b>社区仅在公司内网可用</b><span>连上公司网络后自动恢复，不影响其他功能。</span></div>`;
   if (vm.state === 'disabled') return `${head}<div class="cmy-emptybox cmy-locked"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span>${esc(OFFLINE_LINE)}</span></div>`;
+  if (!vm.showData && vm.isolated) return `${head}<div class="cmy-emptybox"><b>本机所在网络连不到社区</b><span>本机网络与社区收件机所在的办公网隔离（例如绿区），连不过去；其他功能不受影响，每小时自动再试。</span></div>`;
   if (!vm.showData) return `${head}<div class="cmy-emptybox"><b>暂时没有数据</b><span>${esc(vm.line)}</span></div>`;
   if (!vm.hasBoards) return `${head}${statsHtml(vm)}${hostHtml(vm)}<div class="cmy-emptybox"><b>参与人数不足 ${vm.minK} 人，暂不显示排行榜</b><span>人数够了会自动出现。</span></div>`;
   return `${head}${statsHtml(vm)}${hostHtml(vm)}<div class="cmy-lb">${boardHtml(vm)}${meHtml(vm)}</div>`;

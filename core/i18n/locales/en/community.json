@@ -85,5 +85,10 @@
   "已开启纯离线模式，社区页不可用。可在 设置 › 高级 中关闭": "Offline-only mode is on, so the Community page is unavailable. Turn it off under Settings › Advanced",
   "不想参与：设置 › 高级 › 隐私 › 纯离线模式。": "To opt out: Settings › Advanced › Privacy › Offline-only mode.",
   "社区 Beta · 在线人数与匿名排行榜": "Community Beta · Online count and anonymous leaderboards",
-  "社区 Beta": "Community Beta"
+  "社区 Beta": "Community Beta",
+  "本机网络连不到社区收件机，显示的是上次取到的数据，每小时自动再试": "This network can't reach the community receiver; showing the last data received, will retry every hour",
+  "本机所在网络连不到社区": "This network can't reach the community",
+  "本机网络与社区收件机所在的办公网隔离（例如绿区），连不过去；其他功能不受影响，每小时自动再试。": "This network is isolated from the office network that hosts the community receiver (e.g. the green zone). Other features are unaffected; will retry every hour.",
+  "已从公司内源同步全员榜单（只读，当前所在网络暂无法上报你的统计）": "Synced company-wide leaderboards from OpenX (read-only; this network cannot report your stats yet)",
+  "当前所在网络暂无法上报个人数据（只读模式）": "Cannot report personal stats from this network (read-only mode)"
 }

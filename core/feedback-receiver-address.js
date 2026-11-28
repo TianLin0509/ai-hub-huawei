@@ -46,13 +46,19 @@ function cleanUrl(value) {
   return u.origin;
 }
 function cleanUrls(list) { return [...new Set((Array.isArray(list) ? list : []).map(cleanUrl).filter(Boolean))].slice(0, MAX_URLS); }
+function cleanBoardReleaseId(value) {
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n > 0 && n <= 1e9 ? n : 0;
+}
 
 function readCache(dataDir) {
-  try { const raw = JSON.parse(fs.readFileSync(cacheFile(dataDir), 'utf8')); return { urls: cleanUrls(raw.urls), at: Number(raw.at) || 0 }; }
-  catch { return { urls: [], at: 0 }; }
+  try {
+    const raw = JSON.parse(fs.readFileSync(cacheFile(dataDir), 'utf8'));
+    return { urls: cleanUrls(raw.urls), boardReleaseId: cleanBoardReleaseId(raw.boardReleaseId), at: Number(raw.at) || 0 };
+  } catch { return { urls: [], boardReleaseId: 0, at: 0 }; }
 }
-function writeCache(dataDir, urls, at) {
-  try { writeFileAtomic(fs, cacheFile(dataDir), JSON.stringify({ urls, at }) + '\n'); } catch { /* 存不下就下次再查 */ }
+function writeCache(dataDir, urls, at, boardReleaseId = 0) {
+  try { writeFileAtomic(fs, cacheFile(dataDir), JSON.stringify({ urls, ...(boardReleaseId ? { boardReleaseId } : {}), at }) + '\n'); } catch { /* 存不下就下次再查 */ }
 }
 
 // 失败要说得出是哪一种：超时、被代理拦成网页、HTTP 错误、网络错误（带错误码），设置页和反馈窗口直接显示。
@@ -93,7 +99,14 @@ function createReceiverAddress({ dataDir, fetchImpl, config = openxConfig(), now
 
   async function lookup() {
     const cache = readCache(dataDir);
-    const fallback = (openxReachable, reason) => ({ urls: cache.urls, from: cache.urls.length ? 'cache' : 'none', openxReachable, reason });
+    const defaultBoardId = cleanBoardReleaseId(config && config.boardReleaseId);
+    const fallback = (openxReachable, reason) => ({
+      urls: cache.urls,
+      boardReleaseId: cache.boardReleaseId || defaultBoardId,
+      from: cache.urls.length ? 'cache' : 'none',
+      openxReachable,
+      reason,
+    });
     if (!config || !config.api || !config.projectId || typeof fetchImpl !== 'function') return fallback(false, '没有内源配置');
     const norm = v => String(v || '').trim().toLowerCase();
     const isHit = r => r && r.id != null && (norm(r.version) === RELEASE || norm(r.version).startsWith(RELEASE + ' '));
@@ -107,7 +120,9 @@ function createReceiverAddress({ dataDir, fetchImpl, config = openxConfig(), now
       catch (e) {
         // 审查 P1-3 ②：离线或超时就按连不上处理，不再向同一个站点翻列表（免得等两遍）。
         const ox = require('./app-update/openx-source');
-        if (ox.isOfflineError(e) || ox.isTimeoutError(e) || (e && e.name === 'AbortError')) return fallback(false, `内源连不上：${e && e.message ? e.message : e}`);
+        if (!ox.isAuthError(e) && (ox.isOfflineError(e) || /超时|timeout|abort/i.test(String(e && e.message)) || (e && e.name === 'AbortError'))) {
+          return fallback(false, `内源连不上：${e && e.message ? e.message : e}`);
+        }
         indexError = e && e.message ? e.message : String(e);
       }
     }
@@ -143,10 +158,12 @@ function createReceiverAddress({ dataDir, fetchImpl, config = openxConfig(), now
         const pkgs = detail && detail.data && Array.isArray(detail.data.binaryPackages) ? detail.data.binaryPackages : [];
         const pkg = pkgs.find(p => p && String(p.originalFileName || '').toLowerCase() === FILE && safeFileUrl(p.url, config.fileSite));
         if (!pkg) continue;
-        const urls = cleanUrls((await getJson(fetchImpl, safeFileUrl(pkg.url, config.fileSite), timeoutMs)).urls);
+        const parsed = await getJson(fetchImpl, safeFileUrl(pkg.url, config.fileSite), timeoutMs);
+        const urls = cleanUrls(parsed && parsed.urls);
+        const boardReleaseId = cleanBoardReleaseId(parsed && parsed.boardReleaseId) || defaultBoardId;
         if (!urls.length) continue;
-        writeCache(dataDir, urls, now());
-        return { urls, from: 'openx', openxReachable: true, reason: '' };
+        writeCache(dataDir, urls, now(), boardReleaseId);
+        return { urls, boardReleaseId, from: 'openx', openxReachable: true, reason: '' };
       } catch (e) { return fallback(true, `读收件地址失败：${e.message}`); }
     }
     return fallback(true, '内源上还没有发布收件地址');

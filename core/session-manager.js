@@ -780,7 +780,14 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
     ...(resumeWithoutIdentity ? { reason: 'no-identity', note: '续接异常：这个会话之前没绑定上对话号，按新对话启动' } : {}),
     ...(opts.cwdFellBackFrom ? { cwdFellBack: true } : {}),
   });
-  return { cmd, sessionId, ...pin, requiresMenu: !!requestedModel && !(settingsFile && launchArgs.includes('--settings')),
+  // 要固定的模型就是 CodeAgent 这次启动本来就会用的（配置目录 settings.json 记着的默认）、又没指定线路：不用再开 /model 菜单选同一个。
+  // 2026-11-28 黄区 f09d：新会话日志先记「CLI 记着 GLM-5.2-WX-Auto，不开菜单」，随后仍为同一个模型开菜单，撞上启动公告被判未就绪，首句没发出。
+  let cliStartsWithIt = false;
+  // 只限模型是从账号默认推出来的（用户、组队都没明确指定）：明确指定的照旧开菜单核实一次。
+  const pinnedFromDefault = !opts.fixedModel && !opts.codeagentUserModel && !opts.codeagentModelPick && !require('./codeagent-launch-model').explicitModel(opts);
+  try { const current = require('./codeagent-pool').readSettingsModel(config.configDir); cliStartsWithIt = pinnedFromDefault && !!requestedModel && !opts.codeagentModelProvider && !!current && current.toLowerCase() === String(requestedModel).toLowerCase(); } catch { cliStartsWithIt = false; }
+  return { cmd, sessionId, ...pin, requiresMenu: !!requestedModel && !(settingsFile && launchArgs.includes('--settings')) && !cliStartsWithIt,
+    ...(cliStartsWithIt && !(settingsFile && launchArgs.includes('--settings')) ? { menuSkippedSameAsCli: true } : {}),
     ...(resumeHistoryMissing ? { resumeHistoryMissing: true } : {}), ...(resumeWithoutIdentity ? { resumeWithoutIdentity: true } : {}), ...(marketMcpNotice ? { marketMcpNotice } : {}), model: requestedModel,
     // 按 bypass 档启动：第一次用这个档的配置目录会弹「Bypass Permissions mode」确认框，启动后自动选 Yes（见 _createSession）。
     bypassLaunch: permissionMode === 'bypassPermissions' && launchArgs.includes('--permission-mode'),
