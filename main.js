@@ -4017,6 +4017,19 @@ require('./main/ipc/sidebar-folders-handlers').registerSidebarFoldersIpc(ipcMain
   entityExists: sidebarFolderEntityExists,
   publish: state => sendToRenderer('sidebar-folders:changed', { state }),
 });
+// Manual archive (2026-11-28): no automatic archiving by default; the first read freezes what the old 1/3-day rule had archived.
+const sidebarArchiveStore = require('./core/sidebar-archive').createSidebarArchiveStore({
+  dataDir: getHubDataDir(),
+  legacyItems: () => [
+    ...lastPersistedSessions.map(s => ({ ...s, id: s.hubId || s.id })),
+    ...meetingManager.getAllMeetings().map(m => ({ ...m, _isMeeting: true })),
+  ],
+});
+require('./main/ipc/sidebar-archive-handlers').registerSidebarArchiveIpc(ipcMain, {
+  store: sidebarArchiveStore,
+  publish: state => sendToRenderer('sidebar-archive:changed', { state }),
+});
+void sidebarArchiveStore.prune(sidebarFolderEntityExists).catch(() => {});   // drop records of deleted sessions/meetings; no write when nothing is stale
 // Remembered deleted-folder names of sessions/meetings that were deleted since: prune once at boot.
 void sidebarFolderStore.list().then(state => {
   const stale = Object.keys(state.removed || {}).filter(key => !sidebarFolderEntityExists(key));

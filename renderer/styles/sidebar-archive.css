@@ -1,0 +1,77 @@
+/* 一键归档（2026-11-28）：侧栏底部入口 + 弹窗。弹窗沿用 .hub-dialog 的底、圆角、投影和按钮，只补自己的分段控件、准则和预览。 */
+#session-list .session-archive-row { display: flex; align-items: stretch; gap: 6px; margin-top: 8px; }
+#session-list .session-archive-row .session-archive-entry { flex: 1 1 auto; min-width: 0; margin-top: 0; }
+#session-list .session-archive-quick {
+  flex: none; display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 10px;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface-card, transparent);
+  color: var(--fg-default); font-family: inherit; font-size: 11.5px; cursor: pointer; white-space: nowrap;
+}
+#session-list .session-archive-quick:hover { background: var(--brand-tint); color: var(--brand-text); border-color: transparent; }
+#session-list .session-archive-quick:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+#session-list .session-archive-quick svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+:root[data-hw-shell] body #session-sidebar .session-archive-row .session-archive-entry { margin-top: 0; }
+:root[data-hw-shell] body #session-sidebar .session-archive-quick {
+  min-height: var(--hw-row-h, 30px); height: auto; border: 0; border-radius: var(--hw-r-pill, 999px);
+  background: var(--hw-surface-3, var(--surface-sunken)); color: var(--hw-text-1, var(--fg-default)); font-family: var(--hw-font, inherit); font-size: var(--hw-fs-13, 13px);
+}
+:root[data-hw-shell] body #session-sidebar .session-archive-quick:hover { background: var(--hw-brand-soft, var(--brand-tint)); color: var(--hw-brand, var(--brand-text)); }
+
+.sidebar-archive-dialog { width: min(480px, calc(100vw - 32px)); padding: 24px 26px 22px; }
+:root[data-hw-shell] .sidebar-archive-dialog { border-radius: var(--hw-r-xl, 28px); font-family: var(--hw-font, inherit); box-shadow: var(--hw-e3, var(--shadow-lg)); }
+.sidebar-archive-dialog .sa-head { display: flex; gap: 14px; align-items: flex-start; }
+.sidebar-archive-dialog .sa-icon { flex: none; margin: 2px 0 0; }
+.sidebar-archive-dialog h2 { margin: 0 0 4px; font-size: 18px; }
+.sidebar-archive-dialog .sa-sub { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--fg-muted); }
+.sidebar-archive-dialog .sa-block { margin-top: 18px; }
+.sidebar-archive-dialog .sa-label { margin-bottom: 8px; font-size: 12px; font-weight: 600; color: var(--fg-muted); letter-spacing: .2px; }
+
+.sidebar-archive-dialog .sa-seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 3px; border-radius: 999px; background: var(--surface-sunken); }
+.sidebar-archive-dialog .sa-seg button {
+  height: 30px; border: 0; border-radius: 999px; background: transparent; color: var(--fg-default);
+  font: 500 13px/1 var(--font-sans); cursor: pointer; transition: background .15s, color .15s, box-shadow .15s;
+}
+.sidebar-archive-dialog .sa-seg button:hover { color: var(--fg-strong); }
+.sidebar-archive-dialog .sa-seg button[aria-checked='true'] { background: var(--surface-card, #fff); color: var(--brand-text); box-shadow: 0 1px 3px rgba(var(--rgb-shadow, 24,36,49), .14); font-weight: 600; }
+.sidebar-archive-dialog .sa-seg button:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.sidebar-archive-dialog .sa-custom { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; color: var(--fg-default); }
+.sidebar-archive-dialog .sa-custom[hidden] { display: none; }
+.sidebar-archive-dialog .sa-custom input,
+.sidebar-archive-dialog .sa-custom select { height: 30px; padding: 0 10px; border: 1px solid var(--border-mid); border-radius: var(--radius-sm); background: var(--surface-card); color: inherit; font: inherit; }
+.sidebar-archive-dialog .sa-custom input { width: 76px; }
+.sidebar-archive-dialog .sa-custom input:focus,
+.sidebar-archive-dialog .sa-custom select:focus { outline: 1px solid var(--brand); }
+
+.sidebar-archive-dialog .sa-check { display: flex; align-items: flex-start; gap: 9px; padding: 5px 0; font-size: 13px; line-height: 1.5; color: var(--fg-default); cursor: pointer; }
+.sidebar-archive-dialog .sa-check input { flex: none; width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--brand); cursor: pointer; }
+.sidebar-archive-dialog .sa-check small { margin-left: 8px; font-size: 11.5px; color: var(--fg-muted); }
+.sidebar-archive-dialog .sa-locked { cursor: default; color: var(--fg-muted); }
+.sidebar-archive-dialog .sa-locked input { cursor: default; opacity: .55; }
+
+.sidebar-archive-dialog .sa-preview { margin-top: 16px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--surface-sunken); }
+.sidebar-archive-dialog .sa-count { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--fg-default); }
+.sidebar-archive-dialog .sa-count strong { font-size: 24px; line-height: 1.1; font-weight: 600; color: var(--brand-text); font-variant-numeric: tabular-nums; }
+.sidebar-archive-dialog .sa-list { margin: 8px 0 0; padding: 0; list-style: none; }
+.sidebar-archive-dialog .sa-list li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; font-size: 12.5px; color: var(--fg-default); border-top: 1px solid var(--border-subtle); }
+.sidebar-archive-dialog .sa-list li:first-child { border-top: 0; }
+.sidebar-archive-dialog .sa-item-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-archive-dialog .sa-item-meta { flex: none; color: var(--fg-muted); font-size: 11.5px; }
+.sidebar-archive-dialog .sa-list .sa-more,
+.sidebar-archive-dialog .sa-list .sa-empty { color: var(--fg-muted); }
+
+.sidebar-archive-dialog .sa-auto { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.sidebar-archive-dialog .sa-error { min-height: 0; margin: 6px 0 0; font-size: 12px; color: var(--status-danger); }
+.sidebar-archive-dialog .sa-error:empty { display: none; }
+.sidebar-archive-dialog .hub-dialog-actions { margin-top: 18px; }
+.sidebar-archive-dialog .hub-button-primary { min-width: 104px; }
+.sidebar-archive-dialog .hub-button-primary:disabled { opacity: .45; cursor: default; }
+:root[data-hw-shell] .sidebar-archive-dialog .hub-button { border-radius: var(--hw-r-pill, 999px); padding-inline: 18px; }
+:root[data-hw-shell] .sidebar-archive-dialog .hub-button-primary { background: var(--hw-brand, var(--cta-bg)); color: var(--hw-text-on, #fff); }
+:root[data-hw-shell] .sidebar-archive-dialog .sa-preview { border-radius: var(--hw-r-item, 12px); background: var(--hw-surface-2, var(--surface-sunken)); }
+:root[data-hw-shell] .sidebar-archive-dialog .sa-seg { background: var(--hw-surface-3, var(--surface-sunken)); }
+:root[data-hw-shell] .sidebar-archive-dialog .sa-seg button[aria-checked='true'] { color: var(--hw-brand, var(--brand-text)); }
+:root[data-hw-shell] .sidebar-archive-dialog .sa-count strong { color: var(--hw-brand, var(--brand-text)); font-family: var(--hw-font-num, inherit); }
+/* 侧栏窄：入口文字不折行，放不下时省略；一键归档按钮收紧。 */
+#session-list .session-archive-row .session-archive-entry > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#session-list .session-archive-row .session-archive-quick { padding: 0 9px; }
+:root[data-hw-shell] body #session-sidebar .session-archive-row .session-archive-entry { padding-inline: 10px; }
+:root[data-hw-shell] body #session-sidebar .session-archive-quick { font-size: var(--hw-fs-12, 12px); padding: 0 10px; }

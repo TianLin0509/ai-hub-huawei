@@ -26,6 +26,7 @@
    "renderer/shell-controller.js",
    "renderer/shortcut-help.js",
    "renderer/sidebar-account-usage.js",
+   "renderer/sidebar-archive.js",
    "renderer/sidebar-dom-reconciler.js",
    "renderer/sidebar-folder-drag.js",
    "renderer/sidebar-folders.js",

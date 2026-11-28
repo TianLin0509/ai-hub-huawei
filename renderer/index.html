@@ -44,6 +44,7 @@
   <link rel="stylesheet" href="styles/profile-page.css">
   <link rel="stylesheet" href="styles/community-page.css">
   <link rel="stylesheet" href="styles/community-crew.css">
+  <link rel="stylesheet" href="styles/sidebar-archive.css">
   <link rel="stylesheet" href="styles/welink-blackboard-page.css">
   <link rel="stylesheet" href="styles/company-ppt-page.css">
   <link rel="stylesheet" href="styles/codeagent-accounts-page.css">
@@ -360,7 +361,7 @@
         </button>
       </div>
       <div class="session-detail-bar"><button type="button" id="btn-session-details" aria-pressed="false">详细信息</button><button type="button" id="btn-running-overview" aria-haspopup="dialog" aria-expanded="false" title="在跑一览：在等你回复、卡住嫌疑、运行中、刚完成的会话（不经过模型）"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M4 12h16M4 18h7"/></svg>在跑一览</button><label class="session-model-filter"><select id="session-model-filter" aria-label="侧栏模型" title="按模型筛选"><option value="all">模型</option></select></label><label class="session-project-filter"><select id="session-project-filter" aria-label="侧栏项目" title="按项目筛选"><option value="random">随机</option><option value="all" selected>项目</option></select></label></div><div id="session-project-filter-note" class="session-project-filter-note" role="status" hidden></div>
-      <div class="session-range-tabs" role="group" aria-label="会话范围"><button type="button" data-session-days="pinned" aria-pressed="false" title="只显示置顶的会话与群聊">置顶</button><button type="button" data-session-days="1" aria-pressed="true" title="未置顶的最近24小时会话；未读和活跃会话始终显示">今天</button><button type="button" data-session-days="3" aria-pressed="false" title="未置顶的最近72小时会话；未读和活跃会话始终显示">3 天</button><button type="button" data-session-days="web" aria-pressed="false" title="只看 AI 网页会话（ChatGPT、Gemini 等官网）">网页</button><button type="button" id="btn-sidebar-wireless" aria-pressed="false" title="显示无线协作会话">无线</button></div>
+      <div class="session-range-tabs" role="group" aria-label="会话范围"><button type="button" data-session-days="pinned" aria-pressed="false" title="只显示置顶的会话与群聊">置顶</button><button type="button" data-session-days="all" aria-pressed="true" title="所有未归档的会话；不会自动归档，要收起旧会话请点底部「一键归档」">全部</button><button type="button" data-session-days="web" aria-pressed="false" title="只看 AI 网页会话（ChatGPT、Gemini 等官网）">网页</button><button type="button" id="btn-sidebar-wireless" aria-pressed="false" title="显示无线协作会话">无线</button></div>
       <div class="session-list" id="session-list"></div>
       <div class="web-session-list" id="web-session-list" aria-label="AI 网页会话"></div>
       <section class="sidebar-insights" id="sidebar-insights" aria-label="用量与系统状态">

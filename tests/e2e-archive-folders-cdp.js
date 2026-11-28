@@ -121,6 +121,8 @@ async function main() {
     await gracefulQuit(hub); try { cdp?.close?.(); } catch { /* closed */ }
     const aged = ageSessions(data, new Set([ids.a, ids.b, ids.c]), Date.now() - 2 * 86400000);
     assert.ok(aged > 0, '找到了要拨回时间的会话记录');
+    // 2026-11-28 起不再自动归档：删掉归档文件，下次启动按「老用户升级」把闲置超过 1 天的冻结为已归档（core/sidebar-archive.js）。
+    fs.rmSync(path.join(data, 'sidebar-archive.json'), { force: true });
     await launch('archive-folders-aged');
     await until(`document.querySelector('#session-list .session-archive-entry .archive-count')?.textContent === '3'`, 'three archived', 30000);
     check('三个会话都进了归档（入口计数 3）', await archiveCount() === '3');
@@ -174,14 +176,7 @@ async function main() {
     groups = await archiveGroups();
     check('重启后归档页仍是「临时调研（原目录已删除）」+「未分类」', JSON.stringify(groups.map(g => [g.name, g.deleted])) === JSON.stringify([['临时调研', true], ['未分类', false]]));
     check('重启后甲仍在「接口项目」', await folderOf(ids.a) === '接口项目');
-    // 只切换侧栏「3 天」视图（乙两天前活动过，会出现在 3 天里）不算恢复：不提示，也不清原目录名。
     await closeArchive();
-    await cdp.eval(`[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '3 天' && b.offsetParent)?.click()`);
-    await until(`!!document.querySelector('#session-list [data-session-id="${ids.b}"]')`, 'b visible in 3-day view');
-    await sleep(1500);
-    check('切到「3 天」视图不提示、不清原目录名', !(await cdp.eval(`(document.getElementById('gc-fork-toast')?.textContent || '').includes('已放回')`)) && stored().removed?.['session:' + ids.b]?.name === '临时调研');
-    await cdp.eval(`[...document.querySelectorAll('button')].find(b => b.textContent.trim() === '今天' && b.offsetParent)?.click()`);
-    await sleep(800);
     await openArchive();
     await shot('20261126-archive-06-after-restart-1440');
     await closeArchive();

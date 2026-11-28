@@ -1092,8 +1092,15 @@ const lowOverheadStore = lowOverheadUi.createLowOverheadStore({
 });
 const lowOverheadTerminalTuner = lowOverheadUi.createTerminalTuner();
 window.__hubLowOverhead = lowOverheadStore;   // 启动中心（workspace-controller.js，L2）读它决定 CodeAgent 新会话默认走卡片
+// 手动归档（2026-11-28）：默认不自动归档；侧栏底部「一键归档」按时长和准则归。
+const sidebarArchiveController = require('./sidebar-archive').createSidebarArchiveController({
+  document, ipcRenderer, storage: localStorage, onChange: () => scheduleSessionListRender(),
+});
+void sidebarArchiveController.refresh();
+window.__hubSidebarArchive = sidebarArchiveController;
 const sessionListRenderer = createSessionListRenderer({
   sidebarFolders: sidebarFoldersController,
+  sidebarArchive: sidebarArchiveController,
   notifyInfo: message => showToast(message, 'info'),
   getLowOverhead: () => lowOverheadStore.get(),
   // 会话 logo 右下角的订阅账号序号：与底栏额度的 1/2 同一顺序；只有一个账号时不显示。

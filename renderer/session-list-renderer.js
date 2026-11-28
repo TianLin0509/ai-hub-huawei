@@ -155,6 +155,8 @@ function createSessionListRenderer(options = {}) {
   const doc = options.document || document;
   const storage = options.localStorage || localStorage;
   const sidebarFolders = options.sidebarFolders || null;
+  // 手动归档（2026-11-28）：给了它就不再按 24 小时 / 3 天自动归档；没给（旧调用方、单测）沿用旧规则。
+  const sidebarArchive = options.sidebarArchive || null;
   const bridgeBadge = typeof options.bridgeBadge === 'function' ? options.bridgeBadge
     : id => { try { return (typeof window !== 'undefined' && window._bridgeThreads?.badge(id)) || null; } catch { return null; } };
   doc.addEventListener?.('bridge-threads-updated', () => { try { renderSessionList(); } catch (error) { console.warn('[session-list] bridge refresh failed:', error && error.message); } });
@@ -210,7 +212,8 @@ function createSessionListRenderer(options = {}) {
   }
   const rangeControls = [...(doc.querySelectorAll?.('[data-session-days]') || [])];
   function syncRangeControls() {
-    for (const button of rangeControls) button.setAttribute('aria-pressed', String(webOnly ? button.dataset.sessionDays === 'web' : pinnedOnly ? button.dataset.sessionDays === 'pinned' : Number(button.dataset.sessionDays) === recentDays));
+    for (const button of rangeControls) button.setAttribute('aria-pressed', String(webOnly ? button.dataset.sessionDays === 'web' : pinnedOnly ? button.dataset.sessionDays === 'pinned'
+      : button.dataset.sessionDays === 'all' || Number(button.dataset.sessionDays) === recentDays));
     doc.body?.classList?.toggle('sidebar-web-mode', webOnly);
   }
   syncRangeControls();
@@ -245,6 +248,28 @@ function createSessionListRenderer(options = {}) {
     savePreference('hubSidebarRecentDays', String(recentDays));
     syncRangeControls(); renderSessionList();
   });
+  const archiveRevision = () => sidebarArchive ? sidebarArchive.signature() + ':' + (sidebarFolders?.signature?.() ?? '') : '';
+  // 归档判断要的上下文：团队负责人把成员的运行/等待/出错/未读和最近活动并进来（成员不在顶层列表里，单看负责人会把在跑的成员一起藏掉）。
+  function archiveContext(item, classification, now = Date.now()) {
+    let state = classification?.state, unread = !!classification?.unread, activity = latestActivityTime(item), group = !!item._isMeeting;
+    const teamUi = !item._isMeeting && typeof window !== 'undefined' ? window.__teamUi : null;
+    if (teamUi?.isLead?.(item.id)) {
+      group = true;
+      const sessionMap = getSessions();
+      for (const id of teamUi.membersOf(item.id, sessionMap, getMeetings()) || []) {
+        const member = id !== item.id && sessionMap.get(id);
+        if (!member) continue;
+        const c = classifySession(member, { now, sessionMap });
+        if (['run', 'wait', 'error'].includes(c.state)) state = c.state;
+        if (c.unread) unread = true;
+        activity = Math.max(activity, latestActivityTime(member));
+      }
+    }
+    return { state, unread, now, activity, group, folder: sidebarFolders?.folderOf ? sidebarFolders.folderOf(item) : null };
+  }
+  function archivedNow(item, classification, now = Date.now()) {
+    return !!sidebarArchive && sidebarArchive.isArchived(item, archiveContext(item, classification, now));
+  }
   function sidebarView(items, sessionMap = getSessions(), days = recentDays, { now = Date.now(), classify = null } = {}) {
     // Membership/order still comes from the live filters. Reuse only the pure
     // partition/sort projection; rows, badges, details and DOM reconciliation
@@ -256,10 +281,10 @@ function createSessionListRenderer(options = {}) {
         const at = latestActivityTime(item), age = at ? now - at : 0;
         return { item, id: item.id, pinned: item.pinned, bottomed: item.bottomed,
           at, createdAt: item.createdAt, classification: classify(item),
-          fresh: age < 86400000, inRange: age < (days === 3 ? 3 : 1) * 86400000 };
+          fresh: age < 86400000, inRange: sidebarArchive ? archivedNow(item, classify(item), now) : age < (days === 3 ? 3 : 1) * 86400000 };
       });
       const previous = previousSidebarView;
-      if (previous && previous.days === days && previous.pinnedOnly === pinnedOnly && inputs.length === previous.inputs.length
+      if (previous && previous.days === days && previous.pinnedOnly === pinnedOnly && previous.archiveRevision === archiveRevision() && inputs.length === previous.inputs.length
           && inputs.every((input, i) => {
             const old = previous.inputs[i], a = input.classification, b = old.classification;
             return input.item === old.item && input.id === old.id && input.pinned === old.pinned && input.bottomed === old.bottomed
@@ -270,8 +295,9 @@ function createSessionListRenderer(options = {}) {
     }
     const parts = partitionSidebarSessions(items, { now, classify, sessionMap, activeSessionId: getActiveSessionId(), activeMeetingId: getActiveMeetingId() });
     const result = buildSidebarView(parts, { now, days, pinnedOnly, excludePinned: !pinnedOnly, sessionMap,
-      hasUnread: classify ? item => classify(item).unread : sidebarItemHasUnread });
-    if (inputs) previousSidebarView = { inputs, days, pinnedOnly, result };
+      hasUnread: classify ? item => classify(item).unread : sidebarItemHasUnread,
+      isArchived: sidebarArchive ? (item, state, unread) => archivedNow(item, { state, unread }, now) : null });
+    if (inputs) previousSidebarView = { inputs, days, pinnedOnly, archiveRevision: archiveRevision(), result };
     return result;
   }
   const modelControl = doc.getElementById?.('session-model-filter');
@@ -841,12 +867,14 @@ sessionListEl.addEventListener('keydown', event => {
     }));
   });
   const folderEntityKey = item => (item._isMeeting ? 'meeting:' : 'session:') + (item.id || item.hubId);
-  // Keys of every archived parent with the archive's own rule (1 day, pinned excluded), independent of
+  // Keys of every archived parent with the archive's own rule (manual archive, pinned excluded), independent of
   // the sidebar's day range, pinned-only view and filters, so deleting a folder remembers where they came from.
   function archivedFolderKeys() {
     const sessionMap = getSessions(), items = collectSidebarItems(sessionMap);
     const parts = partitionSidebarSessions(items, { now: Date.now(), sessionMap, activeSessionId: getActiveSessionId(), activeMeetingId: getActiveMeetingId() });
-    return buildSidebarView(parts, { now: Date.now(), days: 1, pinnedOnly: false, excludePinned: true, sessionMap, hasUnread: sidebarItemHasUnread }).archive.map(folderEntityKey);
+    const now = Date.now();
+    return buildSidebarView(parts, { now, days: 1, pinnedOnly: false, excludePinned: true, sessionMap, hasUnread: sidebarItemHasUnread,
+      isArchived: sidebarArchive ? (item, state, unread) => archivedNow(item, { state, unread }, now) : null }).archive.map(folderEntityKey);
   }
   // A remembered deleted folder is consumed when the entry is used again after the deletion (real activity,
   // not a view change): say once that it went to unclassified. If it already has a live folder again
@@ -924,7 +952,10 @@ sessionListEl.addEventListener('keydown', event => {
       _expandedMeetings.add(id);
       _persistExpandedMeetings();
     }
-    if (!pinnedOnly && Date.now() - latestActivityTime(item) >= recentDays * 86400000) {
+    if (sidebarArchive) {
+      // 从归档里点开 = 放回侧栏（删掉归档记录）。
+      if (sidebarArchive.recordOf(item)) void sidebarArchive.restore([folderEntityKey(item)]).catch(error => console.warn('[sidebar] restore from archive failed:', error.message));
+    } else if (!pinnedOnly && Date.now() - latestActivityTime(item) >= recentDays * 86400000) {
       recentDays = 3;
       savePreference('hubSidebarRecentDays', '3'); syncRangeControls();
     }
@@ -982,6 +1013,34 @@ sessionListEl.addEventListener('keydown', event => {
     }
   }
 
+  // 一键归档弹窗的候选：当前模型/项目/专项筛选下的条目，不看「置顶」页签；排除置顶、运行中、等回复、出错、未读，
+  // 以及已手动归档且之后没有来往的。只因「自动归档」而在归档里的仍算候选：关掉自动归档时按所选规则把它们记成手动归档，不会全部弹回侧栏。
+  function archiveCandidates() {
+    const now = Date.now(), sessionMap = getSessions();
+    return filteredSidebarItems(sessionMap).filter(item => {
+      if (item.pinned) return false;
+      const ctx = archiveContext(item, classifySession(item, { now, sessionMap }), now);
+      if (ctx.unread || ['run', 'wait', 'error'].includes(ctx.state)) return false;
+      const record = sidebarArchive.recordOf(item);
+      return !(record && ctx.activity <= record);
+    });
+  }
+  async function openArchiveDialog() {
+    if (!sidebarArchive) return false;
+    if (!sidebarArchive.loaded()) await sidebarArchive.refresh();
+    if (sidebarArchive.error()) {
+      const message = sidebarArchive.error();
+      if (options.notify) options.notify(message); else require('./ui-feedback').showHubAlert(message, { document: doc });
+      return false;
+    }
+    const done = await sidebarArchive.openDialog({
+      candidates: archiveCandidates,
+      context: item => archiveContext(item, classifySession(item, { now: Date.now(), sessionMap: getSessions() })),
+      notify: message => (typeof options.notifyInfo === 'function' ? options.notifyInfo(message) : null),
+    });
+    renderSessionList();
+    return done;
+  }
   function renderSessionList() {
     // One clock and one classification per item for the whole render: the
     // assistant snapshot and the sidebar sections used to classify all
@@ -1321,7 +1380,7 @@ sessionListEl.addEventListener('keydown', event => {
   function appendSections(parts, target = renderTarget, scope = '', folderId = undefined) {
     if (parts.failed.length) appendSecHeader('异常', parts.failed, 'sec-failed', '', null, target, scope);
     if (parts.active.length) appendSecHeader('活跃', parts.active, 'sec-active', '', null, target, scope);
-    if (parts.today.length || !scope) appendSecHeader(pinnedOnly ? '置顶' : recentDays === 3 ? '3 天内' : '今天', parts.today, 'sec-today', !pinnedOnly && parts.today.length ? '休眠' : '', () => archiveToday(folderId), target, scope);
+    if (parts.today.length || !scope) appendSecHeader(pinnedOnly ? '置顶' : sidebarArchive ? '会话' : recentDays === 3 ? '3 天内' : '今天', parts.today, 'sec-today', !pinnedOnly && parts.today.length ? '休眠' : '', () => archiveToday(folderId), target, scope);
   }
   if (!sidebarFolders) appendSections(sections);
   else {
@@ -1361,7 +1420,7 @@ sessionListEl.addEventListener('keydown', event => {
         appendSections(parts, body, key + ':', folder.id);
         if (!parts.failed.length && !parts.active.length && !parts.today.length) {
           const empty = doc.createElement('div'); empty.className = 'sidebar-folder-empty'; empty.dataset.sidebarRenderKey = 'folder-empty:' + key;
-          empty.textContent = parts.archive.length ? '较早记录请到下方“全部目录归档”查看' : '当前筛选范围内没有会话'; body.appendChild(empty);
+          empty.textContent = parts.archive.length ? (sidebarArchive ? '已归档的会话请到下方“查看归档”找回' : '较早记录请到下方“全部目录归档”查看') : '当前筛选范围内没有会话'; body.appendChild(empty);
         }
       }
     }
@@ -1375,9 +1434,19 @@ sessionListEl.addEventListener('keydown', event => {
   archive.type = 'button';
   archive.className = 'session-archive-entry';
   archive.dataset.sidebarRenderKey='archive';
-  archive.innerHTML = '<span>' + (sidebarFolders ? '全部目录归档' : '归档') + '</span><span class="archive-count">' + sections.archiveCount + '</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
+  archive.innerHTML = '<span>' + (sidebarArchive ? '查看归档' : sidebarFolders ? '全部目录归档' : '归档') + '</span><span class="archive-count">' + sections.archiveCount + '</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
   archive.addEventListener('click', () => openSearch({ scope: 'dormant' }));
-  renderTarget.appendChild(archive);
+  if (sidebarArchive) {
+    const row = doc.createElement('div');
+    row.className = 'session-archive-row'; row.dataset.sidebarRenderKey = 'archive-row'; row.dataset.sidebarRenderTree = 'true';
+    const quick = doc.createElement('button');
+    quick.type = 'button'; quick.className = 'session-archive-quick'; quick.dataset.sidebarRenderKey = 'archive-quick';
+    quick.title = '按「多久没动」和准则把会话收进归档，先看预览再确认';
+    quick.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v3H4z"/><path d="M5.5 10v8.5h13V10"/><path d="M10 13.5h4"/></svg><span>一键归档</span>';
+    quick.addEventListener('click', () => { void openArchiveDialog(); });
+    row.append(archive, quick);
+    renderTarget.appendChild(row);
+  } else renderTarget.appendChild(archive);
 
   if (fragment) {
     if (typeof sessionListEl.replaceChildren === 'function') reconcileSidebarDom(sessionListEl,fragment);
@@ -1467,6 +1536,7 @@ sessionListEl.addEventListener('mousedown', (e) => {
     revealSearchItem,
     revealCreatedItem,
     renderSidebarStrip,
+    openArchiveDialog,
     getRenderStats: () => ({ ...renderStats }),
   };
 }

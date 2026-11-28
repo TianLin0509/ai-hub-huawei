@@ -203,7 +203,9 @@ function _meetingRuntimeAggregate(meeting, sessionMap, now = Date.now()) {
 
 // Presentation policy only; runtime truth and unread accounting remain owned
 // by the existing classifier. Attention flags promote rows, not sections.
-function buildSidebarView(parts, { now = Date.now(), days = 1, pinnedOnly = false, excludePinned = false, sessionMap = new Map(), hasUnread = () => false } = {}) {
+// isArchived(item, state, unread): manual archive (core/sidebar-archive.js). Without it the legacy
+// 1/3-day rule applies (kept for callers and tests that still pass `days`).
+function buildSidebarView(parts, { now = Date.now(), days = 1, pinnedOnly = false, excludePinned = false, sessionMap = new Map(), hasUnread = () => false, isArchived = null } = {}) {
   const items = [...new Map(['failed', 'active', 'pinned', 'unread', 'today', 'archive', 'older']
     .flatMap(key => parts[key] || []).map(item => [item.id, item])).values()];
   const failed = [], active = [], today = [], archive = [];
@@ -218,6 +220,7 @@ function buildSidebarView(parts, { now = Date.now(), days = 1, pinnedOnly = fals
     const state = parts.states.get(item.id);
     if (state === 'error') failed.push(item);
     else if (state === 'run' || state === 'wait') active.push(item);
+    else if (isArchived) (isArchived(item, state, !!hasUnread(item, sessionMap)) ? archive : today).push(item);
     else if (item.pinned || hasUnread(item, sessionMap) || now - latestActivityTime(item, now) < (days === 3 ? 3 : 1) * 86400000) today.push(item);
     else archive.push(item);
   }
