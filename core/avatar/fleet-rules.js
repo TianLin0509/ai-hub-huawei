@@ -23,8 +23,10 @@ const clean = R.clean;
 const text = (v, n) => String(v ?? '').slice(0, n);
 const oneLine = (v, n) => clean(v).slice(0, n);
 const action = v => (ACTIONS.includes(v) ? v : 'remind');
+// 选中 / 排除名单上限：R65 加了全选，群多的人一点就是上百个，原来 40 / 60 会悄悄截掉后面的群。
+const LIST_MAX = 300;
 const people = (list, n = 60) => (Array.isArray(list) ? list : []).map(x => ({ id: oneLine(x?.id, 80), name: oneLine(x?.name || x?.id, 60), type: x?.type === 'group' ? 'group' : 'user' })).filter(x => x.id).slice(0, n);
-const targets = list => (Array.isArray(list) ? list : []).map(x => ({ id: oneLine(x?.id, 80), name: oneLine(x?.name || x?.id, 60), type: x?.type === 'user' ? 'user' : 'group', action: action(x?.action) })).filter(x => x.id).slice(0, 40);
+const targets = list => (Array.isArray(list) ? list : []).map(x => ({ id: oneLine(x?.id, 80), name: oneLine(x?.name || x?.id, 60), type: x?.type === 'user' ? 'user' : 'group', action: action(x?.action) })).filter(x => x.id).slice(0, LIST_MAX);
 const sources = list => (Array.isArray(list) ? list : []).map(x => ({ path: text(x?.path, 500).trim(), name: oneLine(x?.name || x?.path, 80), type: x?.type === 'dir' ? 'dir' : 'file' })).filter(x => x.path).slice(0, 30);
 const prefixOf = v => oneLine(String(v ?? '').replace(new RegExp(MARK, 'gu'), '').replace(/[【】]/g, ''), 20);
 
@@ -38,7 +40,7 @@ function applyPatch(current, patch = {}) {
   if ('atOnly' in patch) next.atOnly = !!patch.atOnly;
   if ('targets' in patch) next.targets = targets(patch.targets);
   if ('only' in patch) next.only = people(patch.only);
-  if ('skip' in patch) next.skip = people(patch.skip);
+  if ('skip' in patch) next.skip = people(patch.skip, LIST_MAX);
   if ('persona' in patch) next.persona = text(patch.persona, 3000);
   if ('notes' in patch) next.notes = text(patch.notes, 3000);
   if ('authorities' in patch) next.authorities = people(patch.authorities, 20);
@@ -51,6 +53,10 @@ function applyPatch(current, patch = {}) {
       ...(provider ? { provider, providerLabel: oneLine(patch.backend?.providerLabel, 150) || provider, menuLabel: oneLine(patch.backend?.menuLabel, 164) || model } : {}) };
   }
   if ('hideModel' in patch) next.hideModel = patch.hideModel !== false;
+  // 只盯选中的：排除优先于选中，同一个群两边都在时以选中为准，不让它悄悄失效。
+  if (next.kind === 'pick' && ('targets' in patch || 'skip' in patch || 'kind' in patch) && next.skip?.length) {
+    const ids = new Set((next.targets || []).map(t => t.id)); next.skip = next.skip.filter(x => !ids.has(x.id));
+  }
   return next;
 }
 

@@ -37,6 +37,8 @@ const INTENT_LABEL = { ask: '查口径', progress: '问进度', review: '请评�
 const DEFAULT_RULES = { ask: 'auto', progress: 'auto', review: 'draft', task: 'draft', person: 'reject' };
 const STATUS = ['on', 'busy', 'away'];
 
+let APP_VERSION = '';
+try { APP_VERSION = String(require('../../package.json').version || ''); } catch { /* 测试环境 */ }
 const rid = (n = 10) => crypto.randomBytes(n).toString('hex');
 const clip = (s, n) => String(s ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, n);
 const today = now => { const d = new Date(now); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -77,12 +79,27 @@ function parseCommand(text, members) {
     const use = (t.split(/用法(?:是|：|:)|怎么用(?:：|:)|使用方法(?:是|：|:)/)[1] || '').trim();
     return { kind: 'share', to: who ? who.id : '', dir: dir.replace(/[，,。]+$/, ''), use: clip(use, 400), text: t };
   }
-  const ask = t.match(/^(?:问问|问一下|帮我问(?:问|一下)?|去问)\s*(.+)$/);
-  if (ask) {
-    const q = (who ? ask[1].replace(who.nick, '') : ask[1]).replace(/^[，,：:\s]+/, '').trim();
-    return { kind: 'ask', to: who ? who.id : '', text: clip(q || ask[1], 1000) };
+  const sayHead = /^(告诉大家|跟大家说|广播一下|通知大家)[，,：:\s]*/;
+  const peers = (members || []).filter(m => m && m.id && !m.me);
+  // 句首点名（可带 @）才算「问这个人」；句中顺带提到的同事不算收件人。
+  const leading = str => peers.filter(m => m.nick).sort((x, y) => y.nick.length - x.nick.length)
+    .find(m => new RegExp('^@?\\s*' + m.nick.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(str));
+  // 口语里「问」前后常带别的字：你去问下、请你去帮我问问、替我问一下……都算提问。「问题」「问候」「问卷」等不算。
+  const ask = sayHead.test(t) ? null : t.match(/^(?:(?:你|请|麻烦|去|帮我|替我)\s*){0,4}(?:问问|问一下|问一问|问下|打听一下|打听|问(?![题候号卷答询责世]))\s*(.+)$/);
+  // 没说「问」，但句首点了某位成员、又以问号结尾，也当提问。
+  const named = !ask && !sayHead.test(t) && leading(t) && /[?？]\s*$/.test(t) ? [t, t] : null;
+  const hit = ask || named;
+  if (hit) {
+    const target = leading(hit[1]);
+    let q = target ? hit[1].replace(/^@?\s*/, '').slice(target.nick.length) : hit[1];
+    // 去掉「问他一下」里的代词与「一下」；「他们」「他的」是问题本身，保留。
+    q = q.replace(/^[，,：:\s]+/, '').replace(/^[他她](?![们的])\s*/, '').replace(/^一下(?=[，,：:\s]|$)/, '').replace(/^[，,：:\s]+/, '').trim();
+    // 团队里只有一位别的成员时不用再选问谁。
+    const to = target ? target.id : peers.length === 1 ? peers[0].id : '';
+    // 只喊了名字、没写问题：不寄空问题，由界面提示补上。
+    return { kind: 'ask', to, text: /[^\s?？。，,！!]/.test(q) ? clip(q, 1000) : '' };
   }
-  const say = t.replace(/^(告诉大家|跟大家说|广播一下|通知大家)[，,：:\s]*/, '');
+  const say = t.replace(sayHead, '');
   return { kind: 'say', to: '', text: clip(say, 300) };
 }
 
@@ -133,6 +150,7 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
   const publishQueues = new Map(), fetches = new Map(), seen = new Map();
   let fetchQueue = Promise.resolve();
   let askQueue = Promise.resolve();
+  let agentNow = null; // 接待 agent 正在处理哪封来信（写进名片，对方能看到「正在起草」）
   const transfers = new Map(); // 分享打包 / 取回进度
 
   function validId(id) {
@@ -325,9 +343,23 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
       ip: myIp(), share: s.share ? s.share.name : '', status: STATUS.includes(s.me.status) ? s.me.status : 'on',
       doing: clip(s.me.doing, 80), sig: clip(s.me.sig, 80), at: now(), crewName: clip(crew.name, 40), joinedAt: Number(crew.createdAt) || 0,
       // 谁退出了、何时：读不到退出者本人名片的成员（他退出后关机了）也能从别人这里知道。
+      rx: receipts(crew), agent: agentNow && agentNow.crew === crew.id ? { state: 'drafting', for: agentNow.for, ask: agentNow.ask, at: agentNow.at } : { state: 'idle' },
+      ver: APP_VERSION,
       gone: Object.fromEntries(Object.entries(crew.left || {}).filter(([id]) => idOk(id)).slice(-200)),
       roster: crew.members.filter(m => validId(m.id) && ipOk(m.ip) && shareOk(m.share)).map(m => ({ id: m.id, nick: clip(m.nick, 24), ip: m.ip, share: m.share, joinedAt: Number(m.joinedAt) || 0 })),
     };
+  }
+  // 回执：对每位成员，记我收到他最新一封信的时间，以及他问我的问题各处理到哪一步（只往自己名片里写，对方来读）。
+  function receipts(crew) {
+    const out = {}, items = log(crew.id).items;
+    for (const m of crew.members) {
+      if (!idOk(m.id)) continue;
+      const from = items.filter(i => i.from === m.id);
+      const asks = {};
+      for (const i of from.filter(x => x.type === 'ask' && (x.to === meId())).slice(-40)) asks[clip(i.id, 40)] = clip(i.status || 'recv', 20);
+      out[m.id] = { seen: from.reduce((t, i) => Math.max(t, Number(i.at) || 0), 0), asks };
+    }
+    return out;
   }
   function myFeed(crewId) {
     const cut = now() - FEED_DAYS * 86400000;
@@ -397,6 +429,11 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
           // 在线按本机收到新名片的时间算，不用对方电脑的时钟；名片里的时间戳没变（重启后重读旧名片）不算新到。
           if (!m.cardAt || Number(c.at) !== m.cardAt) m.cardSeenAt = now();
           m.joinedAt = Math.max(Number(m.joinedAt) || 0, Number(c.joinedAt) || 0);
+          const rx = c.rx && typeof c.rx === 'object' ? c.rx[meId()] : null;
+          m.rx = rx && typeof rx === 'object' ? { seen: Number(rx.seen) || 0, asks: Object.fromEntries(Object.entries(rx.asks && typeof rx.asks === 'object' ? rx.asks : {}).slice(-40).map(([k, v]) => [clip(k, 40), clip(v, 20)])) } : null;
+          m.agent = !(c.agent && c.agent.state === 'drafting') ? { state: 'idle' }
+            : c.agent.for === meId() ? { state: 'drafting', for: meId(), ask: clip(c.agent.ask, 40), at: Number(c.agent.at) || 0 } : { state: 'busy', at: Number(c.agent.at) || 0 };
+          m.ver = clip(c.ver, 20);
           Object.assign(m, { nick: clip(c.nick, 24) || m.nick, pet: clip(c.pet, 40) || m.pet, petName: clip(c.petName, 24), status: STATUS.includes(c.status) ? c.status : 'on',
             doing: clip(c.doing, 80), sig: clip(c.sig, 80), cardAt: Number(c.at) || 0 });
           // 刚读通的地址优先；名片只提供以后断连时可探测的候选地址。
@@ -469,9 +506,14 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
         // 模型串行处理，收件轮询不等待模型；最后单独落盘并通知界面。
         askQueue = askQueue.catch(() => {}).then(async () => {
           if (!enabled() || crewOf(crew.id) !== crew) return;
+          agentNow = { crew: crew.id, for: from.id, ask: item.id, at: now() };
+          await publishCard(crew).catch(() => {});
           try { await handleAsk(crew, from, item, ev, nt); }
           catch (e) { item.status = 'wait'; logger.warn?.('[crew] 来信处理失败：', e.message); }
-          finally { if (crewOf(crew.id) === crew) { saveLog(crew.id); emit('update', { crewId: crew.id }); } }
+          finally {
+            agentNow = null;
+            if (crewOf(crew.id) === crew) { saveLog(crew.id); emit('update', { crewId: crew.id }); await publishCard(crew).catch(() => {}); }
+          }
         }).catch(e => logger.warn?.('[crew] 来信保存失败：', e.message));
       }
     }
@@ -577,6 +619,7 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
       for (const crew of s.crews) {
         if (!enabled() || !validId(crew.id)) break;
         const sig = () => crew.members.map(m => m.id + '@' + m.ip + '\\' + m.share).join(',');
+        const mailBefore = log(crew.id).items.length, lastBefore = log(crew.id).items.at(-1);
         const before = sig();
         const peers = crew.members.filter(m => validId(m.id) && m.id !== meId() && ipOk(m.ip) && shareOk(m.share));
         // 最多 4 路并发轮询（与全局 UNC 名额一致），人多时排队而不是被挤掉。
@@ -588,7 +631,8 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
         await discoverInbound(crew).catch(e => logger.warn?.('[crew] 入站发现失败：', e.message));
         await sweepInvites(crew);
         const moved = sig() !== before;
-        if (moved) await publishCard(crew).catch(() => {}); // 名单变了马上告诉其他人，不等 30 秒一次的名片
+        const gotMail = log(crew.id).items.length !== mailBefore || log(crew.id).items.at(-1) !== lastBefore;
+        if (moved || gotMail) await publishCard(crew).catch(() => {}); // 名单变了或收到新信，马上更新名片（含回执）；只是读到别人名片变了不重发
         if (results.some(Boolean) || moved) { saveLog(crew.id); save(); emit('update', { crewId: crew.id }); }
       }
       await sweepShares();
@@ -867,7 +911,7 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
     const crew = crewOf(crewId); if (!crew) throw new Error('没有这个团队');
     const item = log(crewId).items.find(i => i.id === id && i.type === 'ask' && i.from !== meId());
     if (!item) throw new Error('这封来信不见了');
-    if (action === 'ignore') { item.status = 'ignored'; saveLog(crewId); return { ok: true }; }
+    if (action === 'ignore') { item.status = 'ignored'; saveLog(crewId); publishCard(crewOf(crewId)).catch(() => {}); return { ok: true }; }
     const t = clip(String(text || item.draft || '').trim(), 4000); if (!t) throw new Error('回信是空的');
     await reply(crew, item, t, 'sent');
     return { ok: true };
@@ -1003,18 +1047,34 @@ function createCrewService({ dataDir, isEnabled = () => true, profile = () => ({
   }
 
   // ---------- 给界面的快照 ----------
+  // 对方在线、且「在忙」是 5 分钟内写的才算数（对方起草到一半关机或切离线，不会一直挂着「正在起草」）。
+  const agentFresh = (m, meta) => !!(m.agent && m.agent.state !== 'idle' && meta.ok && m.cardSeenAt && now() - m.cardSeenAt < ONLINE_MS
+    && (!m.agent.at || now() - m.agent.at < 5 * 60000));
   function snapshot() {
     const s = load(), p = prof();
     const crews = s.crews.map(c => {
       const l = log(c.id);
-      const members = [{ id: s.me.id, me: true, nick: p.nick || '我', pet: p.pet || '01-cat', petName: p.petName || '', ip: myIp(), share: s.share ? s.share.name : '',
+      const members = [{ id: s.me.id, me: true, ver: APP_VERSION, nick: p.nick || '我', pet: p.pet || '01-cat', petName: p.petName || '', ip: myIp(), share: s.share ? s.share.name : '',
         status: s.me.status, doing: s.me.doing, sig: s.me.sig, online: true }]
         .concat(c.members.map(m => {
           const meta = peerMeta.get(c.id + ':' + m.id) || {};
           return { id: m.id, nick: m.nick, pet: m.pet, petName: m.petName || '', ip: m.ip, share: m.share, manualIp: !!m.manualIp, status: m.status || 'on',
-            doing: m.doing || '', sig: m.sig || '', online: !!(meta.ok && m.cardSeenAt && now() - m.cardSeenAt < ONLINE_MS), lastSeenAt: m.lastSeenAt || 0, error: meta.ok === false ? meta.err : '' };
+            doing: m.doing || '', sig: m.sig || '', ver: m.ver || '', seenAt: m.cardSeenAt || 0,
+            agent: !agentFresh(m, meta) ? { state: 'idle' } : m.agent.state === 'drafting' ? { state: 'drafting', ask: m.agent.ask } : { state: 'busy' }, online: !!(meta.ok && m.cardSeenAt && now() - m.cardSeenAt < ONLINE_MS), lastSeenAt: m.lastSeenAt || 0, error: meta.ok === false ? meta.err : '' };
         }));
-      const items = l.items.slice(-200).map(i => ({ ...i, mine: i.from === s.me.id }));
+      const others = c.members;
+      const delivery = i => {
+        if (i.from !== s.me.id || !['say', 'ask', 'share'].includes(i.type)) return undefined;
+        const to = i.to === '*' ? others : others.filter(m => m.id === i.to);
+        const got = to.filter(m => m.rx && m.rx.seen >= i.at);
+        const d = { total: to.length, read: got.length };
+        if (i.type === 'ask' && to[0]) {
+          const m = to[0];
+          d.step = agentFresh(m, peerMeta.get(c.id + ':' + m.id) || {}) && m.agent.state === 'drafting' && m.agent.ask === i.id ? 'drafting' : (m.rx && m.rx.asks && m.rx.asks[i.id]) || (got.length ? 'recv' : '');
+        }
+        return d;
+      };
+      const items = l.items.slice(-200).map(i => ({ ...i, mine: i.from === s.me.id, delivery: delivery(i) }));
       return { id: c.id, name: c.name, members, items, invites: (c.invites || []).filter(v => v.at > now() - 7 * 86400000).map(v => ({ forName: v.forName, ip: v.ip, at: v.at, joined: (Array.isArray(v.joined) ? v.joined : v.joinedId ? [v.joinedId] : []).length })) };
     });
     return { ok: true, enabled: !!isEnabled(), share: s.share, shareScope: shareScopeNow(), me: { ...s.me, ip: myIp(), ipCandidates: ipCandidates() }, rules: s.rules, limits: s.limits,

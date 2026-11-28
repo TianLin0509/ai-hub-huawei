@@ -36,7 +36,7 @@ function attachResourceProcessTooltip({ document: doc, request, escapeHtml }) {
           const value = kind === 'cpu' ? `${row.cpuPct.toFixed(1)}%` : row.memoryBytes >= 1024 ** 3 ? `${(row.memoryBytes / 1024 ** 3).toFixed(2)} GB` : `${Math.round(row.memoryBytes / 1024 ** 2)} MB`;
           return `<div class="resource-tip-row"><span class="resource-tip-rank">${index + 1}</span><div class="resource-tip-process"><strong>${escapeHtml(row.name)}</strong><small>PID ${row.pid}</small></div><b>${value}</b></div>`;
         }).join('') : '<div class="resource-tip-empty">暂无可读取的进程</div>') +
-        `<div class="resource-tip-footer">${kind === 'cpu' ? `最近 ${(result.windowMs / 1000).toFixed(1)} 秒均值 · 整机 100%` : '物理内存工作集 · 含共享页'}<br>${new Date(result.sampledAt).toLocaleTimeString()} 采样 · 悬停时每 5 秒刷新${kind === 'cpu' && result.unreadableCpuCount ? `<br>${result.unreadableCpuCount} 个进程未取得 CPU 增量` : ''}</div>`;
+        `<div class="resource-tip-footer">${kind === 'cpu' ? `最近 ${(result.windowMs / 1000).toFixed(1)} 秒均值 · 整机 100% · ${result.cpuBasis === 'utility' ? '已按处理器利用率折算，与任务管理器「进程」页同口径' : result.cpuBasis === 'time-taskmgr' ? '按 CPU 时间计，与任务管理器「进程」页同口径' : '按 CPU 时间计（任务管理器「进程」页按睿频折算时会更高）'}` : '物理内存工作集 · 含共享页'}<br>${new Date(result.sampledAt).toLocaleTimeString()} 采样 · 悬停时每 5 秒刷新${kind === 'cpu' && result.unreadableCpuCount ? `<br>${result.unreadableCpuCount} 个进程未取得 CPU 增量` : ''}</div>`;
     } catch {
       if (!anchor || token !== epoch) return;
       panel.innerHTML = `<div class="resource-tip-heading"><strong>${title}</strong></div><div class="resource-tip-empty">暂时无法读取进程占用，稍后重试</div>`;

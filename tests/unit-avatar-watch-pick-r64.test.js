@@ -69,7 +69,7 @@ test('名单接口带上 @我 次数和建议的起点', t => {
 });
 
 test('页面：向导默认「只盯选中的」并替本人先选、可切回全部；搜索只改列表不整页重画；范围页可一键改成只盯几个', () => {
-  assert.match(src, /kind: tpl === 'watch' \? 'pick' : ''/);
+  assert.match(src, /kind: tpl === 'watch' \? 'pick' : tpl === 'draft' \? 'all' : ''/);
   assert.match(src, /\['pick', '只盯选中的（推荐）'\], \['all', '全部会话'\]/);
   assert.match(src, /function seedWizard\(\)/);
   assert.match(src, /kind: wide \? 'all' : 'pick'/);

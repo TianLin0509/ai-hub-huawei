@@ -4,6 +4,7 @@ const systemOs = require('os');
 const { registerPreviewImmersiveIpc } = require('./preview-immersive-handlers.js');
 const { createSystemTelemetry } = require('../../core/system-telemetry.js');
 const { createLiveResourceTelemetry } = require('../../core/live-resource-telemetry.js');
+const { createCpuUtilitySampler } = require('../../core/cpu-utility-sampler.js');
 const { createClashVergeDelayReader } = require('../../core/clash-verge-delay.js');
 const { createVpnTrafficRecorder } = require('../../core/vpn-traffic-recorder.js');
 
@@ -28,26 +29,72 @@ function clampPercent(value) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
-function createSystemResourceSampler(osApi = systemOs) {
+// 底栏 CPU / 内存口径（2026-11-28，与任务管理器对照后定）：
+// - CPU：整机，口径跟本机任务管理器走（见 core/cpu-utility-sampler.js）：新版 Windows 是忙碌时间
+//   （os.cpus()，cpuSource=processor-time-taskmgr），旧版是处理器利用率（cpuSource=processor-utility）；
+//   旧版读不到计数器时回落忙碌时间（cpuSource=processor-time，睿频机器上偏低）。
+// - 内存：整机物理内存，已用 = 总量 − 可用（可用含备用缓存），与任务管理器「内存」百分比同源。
+function createSystemResourceSampler(osApi = systemOs, options = {}) {
   let previousCpu = readCpuTotals(osApi);
+  let previousAt = Date.now();
+  const cpuUtility = options.cpuUtility || null;
 
-  return function sampleSystemResourceUsage() {
+  let lastCpuScale = null;
+  let lastCpuMode = null;
+  let lastCpu = null;
+  function sampleSystemResourceUsage() {
     const currentCpu = readCpuTotals(osApi);
+    const at = Date.now();
     let cpuPct = null;
+    let cpuSource = null;
     if (previousCpu && currentCpu) {
       const totalDelta = currentCpu.total - previousCpu.total;
       const idleDelta = currentCpu.idle - previousCpu.idle;
-      if (totalDelta > 0) cpuPct = clampPercent((1 - Math.max(0, idleDelta) / totalDelta) * 100);
+      if (totalDelta > 0) { cpuPct = clampPercent((1 - Math.max(0, idleDelta) / totalDelta) * 100); cpuSource = 'processor-time'; }
     }
-    previousCpu = currentCpu;
+    // 强制刷新紧跟定时刷新时间隔可能只有 1 秒，窗口至少取 3 秒，免得读数跳。
+    const windowMs = Math.max(3_000, Math.min(10_000, at - previousAt));
+    // 两次调用挨得太近（不到系统时钟一格，约 16 ms）时忙碌时间没有增量：不推进基准，沿用上一次读数，免得底栏闪「—」。
+    const cpuAdvanced = cpuPct != null || !previousCpu || !currentCpu;
+    if (cpuAdvanced) { previousCpu = currentCpu; previousAt = at; }
+    let utility = null;
+    try { utility = cpuUtility ? cpuUtility.read(windowMs) : null; } catch { utility = null; }
+    if (utility && utility.mode === 'time' && cpuSource) cpuSource = 'processor-time-taskmgr';
+    if (utility && Number.isFinite(utility.pct)) { cpuPct = clampPercent(utility.pct); cpuSource = 'processor-utility'; }
+    lastCpuScale = utility && utility.mode === 'utility' && Number.isFinite(utility.scale) ? utility.scale : null;
+    if (cpuPct == null && !cpuAdvanced && lastCpu) ({ cpuPct, cpuSource } = lastCpu);
+    if (cpuPct != null) lastCpu = { cpuPct, cpuSource };
+    lastCpuMode = utility ? utility.mode : null;
 
     const totalMemory = osApi.totalmem();
     const freeMemory = osApi.freemem();
     const memoryPct = totalMemory > 0
-      ? clampPercent((1 - freeMemory / totalMemory) * 100)
+      // 任务管理器的内存百分比是截断取整（公司实测 57 次里 53 次与截断一致、四舍五入只 28 次）。
+      ? clampPercent(Math.floor((1 - freeMemory / totalMemory) * 100))
       : null;
 
-    return { cpuPct, memoryPct, sampledAt: Date.now() };
+    return {
+      cpuPct, cpuSource, cpuWindowMs: windowMs, memoryPct,
+      memoryTotalBytes: totalMemory > 0 ? totalMemory : null,
+      memoryAvailableBytes: Number.isFinite(freeMemory) ? freeMemory : null,
+      sampledAt: at,
+    };
+  }
+  // 旧版任务管理器「进程」页的单进程 CPU 也按利用率折算；Top 3 浮层用这个系数把 CPU 时间换算过去。
+  sampleSystemResourceUsage.cpuScale = () => lastCpuScale;
+  sampleSystemResourceUsage.cpuMode = () => lastCpuMode;
+  return sampleSystemResourceUsage;
+}
+
+// Top 3 浮层的单进程 CPU：按 CPU 时间采样，旧版任务管理器口径下再乘利用率系数（封顶 100）。
+// cpuBasis：utility 已折算；time-taskmgr 新版任务管理器本来就按 CPU 时间；time 读不到系数没折算。
+function scaleTopProcesses(result, scale, mode) {
+  if (!result || result.status !== 'ok' || !Array.isArray(result.cpu)) return result;
+  if (mode === 'time') return { ...result, cpuBasis: 'time-taskmgr' };
+  if (!Number.isFinite(scale) || scale <= 0) return { ...result, cpuBasis: 'time' };
+  return {
+    ...result, cpuBasis: 'utility',
+    cpu: result.cpu.map(row => ({ ...row, cpuPct: Number.isFinite(row.cpuPct) ? Math.min(100, row.cpuPct * scale) : row.cpuPct })),
   };
 }
 
@@ -183,7 +230,14 @@ function registerAppUtilityIpc(ipcMain, deps) {
     } catch (error) { return { ok: false, error: error.message }; }
   });
   registerPreviewImmersiveIpc(ipcMain, deps);
-  const sampleSystemResourceUsage = createSystemResourceSampler(deps.os || systemOs);
+  const cpuUtility = deps.cpuUtility !== undefined ? deps.cpuUtility
+    // 只在正式运行（带 app）时起真实采样器；单测注册 IPC 不起 typeperf，免得进程挂 30 秒才退。
+    : (deps.app && !deps.os ? createCpuUtilitySampler() : null);
+  if (cpuUtility && !deps.cpuUtility) {
+    deps.app?.on?.('will-quit', () => cpuUtility.dispose());
+    process.once('exit', () => cpuUtility.dispose());
+  }
+  const sampleSystemResourceUsage = createSystemResourceSampler(deps.os || systemOs, { cpuUtility });
   const systemTelemetry = deps.systemTelemetry || createSystemTelemetry();
   const clashDelay = deps.clashDelay || createClashVergeDelayReader();
   const liveTelemetry = deps.liveTelemetry || createLiveResourceTelemetry();
@@ -197,7 +251,7 @@ function registerAppUtilityIpc(ipcMain, deps) {
     try { ips = require('../../core/live-resource-telemetry.js').localAddresses(systemOs.networkInterfaces()); } catch {}
     return { status: 'off', ips };
   });
-  ipcMain.handle('get-resource-top-processes', () => liveTelemetry.sampleProcesses());
+  ipcMain.handle('get-resource-top-processes', async () => scaleTopProcesses(await liveTelemetry.sampleProcesses(), sampleSystemResourceUsage.cpuScale?.(), sampleSystemResourceUsage.cpuMode?.()));
 
   ipcMain.handle('is-window-focused', () => {
     const mainWindow = deps.getMainWindow();
@@ -276,6 +330,7 @@ function registerAppUtilityIpc(ipcMain, deps) {
 
 module.exports = {
   createSystemResourceSampler,
+  scaleTopProcesses,
   registerAppUtilityIpc,
   saveClipboardImage,
   prepareImageFile,

@@ -30,6 +30,8 @@ function classifyProcess(proc, known = {}) {
   const cmd = String(proc.cmd || '');
   if (name === 'msedge.exe') return 'companyWeb';
   if (name === 'nvidia-smi.exe') return 'liveMeter';
+  // 底栏 CPU 读数用的常驻计数器（core/cpu-utility-sampler.js），算 Hub 本体。
+  if (name === 'typeperf.exe') return 'core';
   if (name === 'powershell.exe' || name === 'pwsh.exe') {
     const script = decodeEncodedCommand(cmd);
     if (/GetIPv4Statistics/.test(script)) return 'liveMeter';

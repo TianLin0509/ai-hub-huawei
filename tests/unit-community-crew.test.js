@@ -302,9 +302,14 @@ test('离线：模型返回后不写 feed 或 card，不把迟到的答案留待
   const box = mailbox(B, crew.id), beforeFeed = fs.readFileSync(path.join(box, 'feed.bin')), beforeCard = fs.readFileSync(path.join(box, 'card.bin'));
   feed(A, crew, [message(A, 'ask', { text: '口径是什么？', to: B.svc._state().me.id })]);
   const polling = B.svc.pollOnce(); await entered.promise;
-  B.enable(false); gate.resolve('迟到的答案'); await polling; await B.svc.publishAll();
+  B.enable(false); gate.resolve('迟到的答案'); await polling; await turn();
+  // 名片在线时会写一次「收到、起草中」的回执；离线之后不再有任何写入，回执里也不会出现已答。
+  const offlineCard = fs.readFileSync(path.join(box, 'card.bin')); void beforeCard;
+  await B.svc.publishAll();
   assert.deepEqual(fs.readFileSync(path.join(box, 'feed.bin')), beforeFeed);
-  assert.deepEqual(fs.readFileSync(path.join(box, 'card.bin')), beforeCard);
+  assert.deepEqual(fs.readFileSync(path.join(box, 'card.bin')), offlineCard);
+  const rx = seal.openJson(crew.key, offlineCard).rx[A.svc._state().me.id];
+  assert.ok(!Object.values(rx.asks).includes('auto'));
   assert.ok(!B.svc.snapshot().crews[0].items.some(i => i.type === 'answer'));
   B.enable(true); await B.svc.publishAll();
   assert.ok(!seal.openJson(crew.key, fs.readFileSync(path.join(box, 'feed.bin'))).items.some(i => i.type === 'answer'));
@@ -750,4 +755,97 @@ test('入站发现：入队者信箱还没写好时先扑空，30 秒后再试�
   await J.h.join({ text: inv.message });
   A.advance(31000); await A.svc.pollOnce();
   assert.equal(A.svc.snapshot().crews[0].members.length, 2);
+});
+
+test('对桌宠说：口语提问也认得出（你去问下、麻烦帮我问问），只有一位成员时不用选人', () => {
+  const one = [{ id: 'aaaaaaaa11111111', nick: '小猫·2A05' }];
+  const two = one.concat([{ id: 'bbbbbbbb22222222', nick: '老王' }]);
+  for (const text of ['你去问下 今天周几？', '麻烦帮我问问今天周几', '替我问一下：今天周几', '去问今天周几', '问下今天周几']) {
+    const r = parseCommand(text, one);
+    assert.equal(r.kind, 'ask', text); assert.equal(r.to, one[0].id, text); assert.match(r.text, /^今天周几/, text);
+  }
+  assert.equal(parseCommand('你去问下 今天周几？', two).to, '', '两位以上没点名时让用户选');
+  assert.equal(parseCommand('问下老王 SRS 周期多少？', two).to, two[1].id);
+  assert.equal(parseCommand('老王，SRS 周期现网多少？', two).kind, 'ask', '点名加问号也算提问');
+  assert.equal(parseCommand('问题已经定位了，明早合入', two).kind, 'say');
+  assert.equal(parseCommand('告诉大家 谁能问下老王？', two).kind, 'say');
+  assert.equal(parseCommand('今晚挂仿真', two).kind, 'say');
+});
+
+test('回执：对方收到公告、提问处理到哪一步、agent 正在起草，提问方都看得到', async () => {
+  let release; const gate = new Promise(r => { release = r; });
+  const { A, B, crew } = await pair({ runModel: async () => { await gate; return '草稿：周六'; } });
+  await A.h.say({ crewId: crew.id, text: '今晚挂仿真' });
+  let say = A.svc.snapshot().crews[0].items.find(i => i.type === 'say');
+  assert.deepEqual(say.delivery, { total: 1, read: 0 }, '对方没读前显示未收到');
+  await B.svc.pollOnce(); await A.svc.pollOnce();
+  say = A.svc.snapshot().crews[0].items.find(i => i.type === 'say');
+  assert.equal(say.delivery.read, 1, '对方读到后显示已收到');
+  const bId = B.svc._state().me.id;
+  await A.h.ask({ crewId: crew.id, to: bId, text: '今天周几？' });
+  await B.svc.pollOnce();
+  await until(() => B.svc.snapshot().crews[0].items.find(i => i.type === 'ask')?.status === 'wait');
+  await A.svc.pollOnce();
+  let ask = A.svc.snapshot().crews[0].items.find(i => i.type === 'ask');
+  assert.equal(ask.delivery.step, 'drafting', '对方 agent 起草中');
+  assert.equal(A.svc.snapshot().crews[0].members.find(m => m.id === bId).agent.state, 'drafting');
+  release();
+  await until(() => B.svc.snapshot().crews[0].items.find(i => i.type === 'ask')?.draft);
+  await turn(); await B.svc.publishAll(); await A.svc.pollOnce();
+  ask = A.svc.snapshot().crews[0].items.find(i => i.type === 'ask');
+  assert.equal(ask.delivery.step, 'wait', '起草完，等对方确认');
+  assert.ok(A.svc.snapshot().crews[0].members.find(m => m.id === bId).ver !== undefined);
+});
+
+test('对桌宠说：不吞问句首字、句中提到同事不当私信、只喊名字不寄空问题', () => {
+  const one = [{ id: 'aaaaaaaa11111111', nick: '小猫·2A05' }];
+  const two = one.concat([{ id: 'bbbbbbbb22222222', nick: '老王' }]);
+  assert.equal(parseCommand('问下老王，他的分支合了吗？', two).text, '他的分支合了吗？');
+  assert.equal(parseCommand('老王，他的参数发出来了吗？', two).text, '他的参数发出来了吗？');
+  assert.equal(parseCommand('你去问下，他们今天开会吗？', one).text, '他们今天开会吗？');
+  assert.equal(parseCommand('你去问下 一下子跑多少种子？', one).text, '一下子跑多少种子？');
+  assert.equal(parseCommand('你去问他一下，今天周几？', one).text, '今天周几？');
+  const mid = parseCommand('今晚谁跟老王一起值班？', two);
+  assert.equal(mid.kind, 'say', '句中提到同事不当私信');
+  const q2 = parseCommand('问下 今天谁跟老王值班', two);
+  assert.equal(q2.to, ''); assert.equal(q2.text, '今天谁跟老王值班');
+  assert.equal(parseCommand('你去问下老王', two).text, '', '只喊名字不寄');
+  assert.equal(parseCommand('@老王 SRS 周期多少？', two).to, two[1].id);
+  for (const t of ['请你去问下 今天周几？', '你去帮我问下 今天周几？', '你帮我去问下 今天周几？']) assert.equal(parseCommand(t, one).kind, 'ask', t);
+  for (const t of ['问卷大家今天填一下', '问答库更新了']) assert.equal(parseCommand(t, two).kind, 'say', t);
+  assert.equal(parseCommand('问下 今天周几', [{ id: 'cccccccc33333333', nick: '我', me: true }].concat(one)).to, one[0].id, '列表里含本人也不算');
+});
+
+test('回执不乒乓：两边只是互读名片时，不会每轮都重写自己的名片', async () => {
+  const { A, B, crew } = await pair();
+  await A.svc.pollOnce(); await B.svc.pollOnce(); await A.svc.pollOnce();
+  const card = f => fs.statSync(path.join(mailbox(f, crew.id), 'card.bin')).mtimeMs;
+  const a0 = card(A), b0 = card(B);
+  await new Promise(r => setTimeout(r, 30));
+  for (let k = 0; k < 3; k++) { await A.svc.pollOnce(); await B.svc.pollOnce(); }
+  assert.equal(card(A), a0); assert.equal(card(B), b0);
+});
+
+test('对方起草中关机：提问方不会一直显示「正在起草」', async () => {
+  const gate = deferred(), entered = deferred();
+  const { A, B, crew } = await pair({ runModel: () => { entered.resolve(); return gate.promise; } });
+  const bId = B.svc._state().me.id;
+  await A.h.ask({ crewId: crew.id, to: bId, text: '今天周几？' });
+  const p = B.svc.pollOnce(); await entered.promise; await p;
+  await A.svc.pollOnce();
+  assert.equal(A.svc.snapshot().crews[0].members.find(m => m.id === bId).agent.state, 'drafting');
+  A.advance(6 * 60000); // B 关机：名片不再更新
+  assert.equal(A.svc.snapshot().crews[0].members.find(m => m.id === bId).agent.state, 'idle');
+  assert.notEqual(A.svc.snapshot().crews[0].items.find(i => i.type === 'ask').delivery.step, 'drafting');
+  gate.resolve('');
+});
+
+test('版本：成员页能看到自己和对方的 AI HUB 版本号', async () => {
+  const { A, B } = await pair();
+  await A.svc.pollOnce();
+  const ver = require('../package.json').version;
+  const ms = A.svc.snapshot().crews[0].members;
+  assert.equal(ms.find(m => m.me).ver, ver);
+  assert.equal(ms.find(m => !m.me).ver, ver);
+  void B;
 });

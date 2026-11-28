@@ -854,5 +854,11 @@
   "谁能打开：{0}（信件和文件都加密）": "Who can open it: {0} (letters and files are encrypted)",
   "所有人（Everyone）都能打开": "anyone (Everyone)",
   "已登录的同事能打开": "signed-in colleagues",
-  "没读到": "unknown"
+  "没读到": "unknown",
+  "整机 CPU，与任务管理器同口径（处理器利用率，含睿频折算）": "Whole-machine CPU, same measure as Task Manager (processor utility, turbo-adjusted)",
+  "已用 {0} / 共 {1}": "{0} used / {1} total",
+  "整机物理内存，与任务管理器同口径（已用 = 总量 − 可用，可用含缓存）": "Whole-machine physical memory, same measure as Task Manager (used = total − available; available includes cache)",
+  "最近 {0} 秒均值（任务管理器是每秒瞬时值）": "Average over the last {0} s (Task Manager shows the instant value each second)",
+  "整机 CPU，与任务管理器同口径（忙碌时间占比）": "Whole-machine CPU, same measure as Task Manager (share of busy time)",
+  "整机 CPU，按忙碌时间计（读不到处理器利用率计数器，任务管理器按睿频折算时会比这里高）": "Whole-machine CPU from busy time (processor utility counter unavailable; Task Manager reads higher when it adjusts for turbo)"
 }

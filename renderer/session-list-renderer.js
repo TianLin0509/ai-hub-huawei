@@ -537,7 +537,22 @@ function _sessionWarningText(session) {
     ].join('\n');
 
     const routeClass = (route, warning) => !egress ? 'pending' : warning || !route?.ok ? 'warning' : 'ok';
-    const metric = (label, value) => `<span class="strip-resource${metricClass(value)}" tabindex="0" data-resource-kind="${label === 'CPU' ? 'cpu' : 'memory'}" aria-label="${label} ${value == null ? '检测中' : value + '%'}，悬停查看占用 Top 3" title="${label} ${value == null ? '检测中' : value + '%'}">${label}<b>${value == null ? '—' : value + '%'}</b><span class="strip-mini-track"><i style="width:${value == null ? 0 : Math.max(0, Math.min(100, value))}%"></i></span></span>`;
+    // 悬停写明口径（2026-11-28）：两项都是整机读数，CPU 与任务管理器同一计数器。
+    const gb = bytes => Number.isFinite(bytes) ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : '';
+    const scopeNote = label => {
+      if (label === 'CPU') {
+        // 任务管理器的口径随 Windows 版本变，主进程按本机版本选好后用 cpuSource 告诉这里。
+        const secs = Number.isFinite(usage.cpuWindowMs) ? `最近 ${Math.round(usage.cpuWindowMs / 1000)} 秒均值（任务管理器是每秒瞬时值）` : '';
+        const basis = usage.cpuSource === 'processor-utility' ? '整机 CPU，与任务管理器同口径（处理器利用率，含睿频折算）'
+          : usage.cpuSource === 'processor-time-taskmgr' ? '整机 CPU，与任务管理器同口径（忙碌时间占比）'
+            : '整机 CPU，按忙碌时间计（读不到处理器利用率计数器，任务管理器按睿频折算时会比这里高）';
+        return [basis, secs].filter(Boolean).join(' · ');
+      }
+      const used = Number.isFinite(usage.memoryTotalBytes) && Number.isFinite(usage.memoryAvailableBytes)
+        ? `已用 ${gb(usage.memoryTotalBytes - usage.memoryAvailableBytes)} / 共 ${gb(usage.memoryTotalBytes)}` : '';
+      return ['整机物理内存，与任务管理器同口径（已用 = 总量 − 可用，可用含缓存）', used].filter(Boolean).join(' · ');
+    };
+    const metric = (label, value) => `<span class="strip-resource${metricClass(value)}" tabindex="0" data-resource-kind="${label === 'CPU' ? 'cpu' : 'memory'}" aria-label="${label} ${value == null ? '检测中' : value + '%'}，悬停查看占用 Top 3" title="${escapeHtml(`${label} ${value == null ? '检测中' : value + '%'}\n${scopeNote(label)}`)}">${label}<b>${value == null ? '—' : value + '%'}</b><span class="strip-mini-track"><i style="width:${value == null ? 0 : Math.max(0, Math.min(100, value))}%"></i></span></span>`;
     // 低开销模式（2026-11-23）：「底栏网速与显卡读数」关着时显示「关」，点一下打开设置「资源与后台」（renderer/background-features.js 接点击）。
     const meterOffTitle = '低开销模式：网速和显卡读数没开（省一个常驻的 PowerShell 和定时的 nvidia-smi）。点一下到「设置 → 资源与后台」打开';
     const gpuOff = !!usage.gpu?.off;

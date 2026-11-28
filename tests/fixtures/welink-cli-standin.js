@@ -148,7 +148,9 @@ if (group === '--version') {
   const grp = (id, name) => ({ cross_instance: false, group_id: id, group_name: name, group_type: 'NORMAL_GROUP', native_name: '', recent_conversation_type: 'CHAT_TYPE_GROUP_MSG', staff_name: '', target_account: '' });
   const all = [p2p('colleague_a', '同事甲'), grp('g-100', '项目群A'), grp('g-phone', '助理 CodeAgent'),
     // 垫着的空旧单聊个数：WELINK_STANDIN_PAD，默认 12；单测设 0 省时间
-    ...Array.from({ length: Number(process.env.WELINK_STANDIN_PAD ?? 12) }, (_, i) => p2p('old_' + i, '老同事' + i)), grp('g-200', '部门大群'), p2p('colleague_d', '同事丁')];
+    ...Array.from({ length: Number(process.env.WELINK_STANDIN_PAD ?? 12) }, (_, i) => p2p('old_' + i, '老同事' + i)), grp('g-200', '部门大群'), p2p('colleague_d', '同事丁'),
+    // 群很多时的界面截图用：WELINK_STANDIN_GROUPS 个额外的群，默认 0
+    ...Array.from({ length: Number(process.env.WELINK_STANDIN_GROUPS || 0) }, (_, i) => grp('g-x' + i, ['周报', '通知', '闲聊', '值班', '项目'][i % 5] + '群' + (i + 1)))];
   const count = Math.min(100, Math.max(1, Number(arg('--count') || 10)));
   // Q-1021-08：最近会话的明确成功码，不能用泛化的 0 代替真机契约。
   out({ app_service_id: 'x', conversation_info: all.slice(0, count), error: { error_code: 'IM.0000', error_msg: 'success' } });

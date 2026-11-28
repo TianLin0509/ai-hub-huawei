@@ -13,8 +13,30 @@ const size = n => { n = Number(n) || 0; return n >= 1024 ** 3 ? (n / 1024 ** 3).
 const clock = at => { const d = new Date(at); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 const daysLeft = (exp, now = Date.now()) => Math.max(0, Math.ceil((exp - now) / 86400000));
 
+// 我发出的提问：对方那边处理到哪一步（来自对方名片里的回执）。
+const STEP = { drafting: ['wait', '对方的 agent 正在起草'], queued: ['wait', '对方排队处理中'], answering: ['wait', '对方的 agent 正在作答'], wait: ['wait', '对方已收到，等对方确认回信'],
+  recv: ['in', '对方已收到'], rejected: ['no', '对方按规则不回答'], ignored: ['done', '对方选择不回'], expired: ['done', '已过期'], auto: ['auto', '对方已自动答，回信在路上'], sent: ['auto', '对方已回，回信在路上'] };
+function deliveryPill(i) {
+  const d = i.delivery;
+  if (!d || !d.total) return '';
+  if (i.type === 'ask' && !i.answer) {
+    const st = Object.hasOwn(STEP, d.step) ? STEP[d.step] : null;
+    return st ? `<span class="cc-pill ${st[0]}">${st[1]}</span>` : '<span class="cc-pill in">已发出，对方还没收到</span>';
+  }
+  if (i.type === 'ask') return '';
+  return d.read >= d.total ? `<span class="cc-pill done">${d.total > 1 ? '全部已收到' : '对方已收到'}</span>` : d.read ? `<span class="cc-pill in">已收到 ${d.read}/${d.total}</span>` : '<span class="cc-pill in">已发出，对方还没收到</span>';
+}
+// 版本号：对比两段数字；对方比我旧时提示（回执、起草状态等新功能要对方也更新才看得到）。
+const verCmp = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let k = 0; k < Math.max(x.length, y.length); k++) { const d = (x[k] || 0) - (y[k] || 0); if (d) return d; } return 0; };
+function verTag(m, mine) {
+  if (m.ver) return ` · <span data-i18n-skip>AI HUB v${esc(m.ver)}</span>${!m.me && mine && verCmp(m.ver, mine) < 0 ? ' <span class="cc-pill in">比你旧</span>' : ''}`;
+  return !m.me && m.seenAt ? ' · <span class="cc-pill in">旧版，看不到版本号</span>' : '';
+}
+const ago = (at, now = Date.now()) => { const s = Math.max(0, Math.round((now - at) / 1000)); if (s < 60) return `${s} 秒前`; if (s < 3600) return `${Math.round(s / 60)} 分钟前`; return `${Math.round(s / 3600)} 小时前`; };
+
 function statusPill(i) {
   const s = i.status;
+  if (i.mine && i.type === 'ask' && !i.answer && i.delivery && s === 'sent') return deliveryPill(i);
   if (s === 'queued') return '<span class="cc-pill wait">排队处理中</span>';
   if (s === 'auto') return '<span class="cc-pill auto">已自动答</span>';
   if (s === 'sent') return i.mine ? (i.answer ? '<span class="cc-pill auto">已回信</span>' : '<span class="cc-pill in">等对方回</span>') : '<span class="cc-pill done">你已回复</span>';
@@ -38,7 +60,7 @@ function createCrew({ host, ipcRenderer, toast, onSnapshot = () => {} }) {
         <div class="cc-confirm" data-slot="confirm"></div>
         <div class="cc-setup" data-slot="setup" hidden></div>
       </div>
-      <div class="cc-cmd"><div class="av"><img data-slot="cmdav" alt=""></div><input data-slot="cmd" maxlength="600"><button class="cc-btn pri" data-cc="run">交给它</button></div>
+      <div class="cc-cmd"><div class="av"><img data-slot="cmdav" alt=""></div><select class="cc-in" data-slot="sendto" title="发给谁" style="width:auto;max-width:150px;flex:none"></select><input data-slot="cmd" maxlength="600"><button class="cc-btn pri" data-cc="run">交给它</button></div>
       <div class="cc-sugg" data-slot="sugg"></div>
     </div>
     <aside class="cc-panel"><div class="cc-tabs" data-slot="tabs"></div><div class="cc-pb" data-slot="body"></div></aside>`;
@@ -72,6 +94,11 @@ function createCrew({ host, ipcRenderer, toast, onSnapshot = () => {} }) {
     const pn = (me && me.petName) || '桌宠';
     $('cmd').placeholder = `对${pn}说：把哪个文件夹分享给谁、怎么用；或者让它去问谁什么；或者告诉大家一件事`;
     const c = crew(), other = c ? c.members.find(m => !m.me) : null, who = other ? other.nick : '同事';
+    // 「发给」：全体 = 公告；选某人 = 寄给他的提问。重绘时保留已选的人。
+    const sel = $('sendto'), keep = sel.value;
+    const peers = c ? c.members.filter(m => !m.me) : [];
+    sel.innerHTML = '<option value="">发给：全体（公告）</option>' + peers.map(m => `<option value="${esc(m.id)}">问 ${esc(m.nick)}</option>`).join('');
+    sel.value = peers.some(m => m.id === keep) ? keep : '';
     $('sugg').innerHTML = [`把 D:\\我的脚本 分享给${who}，用法是 python run.py`, `问问${who} 这个参数现网用多少`, '告诉大家我今晚挂仿真，明早出结果']
       .map(s => `<button type="button" data-sugg="${esc(s)}" data-i18n-skip>${esc(s)}</button>`).join('');
   }
@@ -156,10 +183,10 @@ function createCrew({ host, ipcRenderer, toast, onSnapshot = () => {} }) {
     if (tab === 'feed') {
       const evs = c.items.slice(-40).reverse().map(i => {
         let h = '';
-        if (i.type === 'say') h = `<b data-i18n-skip>${esc(nickOf(i.from))}</b>：<span data-i18n-skip>${esc(i.text)}</span>`;
+        if (i.type === 'say') h = `<b data-i18n-skip>${esc(nickOf(i.from))}</b>：<span data-i18n-skip>${esc(i.text)}</span> ${i.mine ? deliveryPill(i) : ''}`;
         else if (i.type === 'ask') h = `<b data-i18n-skip>${esc(nickOf(i.from))}</b> <span>的 agent 问</span> <b data-i18n-skip>${esc(nickOf(i.to))}</b> <span>（${INTENT[i.intent] || '查口径'}）</span> ${statusPill(i)}`;
         else if (i.type === 'answer') h = `<b data-i18n-skip>${esc(nickOf(i.from))}</b> <span>回了信</span>`;
-        else if (i.type === 'share') h = `<b data-i18n-skip>${esc(nickOf(i.from))}</b> <span>分享了</span>「<span data-i18n-skip>${esc(i.share.name)}</span>」<span>给</span> <b data-i18n-skip>${i.to === '*' ? '大家' : esc(nickOf(i.to))}</b> 📁`;
+        else if (i.type === 'share') h = `<b data-i18n-skip>${esc(nickOf(i.from))}</b> <span>分享了</span>「<span data-i18n-skip>${esc(i.share.name)}</span>」<span>给</span> <b data-i18n-skip>${i.to === '*' ? '大家' : esc(nickOf(i.to))}</b> 📁 ${i.mine ? deliveryPill(i) : ''}`;
         else if (i.type === 'unshare') h = `<b data-i18n-skip>${esc(nickOf(i.from))}</b> <span>撤回了一个分享</span>`;
         return `<div class="ev"><span class="t">${clock(i.at)}</span><img src="${pet(i.from)}" alt=""><div>${h}</div></div>`;
       }).join('');
@@ -214,7 +241,7 @@ function createCrew({ host, ipcRenderer, toast, onSnapshot = () => {} }) {
     if (tab === 'mem') {
       B.innerHTML = `<div class="cc-sec" style="margin-top:0">成员与 IP</div>` + c.members.map(m => `<div class="cc-row"><div class="ic in"><img src="${esc(petSrc(m.pet).src)}" alt=""></div>
           <div class="grow"><div><b data-i18n-skip>${esc(m.nick)}</b>${m.me ? ' <span class="cc-pill done">我</span>' : ''}</div>
-          <div class="sm"><i class="cc-dot ${m.me ? m.status : m.online ? m.status : 'off'}"></i>${m.me ? ST[m.status] || '在线' : m.online ? ST[m.status] || '在线' : '不在线'}${m.error ? ` · <span class="cc-err">${esc(m.error)}</span>` : ''}</div>
+          <div class="sm"><i class="cc-dot ${m.me ? m.status : m.online ? m.status : 'off'}"></i>${m.me ? ST[m.status] || '在线' : m.online ? ST[m.status] || '在线' : '不在线'}${!m.me && m.seenAt ? ` · <span>最近联系</span> <span>${ago(m.seenAt)}</span>` : ''}${verTag(m, (meM() || {}).ver)}${m.agent && m.agent.state === 'drafting' ? ' · <span class="cc-pill wait">agent 正在给你起草回信</span>' : m.agent && m.agent.state === 'busy' ? ' · <span class="cc-pill wait">agent 正在处理来信</span>' : ''}${m.error ? ` · <span class="cc-err">${esc(m.error)}</span>` : ''}</div>
           <div class="sm" data-i18n-skip>\\\\${esc(m.ip)}\\${esc(m.share)}</div></div>
           ${m.me ? `<select class="cc-in" data-cc-ip="me" style="width:118px">${[...new Set([snap.me.ip, ...(snap.me.ipCandidates || [])].filter(Boolean))].map(ip => `<option${ip === snap.me.ip ? ' selected' : ''}>${esc(ip)}</option>`).join('')}</select>`
             : `<input class="cc-in" data-cc-ip="${esc(m.id)}" value="${esc(m.ip)}" style="width:108px;font-family:Consolas,monospace"><button class="cc-btn" data-cc="test" data-id="${esc(m.id)}">测</button>`}</div>`).join('') +
@@ -274,6 +301,15 @@ function createCrew({ host, ipcRenderer, toast, onSnapshot = () => {} }) {
     const me = scene.get((meM() || {}).id);
     const r = await invoke('parse', { crewId: c.id, text });
     if (!r || r.ok === false) { toast((r && r.error) || '没听懂'); return; }
+    // 「发给」选了某个人：这句话就是寄给他的提问（分享则默认分享给他）；选「全体」照原来的说法判断。
+    const picked = ($('sendto') || {}).value || '';
+    if (picked && c.members.some(m => m.id === picked && !m.me)) {
+      if (r.kind === 'share') { if (!r.to) r.to = picked; }
+      else if (!/^(告诉大家|跟大家说|广播一下|通知大家)/.test(text)) {
+        const q = r.kind === 'ask' && (!r.to || r.to === picked) && r.text ? r.text : text;
+        Object.assign(r, { kind: 'ask', to: picked, text: q });
+      }
+    }
     if (r.kind === 'share') {
       const pv = await invoke('share-preview', { dir: r.dir });
       if (!pv || pv.ok === false) { scene.say(me, (pv && pv.error) || '找不到这个文件夹', 3200); return; }
@@ -283,6 +319,7 @@ function createCrew({ host, ipcRenderer, toast, onSnapshot = () => {} }) {
       return;
     }
     if (r.kind === 'ask') {
+      if (!r.text) { toast('要问什么？把问题也写上'); return; }
       if (!r.to) {
         const choices = c.members.filter(m => !m.me);
         $('confirm').innerHTML = `<div class="cc-ph"><b>问谁？</b></div><div class="cc-pb"><select class="cc-in" data-slot="askto">${choices.map(m => `<option value="${esc(m.id)}" data-i18n-skip>${esc(m.nick)}</option>`).join('')}</select><div class="cc-ops"><button class="cc-btn pri" data-cc="pickask">寄出提问</button><button class="cc-btn" data-cc="cfclose">取消</button></div></div>`;
@@ -306,7 +343,7 @@ function createCrew({ host, ipcRenderer, toast, onSnapshot = () => {} }) {
       input.value = '';
       scene.setPose(me, 'happy'); scene.say(me, r.text, 3000);
       setTimeout(() => scene.setPose(me, 'idle'), 3000);
-      for (const m of c.members.filter(x => !x.me && x.online)) { const o = scene.get(m.id); setTimeout(() => scene.say(o, '收到～', 1800), 700 + Math.random() * 900); }
+      toast('已作为公告发给全体，对方收到后这里会显示「已收到」；想单独问某人，在输入框左边选他');
       reload();
     }
   }
