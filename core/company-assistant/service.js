@@ -2030,7 +2030,7 @@ class CompanyAssistant {
     job.materialItems = (String(material.text || '').match(/\[(?:msg|mail|mtg|meeting|cal):/g) || []).length;
     const book = AC.playbook(material.intents), cut = book.indexOf('\n\n作答手册 · ');
     const general = cut < 0 ? book : book.slice(0, cut), specific = cut < 0 ? '' : book.slice(cut + 2);
-    const parts = [specific, `当前时间（上海）：${D.displayTime(now)}`, this.workDirLine(), this.memory.context(job.prompt), material.text, this.sessionsBlock(job.prompt), this.recentHistory(job)].filter(Boolean);
+    const parts = [specific, `当前时间（上海）：${D.displayTime(now)}`, this.workDirLine(), job.teamOwner ? '' : this.selfStyle(), this.memory.context(job.prompt), material.text, this.sessionsBlock(job.prompt), this.recentHistory(job)].filter(Boolean);
     return [this.instructions(toolset), general, '---', ...parts, '---', job.prompt].join('\n\n');
   }
   // 「我的工作目录」（2026-11-19，管家 r38d 方案 A）：助理会话的当前目录仍是助理自己的 workspace（data/ 等相对路径照旧），
@@ -2062,6 +2062,13 @@ class CompanyAssistant {
     return [`Hub 会话现状（Hub 现查于 ${D.clock(this.now())}，不含助理自己的会话；只问有哪些会话、什么状态时直接用它回答，要看内容或推进再用会话工具）：`,
       ...(rows.length ? rows.map(line) : ['（现在没有其他会话）'])].join('\n');
   }
+  // 蒸馏自己（2026-11-28）：本人在分身页「我的画像」里打开「应用到助理 / PPT」才有内容，放在记忆前面；没打开返回空串，提示与原来逐字一致。
+  selfStyle(target = 'assistant') {
+    let owner = null;
+    try { const snap = this.snapshot(); owner = snap?.login?.ok && snap.login.uid ? String(snap.login.uid) : (this.archive?.owner?.() || null); } catch { owner = null; }
+    if (!owner) return '';
+    try { const v = require('../self-distill').forTarget({ dataDir: this.deps.dataDir, owner, target }); return typeof v === 'string' ? v : ''; } catch { return ''; }
+  }
   composePrompt(job, toolset) {
     if ((toolset === 'desk' || toolset === 'phone') && this.guided()) return this.composeGuided(job, toolset);
     const parts = [`当前时间（上海）：${D.displayTime(this.now())}`];
@@ -2069,6 +2076,8 @@ class CompanyAssistant {
       const workDir = this.workDirLine();
       if (workDir) parts.push(workDir);
       try { this.memory.seedDefaults?.(); } catch { /* 记忆文件写不了不影响回答 */ }
+      const style = job.teamOwner ? '' : this.selfStyle();
+      if (style) parts.push(style);
       const memory = this.memory.context(job.prompt);
       if (memory) parts.push(memory);
       const digest = this.todayDigest();

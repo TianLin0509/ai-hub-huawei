@@ -197,7 +197,9 @@ class AvatarService {
   // ---- 起草：一次公司 AI 调用写一批，写完即删任务材料 ----
   material(owner, s, items) {
     const snap = this.assistant()?.snapshot?.() || {}, archive = this.assistant()?.archive;
-    return { persona: s.prompts.persona, scene: s.prompts.scene, items: items.map(item => {
+    // 蒸馏自己：打开「应用到分身」时，人设空着就用画像，本人原话样本不够 3 句时用仿写例句补；关着时与原来一致。
+    let self = null; try { self = require('../self-distill').forTarget({ dataDir: this.d.dataDir, owner, target: 'avatar' }); } catch { self = null; }
+    return { persona: s.prompts.persona || self?.persona || s.prompts.persona, scene: s.prompts.scene, items: items.map(item => {
       const person = this.roster(owner, s).people[item.account] || {};
       const rel = person.protected ? 'leader' : person.rel === 'team' ? 'team' : 'peer';
       const list = (snap.messages || {})[item.conv] || [];
@@ -205,6 +207,7 @@ class AvatarService {
       let samples = [];
       try { if (!item.group && archive) samples = archive.read(owner, item.conv, { since: this.now() - 60 * 86400000 }).filter(r => r.m && r.t && r.t.length <= 120 && !R.sensitiveHit(r.t)).slice(-8).map(r => r.t); } catch { /* 档案还没建也能起草 */ }
       if (!samples.length) samples = list.filter(m => m.mine && m.text && !R.sensitiveHit(m.text)).slice(-8).map(m => short(m.text, 120));
+      if (self?.samples?.length && samples.length < 3) samples = [...samples, ...self.samples.slice(0, 8 - samples.length)];
       return { id: item.id, to: item.who, where: item.group ? `群「${item.convName}」里 @ 我` : '私聊',
         relation: [s.prompts.cards[rel], person.note].filter(Boolean).join('\n'), history, samples, incoming: item.text };
     }) };

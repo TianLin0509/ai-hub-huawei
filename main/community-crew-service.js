@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createCrewService } = require('../core/community-crew/service');
 
-function createCommunityCrewMain({ dataDir, isEnabled, communityService, sendToRenderer = () => {}, publishNotice = () => {}, logger = console } = {}) {
+function createCommunityCrewMain({ dataDir, isEnabled, communityService, sendToRenderer = () => {}, publishNotice = () => {}, logger = console, selfDistill = () => null } = {}) {
   const profile = () => {
     let pet = '01-cat', petName = '';
     try { const p = JSON.parse(fs.readFileSync(path.join(dataDir, 'hub-pet.json'), 'utf8')); pet = String(p.role || pet); petName = String(p.petName || ''); } catch { /* 没设过桌宠 */ }
@@ -32,6 +32,9 @@ function createCommunityCrewMain({ dataDir, isEnabled, communityService, sendToR
   }
   const svc = createCrewService({
     dataDir, isEnabled, profile, runModel, logger, ...extra,
+    // 蒸馏自己：本人打开「应用到社区」时团队代答用本人口吻，发出前过出口拦截（拦下就退回通用回答，审计记在画像目录）。
+    selfStyle: () => selfDistill()?.forTarget?.('community') || null,
+    selfGuard: async text => { const s = selfDistill(); return s ? s.guard(text, { where: 'crew-answer' }) : { ok: false, hit: 'unavailable' }; },
     emit: (type, data) => { try { sendToRenderer('community-crew:' + type, data); } catch { /* 窗口没开 */ } },
     notify: n => { try { publishNotice({ id: n.id, kind: 'crew', title: n.title, text: n.text || '' }); } catch { /* 桌宠没开 */ } },
   });

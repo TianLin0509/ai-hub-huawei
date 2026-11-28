@@ -64,6 +64,8 @@ function createHubPetController({
   softGpu = () => !!process.__hubGpuDisabledReason,
   // lowOverhead() → 低开销模式是否开着（2026-11-23 P1 L3）：开着时渲染端静默省电，提醒气泡照常。
   lowOverhead = () => false,
+  // getSelfLike() → 蒸馏自己的画像应用到桌宠时的精简内容 { catchphrases, examples, habits }，没勾「应用到桌宠」时 null（2026-11-28）。
+  getSelfLike = () => null,
   canShow = () => true, debug = false, watchFullscreen = true,
   logger = console, now = () => Date.now(),
   fetchImpl = globalThis.fetch, roleSources = null, autoRoleDelayMs = 2500,
@@ -290,6 +292,18 @@ function createHubPetController({
     return speakGate(settings.get(), { now: clock(), pose, fullscreen: fullscreen || screenFull, meeting: meetingNow() }, spokenAt, item);
   }
 
+  // 画像每 5 分钟取一次（读本机小文件），不在每次巡视时读；取不到或出错当作没应用。
+  const SELF_TTL_MS = 5 * 60000;
+  let selfCache = null, selfAt = -Infinity;
+  function selfLike(t) {
+    if (t - selfAt < SELF_TTL_MS && t >= selfAt) return selfCache;
+    selfAt = t;
+    try { const v = getSelfLike(); selfCache = v && typeof v === 'object' ? v : null; } catch (_) { selfCache = null; }
+    return selfCache;
+  }
+  // 画像改了（保存、开关、删除、蒸馏完成）：清掉缓存，下一次巡视就按新画像来，不等 5 分钟。
+  function selfLikeChanged() { selfCache = null; selfAt = -Infinity; }
+
   function evaluate() {
     if (!alive()) return;
     if (excursion) guardExcursion({ quiet: true });
@@ -305,12 +319,14 @@ function createHubPetController({
     const follow = settings.get().followSessions !== false;
     let quotaLow = signals.quotaLow;
     if (typeof quotaLow !== 'boolean') { try { quotaLow = isQuotaLow?.() === true; } catch (_) { quotaLow = false; } }
-    const ctxBase = { now: t, fullscreen, assistantBusy: assistantBusy(), sessionsBusy: follow ? running : 0, idleSec, quotaLow, pettedAt };
+    // 像我（蒸馏自己）：作息按主人习惯定打盹时段，闲聊混进像我句；没应用到桌宠时两项都是空，行为与以前一致。
+    const me = selfLike(t);
+    const ctxBase = { now: t, fullscreen, assistantBusy: assistantBusy(), sessionsBusy: follow ? running : 0, idleSec, quotaLow, pettedAt, ...(me && me.habits ? { habits: me.habits } : {}) };
     // 先按「没在说话」定姿态（决定能不能开口：打盹时不说），再推进气泡队列，最后按是否在说话定最终姿态。
     pose = decidePose({ ...ctxBase, speaking: false });
     // 闲聊（2026-11-17 r27g）：按情境挑句子，说过的记进 hub-pet.json，短期内不重复；名字和回应偏好也从那里来。
     const s0 = settings.get();
-    const chatter = chatterFor(s0.mode, { now: t, idleSec, meeting: meetingNow(), doneAt: chatterTrack.doneAt }, chatterTrack, { name: s0.petName, prefs: s0.talkPrefs, recent: s0.talkRecent });
+    const chatter = chatterFor(s0.mode, { now: t, idleSec, meeting: meetingNow(), doneAt: chatterTrack.doneAt }, chatterTrack, { name: s0.petName, prefs: s0.talkPrefs, recent: s0.talkRecent, ...(me ? { self: me } : {}) });
     if (chatter && speech.push(chatter)) settings.update({ talkRecent: noteSpoken(s0.talkRecent, chatter.talk.line) });
     if (typeof askAssistant === 'function') { let pages = {}; try { pages = getPages?.() || {}; } catch (_) {} if (pages.assistant) { const nudge = weeklyNudge(settings.get().mode, { now: t, idleSec }, chatterTrack); if (nudge) { remember(nudge); speech.push(nudge); } } }
     speech.tick(gate);
@@ -1497,7 +1513,7 @@ function createHubPetController({
   // 低开销模式切换后立即重发一次状态（没开桌宠或还没启动时什么都不做）。
   function refreshLowOverhead() { if (enabled() && started && alive()) evaluate(); }
 
-  return { _todoCard: todoCard, start, stop, dispose, refreshLowOverhead, setSignal, setSettings, setProfile, celebrate, petted, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getWindows: () => [win, menuWin].filter(Boolean), getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles, _reply: reply, _chatterTrack: chatterTrack,
+  return { _todoCard: todoCard, selfLikeChanged, start, stop, dispose, refreshLowOverhead, setSignal, setSettings, setProfile, celebrate, petted, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getWindows: () => [win, menuWin].filter(Boolean), getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles, _reply: reply, _chatterTrack: chatterTrack,
     _restoreRememberedRole: restoreRememberedRole, _autoRole: () => ({ ...autoRole }) };
 }
 

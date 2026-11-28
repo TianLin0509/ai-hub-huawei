@@ -1848,6 +1848,8 @@ function createWindow() {
         getProfile: () => profileController?.brief() || null,
         // 低开销模式（2026-11-23 P1 L3）：开着时桌宠静默省电，提醒气泡照常。
         lowOverhead: () => lowOverheadController?.isEnabled() === true,
+        // 蒸馏自己（2026-11-28）：勾了「应用到桌宠」才有内容；模块不在或出错时当作没应用。
+        getSelfLike: () => { try { return require('./main/self-distill-service').forTargetCurrent?.('pet') ?? null; } catch { return null; } },
         onPetted: () => { try { profileController?.notePet(); } catch { /* 个人页没启动 */ } },
         isAssistantBusy: () => {
           for (const s of sessionManager.sessions.values()) {
@@ -3587,6 +3589,14 @@ try {
   }
   require('./main/ipc/avatar-handlers').registerAvatarIpc(ipcMain, () => avatarService, { dialog: require('electron').dialog, getWindow: () => mainWindow });
 } catch (error) { console.error('[avatar] 分身未启动：', error.message); }
+// 蒸馏自己（2026-11-28）：分身页一键把本人 WeLink 消息蒸馏成本机画像，本人勾选后供助理、分身、桌宠、社区、PPT 使用。
+let selfDistillService = null;
+try {
+  selfDistillService = require('./main/self-distill-service').createSelfDistillService({ dataDir: getHubDataDir(), getAssistant: () => companyAssistantService, sendToRenderer });
+  selfDistillService.registerIpc(ipcMain);
+  // 画像保存、开关、删除后桌宠立即换话，不等 5 分钟缓存过期。
+  require('./main/self-distill-service').onChanged(() => { try { hubPetController?.selfLikeChanged?.(); } catch { /* 桌宠没开 */ } });
+} catch (error) { console.error('[self-distill] 蒸馏自己未启动：', error.message); }
 // 员工助手 Beta（2026-11-26）：一键把 HUB-H 公司模型接进员工助手（WeClaw Desktop），端口变了自动重写配置。只在公司版、Windows 上有。
 let weclawLinkService = null;
 try {
@@ -5399,7 +5409,7 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
       if (distribution.target === 'company') try {
         const { createCommunityCrewMain } = require('./main/community-crew-service');
         const crew = createCommunityCrewMain({ dataDir: getHubDataDir(), isEnabled: () => optionalFeatures.get('community'),
-          communityService: () => communityServiceRef, sendToRenderer,
+          communityService: () => communityServiceRef, sendToRenderer, selfDistill: () => selfDistillService,
           publishNotice: notice => require('./core/company-assistant/notice-bus').noticeBus().publish(notice) });
         crew.registerIpc(ipcMain);
         app.whenReady().then(() => crew.start()).catch(() => {});

@@ -4,6 +4,7 @@
 // 姿态优先级借鉴 WorkMate 的 PetStateMachine：全屏躲边 > 按消息情绪开口 > 助理干活敲键盘 > 打盹 > 有点累 > 待机。
 
 const { pickLine } = require('./talk');
+const { hourOf: shanghaiHour } = require('../self-distill/stats');
 
 const POSES = Object.freeze(['idle', 'typing', 'happy', 'sleep', 'peek', 'tired']);
 const MODES = Object.freeze(['lively', 'gentle', 'quiet']);
@@ -53,7 +54,18 @@ function isNight(ms) {
   return h >= NIGHT_FROM || h < NIGHT_UNTIL;
 }
 
-// ctx：{ now, fullscreen, speaking, speakingTone, speakingKind, assistantBusy, sessionsBusy, idleSec, quotaLow, pettedAt }
+// 作息像主人（2026-11-28 蒸馏自己）：habits.hours 是本人每小时发消息数。某小时不到峰值的 1/5 算「主人通常不在」，
+// 这时桌宠和以前的夜里一样，停手 2 分钟就打盹；主人常在的时段（哪怕是深夜）陪着不睡。没有作息（没勾应用到桌宠）时用固定的夜里。
+const OWNER_AWAY_RATIO = 0.2;
+function ownerAway(ms, habits) {
+  const hours = habits && Array.isArray(habits.hours) && habits.hours.length === 24 ? habits.hours.map(n => Math.max(0, Number(n) || 0)) : null;
+  const max = hours ? Math.max(...hours) : 0;
+  if (!hours || !(max > 0)) return isNight(ms);
+  // 作息表是按上海时间统计的钟点，这里也按上海时间取，和蒸馏口径一致。
+  return hours[shanghaiHour(ms)] < max * OWNER_AWAY_RATIO;
+}
+
+// ctx：{ now, fullscreen, speaking, speakingTone, speakingKind, assistantBusy, sessionsBusy, idleSec, quotaLow, pettedAt, habits }
 // sessionsBusy（2026-11-09）：有会话正在跑时桌宠陪着敲键盘，看一眼就知道活还没干完。
 function decidePose(ctx = {}) {
   const now = Number(ctx.now) || Date.now();
@@ -66,7 +78,7 @@ function decidePose(ctx = {}) {
   if (ctx.assistantBusy || Number(ctx.sessionsBusy) > 0) return 'typing';
   const petted = Number(ctx.pettedAt) > 0 && now - Number(ctx.pettedAt) < PETTED_AWAKE_MS;
   const idle = Number(ctx.idleSec) || 0;
-  if (idle >= IDLE_SLEEP_SEC || (isNight(now) && !petted && idle >= NIGHT_IDLE_SLEEP_SEC)) return 'sleep';
+  if (idle >= IDLE_SLEEP_SEC || (ownerAway(now, ctx.habits) && !petted && idle >= NIGHT_IDLE_SLEEP_SEC)) return 'sleep';
   if (ctx.quotaLow) return 'tired';
   return 'idle';
 }
@@ -402,6 +414,7 @@ module.exports = {
   SpeechQueue,
   chatterFor,
   decidePose,
+  ownerAway,
   dotTone,
   finishedSessions,
   isNight,

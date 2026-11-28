@@ -32,6 +32,7 @@ function machine(name, ip, net, options = {}) {
   let offset = 0, on = true;
   const svc = createCrewService({ dataDir, probeSmb: options.probeSmb, now: () => Date.now() + offset, isEnabled: () => on, profile: () => ({ nick: name, pet: '03-penguin', petName: name + '的宠' }), shareTools, ipCandidates: () => [ip],
     emit: (t, d) => events.push({ t, d }), notify: n => notices.push(n), runModel: async p => { prompts.push(p); return options.runModel ? options.runModel(p) : svc.modelReply || '草稿：好的（待补充）'; },
+    selfStyle: options.selfStyle, selfGuard: options.selfGuard,
     timers: { setInterval: () => 0, clearInterval: () => {}, setTimeout: () => 0, clearTimeout: () => {} }, logger: { warn(...args) { warnings.push(args); } } });
   return { svc, h: svc.handlers, events, notices, prompts, dataDir, shareDir, shareTools, warnings,
     advance: ms => { offset += ms; }, enable: value => { on = value; } };
@@ -755,6 +756,68 @@ test('入站发现：入队者信箱还没写好时先扑空，30 秒后再试�
   await J.h.join({ text: inv.message });
   A.advance(31000); await A.svc.pollOnce();
   assert.equal(A.svc.snapshot().crews[0].members.length, 2);
+});
+
+// 蒸馏自己（2026-11-28）：团队代答接入本人口吻。关着时与原来逐字一致；开着带口吻、标「桌宠代答」；出口失败即关（审查修复）。
+test('蒸馏自己·团队代答：关时提示逐字一致；开时带口吻；口吻版被拦退回通用回答且通用回答也要过闸；都不合格转本人', async () => {
+  const question = 'SRS 周期多少？';
+  async function askOnce(options) {
+    const { A, B, crew } = await pair(options);
+    const mat = tmp('sd-mat'); fs.writeFileSync(path.join(mat, '口径.md'), 'SRS 周期：现网 20/40/80 ms');
+    await B.h['set-settings']({ answerDir: mat });
+    await A.h.ask({ crewId: crew.id, to: B.svc._state().me.id, text: question });
+    await B.svc.pollOnce();
+    const got = () => B.svc.snapshot().crews[0].items.find(i => i.type === 'ask' && i.text === question);
+    await until(() => ['auto', 'wait'].includes(got()?.status) && (got().status === 'wait' || got().reply));
+    // 读接收端自己记下的回信（发出去的就是这段），不依赖发送端轮询的时机。
+    return { B, crew, status: got().status, answer: got().reply?.text, item: got() };
+  }
+  const style = { toneText: '消息一半不超过 6 字；先给判断再说理由', examples: ['看情况吧', '我瞅瞅'] };
+  const runModel = p => (p.includes('【说话口吻】') ? '就 20/40/80' : '现网 20/40/80 ms，出处：口径.md');
+  const base = await askOnce({ runModel });
+  const off = await askOnce({ runModel, selfStyle: () => null, selfGuard: () => { throw new Error('关着不该过闸'); } });
+  assert.deepEqual(off.B.prompts, base.B.prompts, '关着时提示与原来逐字一致');
+  assert.equal(off.answer, base.answer);
+  assert.ok(!base.B.prompts[0].includes('口吻'));
+
+  const guarded = [];
+  const on = await askOnce({ runModel, selfStyle: () => style, selfGuard: async t => { guarded.push(t); return { ok: true }; } });
+  assert.equal(on.B.prompts.length, 1);
+  assert.match(on.B.prompts[0], /【说话口吻】[\s\S]*先给判断再说理由[\s\S]*看情况吧/);
+  assert.deepEqual(guarded, ['就 20/40/80']);
+  assert.equal(on.answer, '【桌宠代答】就 20/40/80');
+
+  // 口吻版被拦 → 通用回答也过闸，过了才发（同样标识）
+  const seen = [];
+  const fallback = await askOnce({ runModel, selfStyle: () => style, selfGuard: t => { seen.push(t); return { ok: !t.startsWith('就') }; } });
+  assert.equal(fallback.B.prompts.length, 2, '拦下后再问一次通用回答');
+  assert.equal(fallback.B.prompts[1], base.B.prompts[0], '退回的就是原来的通用提示');
+  assert.deepEqual(seen, ['就 20/40/80', base.answer], '通用回答同样过闸');
+  assert.equal(fallback.answer, '【桌宠代答】' + base.answer);
+
+  // 两次都不合格 / 检查器不可用 / 检查器出错 → 不发，转本人
+  for (const selfGuard of [() => ({ ok: false, hit: 'verbatim' }), () => ({ ok: false, hit: 'unavailable' }), () => { throw new Error('坏了'); }]) {
+    const r = await askOnce({ runModel, selfStyle: () => style, selfGuard });
+    assert.equal(r.status, 'wait');
+    assert.equal(r.answer, undefined, '没有发出任何回信');
+    assert.ok(r.B.notices.some(n => /等你确认/.test(n.title)));
+  }
+});
+
+test('蒸馏自己·确认发送：用本人口吻代写、没改就发的草稿过出口检查，不合格不发；本人改过的照发', async () => {
+  const style = { toneText: '先给判断再说理由', examples: [] };
+  let pass = false;
+  const { A, B, crew } = await pair({ runModel: () => '草稿：看情况（待补充）', selfStyle: () => style, selfGuard: async () => ({ ok: pass }) });
+  await A.h.ask({ crewId: crew.id, to: B.svc._state().me.id, text: '帮我看下这周进展？' });
+  await B.svc.pollOnce();
+  const got = () => B.svc.snapshot().crews[0].items.find(i => i.type === 'ask' && i.text === '帮我看下这周进展？');
+  await until(() => got()?.draft);
+  assert.equal(got().draftStyled, true);
+  await assert.rejects(B.h['answer-draft']({ crewId: crew.id, id: got().id }), /没有发出/);
+  assert.equal(got().reply, undefined);
+  await B.h['answer-draft']({ crewId: crew.id, id: got().id, text: '我自己改过的回复' });
+  assert.equal(got().reply.text, '我自己改过的回复');
+  pass = true;
 });
 
 test('对桌宠说：口语提问也认得出（你去问下、麻烦帮我问问），只有一位成员时不用选人', () => {

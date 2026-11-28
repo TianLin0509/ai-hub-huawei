@@ -3,7 +3,7 @@
 // 广场只用「公开名片」：昵称、桌宠、等级、连胜、成就这些排行榜上本来就公开的数字，加上你自己写的签名和在线状态。
 // 广场上的串门和问候是本机小动画，不发出任何消息；WeLink、会话、文件、项目进展都不交给广场——不是叮嘱桌宠别说，而是它根本拿不到。
 // 想聊工作，把人拉进「我的团队」。
-const { createScene, petSrc, esc } = require('./community-scene');
+const { createScene, petSrc, esc, loadSelfPlan } = require('./community-scene');
 const { hasPendingEdits } = require('./community-editing');
 
 const num = n => Number(n || 0).toLocaleString('en-US');
@@ -72,6 +72,24 @@ function createSquare({ host, ipcRenderer, getBoard, getCrew, toast, goCrew, rel
   host.append(root);
   const sceneEl = root.querySelector('[data-slot="scene"]'), panel = root.querySelector('[data-slot="panel"]');
   let list = [], sel = null, timer = null, feed = [];
+  // 像我（蒸馏自己 › 应用到社区）：null＝没应用，场景与以前一致；每 5 分钟重读一次。
+  let selfPlan = null, selfAt = 0;
+  const SELF_TTL_MS = 5 * 60000;
+  // 画像改了（保存、开关、删除、蒸馏完成）立刻重读，不等 5 分钟。
+  let selfListening = false;
+  const onSelfChanged = () => { void refreshSelf(true); };
+  let selfSeq = 0;
+  async function refreshSelf(force = false) {
+    if (!force && Date.now() - selfAt < SELF_TTL_MS) return;
+    selfAt = Date.now();
+    const seq = ++selfSeq, prev = selfPlan;
+    if (force) selfPlan = null; // 画像变了：先清掉旧的；只采用最新一次请求的结果，晚到的旧结果丢弃
+    const next = await loadSelfPlan(ipcRenderer);
+    if (seq !== selfSeq) return;
+    const changed = (next && next.tag) !== (prev && prev.tag);
+    selfPlan = next;
+    if (changed) refresh();
+  }
   const scene = createScene(sceneEl, { depth: [48, 95], minS: 0.8, maxS: 1.1, onPick: o => pick(o.id) });
   sceneEl.addEventListener('click', () => { sel = null; scene.select(''); paint(); });
 
@@ -87,7 +105,8 @@ function createSquare({ host, ipcRenderer, getBoard, getCrew, toast, goCrew, rel
     }
     return best;
   }
-  const label = p => ({ id: p.id, me: p.me, pet: p.pet, name: p.nick, tag: p.me ? '我' : (p.lv ? 'Lv.' + num(p.lv) : ''), line: '', status: p.status || 'on' });
+  // 性格标签只在本机画在自己桌宠名下（你在画像里勾的那个），不进心跳、不进榜单。
+  const label = p => ({ id: p.id, me: p.me, pet: p.pet, name: p.nick, tag: p.me ? (selfPlan && selfPlan.tag ? '我 · ' + selfPlan.tag : '我') : (p.lv ? 'Lv.' + num(p.lv) : ''), line: '', status: p.status || 'on' });
   function refresh() {
     list = people(getBoard(), getCrew());
     const prev = new Set(scene.pets.keys());
@@ -103,7 +122,21 @@ function createSquare({ host, ipcRenderer, getBoard, getCrew, toast, goCrew, rel
   }
   function log(html, pet) { feed.push({ at: Date.now(), html, pet }); if (feed.length > 30) feed.shift(); if (!sel) paint(); }
   const clock = at => { const d = new Date(at); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  // 我的桌宠按主人的习性自己出门串门：带上关心领域的小道具，说一句仿写的「像我」话。只在应用到社区时发生。
+  function selfTick() {
+    const me = scene.get('me');
+    if (!me || me.busy || sel === 'me' || !selfPlan.bubbles.length || Math.random() >= selfPlan.chance) return false;
+    const others = [...scene.pets.values()].filter(o => o !== me && !o.busy && o.data && o.data.status !== 'off');
+    if (!others.length) return false;
+    const b = others[Math.floor(Math.random() * others.length)];
+    const text = selfPlan.bubbles[Math.floor(Math.random() * selfPlan.bubbles.length)];
+    const lines = [text, REPLY[Math.floor(Math.random() * REPLY.length)]];
+    if (!scene.visit(me, b, { glyph: selfPlan.prop, deliver: false, lines, gap: 3000 })) return false;
+    log(`<span>我的桌宠去找</span> <b data-i18n-skip>${esc(b.data.name)}</b> <span>串门</span>${selfPlan.prop ? ' ' + esc(selfPlan.prop) : ''}`, me.pet);
+    return true;
+  }
   function tick() {
+    if (selfPlan && selfTick()) return;
     const free = [...scene.pets.values()].filter(o => !o.busy && !(o.data && o.data.me) && o.id !== sel && o.data.status !== 'away' && o.data.status !== 'off');
     if (!free.length) return;
     const a = free[Math.floor(Math.random() * free.length)];
@@ -174,8 +207,8 @@ function createSquare({ host, ipcRenderer, getBoard, getCrew, toast, goCrew, rel
   });
   return {
     el: root,
-    show() { refresh(); if (!timer) timer = setInterval(tick, 2400); },
-    hide() { clearInterval(timer); timer = null; },
+    show() { refresh(); void refreshSelf(true); if (!selfListening) { selfListening = true; ipcRenderer?.on?.('self-distill:changed', onSelfChanged); } if (!timer) timer = setInterval(() => { void refreshSelf(); tick(); }, 2400); },
+    hide() { clearInterval(timer); timer = null; if (selfListening) { selfListening = false; ipcRenderer?.removeListener?.('self-distill:changed', onSelfChanged); } },
     refresh,
   };
 }

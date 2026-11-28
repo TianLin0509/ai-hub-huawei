@@ -540,7 +540,10 @@ class FleetService {
   }
 
   // ---- 交给分身会话 ----
-  writeRules(owner, av, st) { fs.writeFileSync(path.join(this.work(owner, av.id), 'rules.md'), F.rulesMarkdown(av, { memoryLines: st.memoryLines, sources: av.sources }), 'utf8'); }
+  // 蒸馏自己（2026-11-28）：本人在「我的画像」打开「应用到分身」时才有内容（{ persona, samples }），关着返回 null，规则与原来逐字一致。
+  // 只在运行时注入（规则文件每次起草 / 试答前重写），不写进分身的人设字段：关掉或删除画像立刻失效。
+  selfPortrait(owner) { try { return require('../self-distill').forTarget({ dataDir: this.d.dataDir, owner, target: 'avatar' }); } catch { return null; } }
+  writeRules(owner, av, st) { const self = this.selfPortrait(owner); fs.writeFileSync(path.join(this.work(owner, av.id), 'rules.md'), F.rulesMarkdown(av, { memoryLines: st.memoryLines, sources: av.sources, ...(self ? { self } : {}) }), 'utf8'); }
   knowledge(owner, av) {
     const lines = [], add = text => { for (const l of String(text).split(/\r?\n/)) { const t = l.trim(); if (t.length >= 8) lines.push(t.slice(0, 500)); } };
     try { add(fs.readFileSync(path.join(this.work(owner, av.id), 'memory.md'), 'utf8')); } catch { /* 没有历史问答 */ }

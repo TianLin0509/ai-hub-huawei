@@ -11,6 +11,8 @@ const LITE = 'codeagent-lite';
 const gatewayRoute = () => require('./assistant-gateway-route');
 const GATEWAY = 'api-gateway';
 const SESSION_GW = [...SESSION, GATEWAY];
+// 「只统计（不调模型）」档（2026-11-28 蒸馏自己）：只给带 statsOnly 的功能，不进后端目录，选了就不调用任何模型。
+const STATS_ONLY = 'stats-only';
 const ALL_BACKENDS = ['codeagent', LITE, 'claude', 'codex', 'deepseek-acp', 'qwen', 'glm'];
 const FEATURES = [
   { id: 'help', label: '问问 Hub', kinds: ONESHOT, defaultText: '按发行版自动选用可用 CLI' },
@@ -25,8 +27,9 @@ const FEATURES = [
   { id: 'meeting', label: '会议理解 / 问答', kinds: SESSION_GW, defaultText: '会议中所选引擎' },
   { id: 'text', label: '草稿整理 / 团队文字任务', kinds: SESSION_GW, defaultText: 'CodeAgent · 启动默认模型' },
   { id: 'crew', label: '社区团队来信（自动作答 / 起草回信）', kinds: ONESHOT, exclude: ['codex', 'deepseek-acp'], defaultText: 'CodeAgent · 启动默认模型' },
+  { id: 'distill', label: '蒸馏自己', kinds: SESSION_GW, statsOnly: true, noPreset: true, defaultText: 'CodeAgent · 助理模型与供应商' },
 ];
-const LABELS = { codeagent: 'CodeAgent', [LITE]: 'CodeAgent-Lite（省内存）', claude: 'Claude', codex: 'Codex', 'deepseek-acp': 'DSH', qwen: 'Qwen Code', glm: 'ZCode', [GATEWAY]: '部门 API key（网关）' };
+const LABELS = { codeagent: 'CodeAgent', [LITE]: 'CodeAgent-Lite（省内存）', claude: 'Claude', codex: 'Codex', 'deepseek-acp': 'DSH', qwen: 'Qwen Code', glm: 'ZCode', [GATEWAY]: '部门 API key（网关）', [STATS_ONLY]: '只统计（不调模型）' };
 // 网关这一行：模型 = key 的对话模型表（附一键体检的说明）+ 手填检测通过的；allowCustom 让界面给出「手填模型」。
 function gatewayRow(dataDir, { env, findCommand }) {
   const gw = require('./api-gateway');
@@ -42,7 +45,7 @@ function gatewayRow(dataDir, { env, findCommand }) {
 function feature(id) { const row = FEATURES.find(f => f.id === id); if (!row) throw new Error('未知功能'); return row; }
 // 公司版会话功能另收「Claude Code 外壳 + 公司模型 / 自有接口 / 自有 API」（部门 key 那条仍存成 api-gateway，和以前同一条线路）。
 // 单次任务另收 DSH（经 ACP 只读作答，core/dsh-oneshot.js）。
-const kindAllowed = (f, kind) => !f.exclude?.includes(kind) && (f.kinds.includes(kind) || (companyEdition() && (f.kinds === ONESHOT ? kind === 'deepseek-acp' : kind === 'claude')));
+const kindAllowed = (f, kind) => (kind === STATS_ONLY ? !!f.statsOnly : !f.exclude?.includes(kind) && (f.kinds.includes(kind) || (companyEdition() && (f.kinds === ONESHOT ? kind === 'deepseek-acp' : kind === 'claude'))));
 // 公司版（2026-11-26 修正）：Claude Code / Codex / DSH 只是外壳（harness），公司里没有 Claude、GPT 这类模型。
 // 外壳背后的模型只从启动中心同一份来源里列（2026-11-27 宗旨：部门 API / 自有 API 用户和 CodeAgent 用户同样的体验）：
 // 部门 API key（网关）、公司模型（经本机反代用 CodeAgent 账号）、自有接口、自有 API 账号。「沿用本机 CLI 配置」不进后台功能
@@ -198,6 +201,7 @@ function resolve(dataDir, id, options = {}) {
   // 旧版存下的外壳选择（没有模型来源，模型是 claude-opus / gpt 这类公司里用不了的）：不再照跑，提示重选，本次沿用默认。
   if (companyEdition() && HARNESS.includes(choice.kind) && !HARNESS_SOURCES.includes(choice.source)) return { choice, selected: null, legacy: true, warning: legacyWarning(choice) };
   if (!kindAllowed(f, choice.kind)) return { choice, selected: null, warning: '此功能尚不支持该后端的受控只读执行，本次沿用默认。' };
+  if (choice.kind === STATS_ONLY) return { choice, selected: { kind: STATS_ONLY, model: '' }, warning: '' };
   const backends = options.backends || catalog(dataDir, options);
   const backend = backends.find(b => b.kind === choice.kind && b.available);
   const hit = backend?.models.find(m => !m.unavailable && (choice.source ? sameModel(m, choice) : m.id === choice.model) && (!choice.codeagentModelProvider || (m.provider || m.codeagentModelProvider) === choice.codeagentModelProvider));
@@ -238,6 +242,7 @@ function set(dataDir, id, choice, options) {
   const f = feature(id);
   if (choice) {
     if (!kindAllowed(f, choice.kind) || (choice.model && !require('./model-id').isSafeModelId(choice.model))) throw new Error('请选择可用的后端和模型');
+    if (choice.kind === STATS_ONLY) { routes.setFeaturePreference(dataDir, id, { kind: STATS_ONLY, model: '' }); return resolve(dataDir, id, options); }
     const harness = companyEdition() && HARNESS.includes(choice.kind);
     if (harness && !HARNESS_SOURCES.includes(choice.source)) throw new Error('请选择模型来源：部门 API key、公司模型或自有 API');
     if (harness && choice.source === 'api' && !/^[a-zA-Z0-9_-]{1,64}$/.test(choice.profileId || '')) throw new Error('请选择自有 API 账号');
@@ -330,6 +335,11 @@ function parseSourceValue(value) {
   return cut > 0 ? { source, profileId: tail.slice(0, cut), model: tail.slice(cut + 1) } : null;
 }
 function featureOptions(f, backends) {
+  const out = featureOptionsRaw(f, backends);
+  if (f.statsOnly) out.push({ value: STATS_ONLY, label: LABELS[STATS_ONLY], available: true, reason: '', setup: '', defaultModel: '', allowCustom: false, models: [] });
+  return out;
+}
+function featureOptionsRaw(f, backends) {
   backends = backends.filter(b => !f.exclude?.includes(b.kind));
   const choiceValues = require('./codeagent-model-choice');
   const plain = (b, models) => ({ value: b.kind, label: b.label, available: !!b.available, reason: b.reason || '', setup: b.setup || '', allowCustom: !!b.allowCustom || (oneshot(f) && b.kind === 'codeagent' && !!b.available),
@@ -367,6 +377,7 @@ function currentValues(f, choice) {
 function choiceFromUi(dataDir, id, { backend = '', model = '' } = {}, options = {}) {
   const f = feature(id);
   if (!backend) return null;
+  if (backend === STATS_ONLY) { if (!f.statsOnly) throw new Error('这个功能不支持只统计'); return { kind: STATS_ONLY, model: '' }; }
   if (!companyEdition() || !HARNESS.includes(backend)) {
     const c = require('./codeagent-model-choice').decodeChoice(model);
     return { kind: backend, model: c.id || '', ...require('./codeagent-model-choice').routeFields(c) };
@@ -409,7 +420,7 @@ function state(dataDir, options) {
       const name = m?.label ? m.label.split(' · ').slice(1).join(' · ') : a.model;
       return `${SOURCE_LABELS[a.source]} · ${HARNESS_LABELS[a.kind] || a.kind}${name ? ' · ' + name : ''}`;
     }
-    if (['assistant', 'ppt', 'pptMake', 'pptImgtext'].includes(f.id)) return `CodeAgent · ${codeagentModel}`;
+    if (['assistant', 'ppt', 'pptMake', 'pptImgtext', 'distill'].includes(f.id)) return `CodeAgent · ${codeagentModel}`;
     if (f.id === 'forum' || f.id === 'text') return `CodeAgent · ${config.defaultModels?.codeagent || cliModel || 'CLI 当前模型'}`;
     if (f.id === 'help') {
       const order = require('./help-ask/engine').preferredOrder({ preferred: config.helpAsk?.engine,
@@ -460,7 +471,8 @@ function inheritsAssistantChoice(raw) {
 const PRESETS = ['codeagent-lite', 'reset-lite'];
 function applyPreset(dataDir, preset, options = {}) {
   if (!PRESETS.includes(preset)) throw new Error('未知的一键预设');
-  const targets = FEATURES.filter(f => f.kinds.includes(LITE));
+  // 蒸馏自己是一次性的单次调用，没有常驻会话，切 Lite 省不了内存，不参与一键预设。
+  const targets = FEATURES.filter(f => f.kinds.includes(LITE) && !f.noPreset);
   let backends = null;
   if (preset === 'codeagent-lite') {
     backends = options.backends || catalog(dataDir, options);
@@ -511,5 +523,5 @@ async function customCodeAgentModel(dataDir, id, model, { run = require('./featu
   set(dataDir, id, choice, { backends: rows });
   return { ok: true, model: choice.model, firstMs: now() - started, already: !!listed };
 }
-module.exports = { FEATURES, LABELS, GATEWAY, HARNESS, HARNESS_SOURCES, SESSION_KINDS: SESSION, PRESETS, catalog, resolve, set, setFromUi, choiceFromUi, session, stale, state,
+module.exports = { FEATURES, LABELS, GATEWAY, STATS_ONLY, HARNESS, HARNESS_SOURCES, SESSION_KINDS: SESSION, PRESETS, catalog, resolve, set, setFromUi, choiceFromUi, session, stale, state,
   assertSessionKind, applyPreset, inheritsAssistantChoice, setRuntime, ensureProxy, harnessInUse, harnessDefault, featureOptions, workKind, customCodeAgentModel };

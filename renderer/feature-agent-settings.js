@@ -62,7 +62,7 @@
       const staleLabel = selected?.model ? `${selected.model}（${f.legacy ? '公司里用不了' : '不可用'}）` : '本机默认模型（公司里用不了）';
       return `<div class="fa-row" data-fa-row="${f.id}"><label for="fa-backend-${host.id}-${f.id}">${esc(f.label)}${!selected && f.auto ? `<span class="fa-auto" data-fa-auto title="${esc(f.defaultText)}">默认：${esc(f.defaultText)}（未检测到可用的 CodeAgent）</span>` : ''}</label>
         <select data-fa-backend id="fa-backend-${host.id}-${f.id}" aria-label="${esc(f.label)}后端" title="${esc(backendTitle)}"><option value="" title="${esc(f.defaultText)}">${esc(defaultBackend)}</option>${backendOptions.map(b => `<option value="${esc(b.value)}"${b.value === cur.backend ? ' selected' : ''}${b.available ? '' : ' disabled'} title="${esc(b.reason || b.label)}">${esc(b.label)}${b.available ? '' : `（${esc(b.reason || '不可用')}）`}</option>`).join('')}</select>
-        <select data-fa-model aria-label="${esc(f.label)}模型"${selected && backend?.available ? '' : ' disabled'}><option value="">默认（当前：${esc(backend?.defaultModel || f.defaultText)}）</option>${stale || (f.legacy && !cur.model) ? `<option selected value="${esc(cur.model)}">${esc(staleLabel)}</option>` : ''}${models.map(m => `<option value="${esc(m.value)}"${m.value === cur.model ? ' selected' : ''}${m.unavailable ? ' disabled' : ''}>${esc(m.label || m.id)}</option>`).join('')}${backend?.allowCustom ? '<option value="__custom__">手填模型名…</option>' : ''}</select>
+        ${cur.backend === 'stats-only' ? `<select data-fa-model aria-label="${esc(f.label)}模型" disabled><option value="">不调模型</option></select>` : `<select data-fa-model aria-label="${esc(f.label)}模型"${selected && backend?.available ? '' : ' disabled'}><option value="">默认（当前：${esc(backend?.defaultModel || f.defaultText)}）</option>${stale || (f.legacy && !cur.model) ? `<option selected value="${esc(cur.model)}">${esc(staleLabel)}</option>` : ''}${models.map(m => `<option value="${esc(m.value)}"${m.value === cur.model ? ' selected' : ''}${m.unavailable ? ' disabled' : ''}>${esc(m.label || m.id)}</option>`).join('')}${backend?.allowCustom ? '<option value="__custom__">手填模型名…</option>' : ''}</select>`}
         ${selected ? '<button class="fa-reset" data-fa-reset type="button">恢复默认</button>' : ''}${f.warning ? `<span class="fa-warning" role="status">${esc(f.warning)}</span>` : ''}${gatewayExtras(f, backend, features.length)}${customBox(backend)}</div>`;
     }).join('') + footer(features, host);
     if (host.id === 'fa-assistant-settings') {
@@ -78,7 +78,8 @@
     + '原来选好的模型保留，已选部门 API key 等其他后端的项不改；Lite 启动失败会自动退回终端方式。';
   function presetSummary() {
     const lite = state?.backends.find(b => b.kind === 'codeagent-lite');
-    const eligible = (state?.features || []).filter(f => f.kinds.includes('codeagent-lite'));
+    // 蒸馏自己这类一次性调用不参与一键 Lite（与 core/feature-agent-choice.js applyPreset 一致）。
+    const eligible = (state?.features || []).filter(f => f.kinds.includes('codeagent-lite') && !f.noPreset);
     const convertible = eligible.filter(f => !f.choice || f.choice.kind === 'codeagent');
     const liteCount = eligible.filter(f => f.choice?.kind === 'codeagent-lite').length;
     return { available: !!lite?.available, convertible: convertible.length, liteCount };

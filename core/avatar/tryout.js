@@ -94,7 +94,9 @@ class Tryouts {
       const material = f.material(owner, av, [item]); material.tryout = true; material.notice = '[试答，不发送]，不得读取任务外聊天或发送任何消息';
       if (!selected || selected.kind === 'example') material.items[0].where = selected ? '示例题（非真实消息）' : '用户自填试题';
       const related = material.items[0].related || [];
-      fs.writeFileSync(path.join(dir, 'rules.md'), F.rulesMarkdown(av, { sources: av.sources, memoryLines: related.length }) + '\n\n[试答，不发送]：本题只输出判断和草稿；题目没有给出的事实不得编造。资料片段已在任务 related 中。', 'utf8');
+      // 蒸馏自己：试答和正式起草一样在运行时带上画像（打开「应用到分身」才有）。
+      const self = typeof f.selfPortrait === 'function' ? f.selfPortrait(owner) : null;
+      fs.writeFileSync(path.join(dir, 'rules.md'), F.rulesMarkdown(av, { sources: av.sources, memoryLines: related.length, ...(self ? { self } : {}) }) + '\n\n[试答，不发送]：本题只输出判断和草稿；题目没有给出的事实不得编造。资料片段已在任务 related 中。', 'utf8');
       // 使用同一筛选后的依据，避免隔离目录里的 memory/examples 指向正式工作目录。
       fs.writeFileSync(path.join(dir, 'memory.md'), related.join('\n'), 'utf8');
       fs.writeFileSync(path.join(dir, 'examples.md'), related.join('\n'), 'utf8');

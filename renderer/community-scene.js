@@ -133,4 +133,38 @@ function createScene(el, { depth = [40, 92], minS = 0.8, maxS = 1.1, onPick = ()
   return { pets, get: id => pets.get(id), sync, walkTo, say, setPose, carry, visit, sparks, select, place };
 }
 
-module.exports = { createScene, petSrc, roleId, poseOf, esc };
+// ---- 像我（2026-11-28 蒸馏自己 › 应用到社区）----
+// view＝主进程 self-distill:for-target {target:'community'} 的结果：{ toneText, examples:[字符串], habits:{ topics:[字符串], … }, tags:[字符串，只含勾选的] }。
+// 例句是主进程生成好、过了原话闸门的最终显示文本：这里原样显示，不再改写（改写后的文字没被检查过）。
+// 没勾「应用到社区」时拿到 null，场景照旧：我的桌宠不自己串门。勾了：串门多少按每天发多少条，搬的小道具按关心的领域，气泡用仿写例句。
+const PROPS = [[/仿真|simulat/i, '🖥'], [/PPT|汇报|胶片/i, '📊'], [/3GPP|协议|标准/i, '📘'], [/波束|beam/i, '📡'], [/调度|RRM|资源/i, '🗓'], [/\bAI\b|模型|Agent/i, '🤖']];
+function propFor(topics) {
+  for (const t of Array.isArray(topics) ? topics : []) {
+    const text = typeof t === 'string' ? t : '';
+    const hit = PROPS.find(([re]) => re.test(text));
+    if (hit) return hit[1];
+  }
+  return '';
+}
+// 每次场景巡视（约 2.4 秒一次）我的桌宠出门的概率：话少的人一分钟出门不到一次，话多的人一分钟两三次。
+function visitChance(dailyMsgs) {
+  const n = Math.max(0, Number(dailyMsgs) || 0);
+  return Math.min(0.12, 0.015 + n / 1000);
+}
+function selfPlan(view) {
+  if (!view || typeof view !== 'object') return null;
+  const habits = view.habits || {};
+  const bubbles = (Array.isArray(view.examples) ? view.examples : []).filter(t => typeof t === 'string' && t);
+  const tags = (Array.isArray(view.tags) ? view.tags : []).filter(t => typeof t === 'string' && t);
+  return { chance: visitChance(habits.dailyMsgs), prop: propFor(habits.topics), bubbles, tag: tags[0] || '' };
+}
+// 读画像：主进程没有这个接口（旧版本）或出错，一律当作没应用。
+async function loadSelfPlan(ipcRenderer) {
+  try {
+    const r = await ipcRenderer?.invoke?.('self-distill:for-target', { target: 'community' });
+    if (!r || r.ok === false) return null;
+    return selfPlan(r.view !== undefined ? r.view : r.result !== undefined ? r.result : r);
+  } catch { return null; }
+}
+
+module.exports = { createScene, petSrc, roleId, poseOf, esc, propFor, visitChance, selfPlan, loadSelfPlan };

@@ -90,6 +90,7 @@ function externalRows(list, avatars) {
 const extTag = r => (r.kind === 'promise' ? '承诺待回收' : `群分身低把握 · 把握 ${r.confidence || 0}`);
 
 const backstage = require('./backstage-jump');
+const { createSelfPortrait } = require('./self-portrait');
 function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage = () => {}, selectSession = () => {} }) {
   let page, root, data = null, targets = null, sel = 'all', tab = 'inbox', error = '', busy = '', wiz = null, confirmBox = null, notice = null, logFilter = 'all', logPage = 0, logPick = -1, noticeTimer = null;
   const itemSel = {}, edits = {}, ack = {}, ackNote = {}, rawOpen = {};
@@ -101,6 +102,8 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   const tryOf = id => (tryouts[id] ||= { loaded: false, loading: false, error: '', samples: [], history: [], consent: {}, ask: '', pick: null, running: null, failure: null, lastQ: null, hint: '', verdict: '', note: '', rating: false, rateMsg: '', rateErr: '', seq: 0 });
   // checking：打开页面后的首次自检（含一次自动「重新检查」）还没结束，期间只显示一行平静的「正在检查」，不先报「用不了」。
   // scan：就地扫码弹层；focus：报错条「去账号卡」后要高亮的那一项（几秒后自动淡掉）。
+  // selfView：右侧显示「我的画像」（蒸馏自己，2026-11-28）；画像按本人一份，不属于某个分身。
+  let selfView = false;
   let checking = false, autoRechecked = false, scan = null, scanTimer = null, clockTimer = null, scopePage = 0, focus = null;
   // 群和人的搜索多选（新建向导和范围页共用）：一屏内翻页，不出滚动条。key → { q, page, rows, chosen, op }。
   const pickers = {};
@@ -212,6 +215,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
       return true;
     } catch (e) { error = e.message; return false; } finally { busy = ''; render(); }
   }
+  const portrait = createSelfPortrait({ ipcRenderer, rerender: () => { if (isOpen() && selfView && !typing()) render(); }, flash: t => flash(t), confirm: box => { confirmBox = box; render(); } });
   const flash = (text, action = null) => { notice = { text, action }; clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { notice = null; if (isOpen() && !typing()) render(); }, action ? 12000 : 4000); noticeTimer.unref?.(); };
 
   function build() {
@@ -270,6 +274,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     return `<header class="avx-head"><div><h1>分身<span class="avx-beta">Beta</span></h1><p>替你盯消息、写回复，所有消息都由你点了才发</p></div><div class="avx-right">
       ${welinkChip()}${ready ? modelChip() : ''}
       ${data?.avatars?.length ? `<span class="avx-ch">${on} 个运行中${data.snapAt ? ` · 消息 ${when(data.snapAt)} 更新` : ''}</span>` : ''}
+      <button class="avx-btn${selfView ? ' p' : ''}" data-av="self-open" title="把你本人的说话和习性蒸馏成本机画像，可应用到助理、分身、桌宠、社区、PPT">蒸馏自己</button>
       <button class="avx-btn" data-av="feedback">反馈意见</button>
       ${data?.avatars?.length ? `<button class="avx-btn ${data.paused ? 'p' : 'd'}" data-av="pause-all">${data.paused ? '恢复全部' : '全部暂停'}</button>` : ''}
       ${ready ? '<button class="avx-btn p" data-av="new">新建分身</button>' : ''}</div></header>`;
@@ -339,6 +344,8 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   }
   const CAN = '这里创建你自己的提醒 / 起草分身，你点了才发，不会自动发言；群里运营的答疑分身是另一套服务。';
   function main() {
+    // 我的画像：有分身时左边照常是分身列表；还没有分身或分身用不了时整屏显示，左上角给返回。
+    if (selfView) return `<div class="avx-main">${data?.available && data.avatars?.length ? list() : ''}${portrait.html({ back: !(data?.available && data.avatars?.length) })}</div>`;
     if (!data || (checking && !data.avatars?.length)) return '<div class="avx-empty"><p class="avx-m">正在检查 WeLink 与模型环境…</p></div>';
     if (!data.available) {
       if (data.missing) return `<div class="avx-empty"><h2>分身暂时用不了</h2><p>${esc(data.reason)}</p></div>`;
@@ -351,8 +358,8 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   const tplCard = ([k, n, d, m]) => `<button class="avx-tpl" data-av="tpl" data-t="${k}"><b>${n}</b><span>${d}</span><small>${m}</small></button>`;
   function list() {
     const total = data.items.length + extList().length;
-    return `<aside class="avx-list" aria-label="分身列表"><button class="avx-row ${sel === 'all' ? 'on' : ''}" data-av="sel" data-id="all"><div class="n"><span>全部待确认</span>${total ? `<b>${total}</b>` : ''}</div><small>所有分身交给你的事</small></button><hr>
-      <div class="avx-rows" data-sc="av">${data.avatars.map(a => `<button class="avx-row ${sel === a.id ? 'on' : ''}" data-av="sel" data-id="${esc(a.id)}"><div class="n"><i class="avx-dot ${dotOf(a)}" title="${esc(a.state.text)}"></i><span>${esc(a.name)}</span>${a.pending ? `<b>${a.pending}</b>` : ''}</div><small>${esc(scopeText(a))}</small><small>${esc(modeText(a))} · 今日处理 ${a.stats.model} 条</small></button>`).join('')}</div>
+    return `<aside class="avx-list" aria-label="分身列表"><button class="avx-row ${!selfView && sel === 'all' ? 'on' : ''}" data-av="sel" data-id="all"><div class="n"><span>全部待确认</span>${total ? `<b>${total}</b>` : ''}</div><small>所有分身交给你的事</small></button><button class="avx-row ${selfView ? 'on' : ''}" data-av="self-open"><div class="n"><span>我的画像</span></div><small>蒸馏自己：说话、习性、应用到</small></button><hr>
+      <div class="avx-rows" data-sc="av">${data.avatars.map(a => `<button class="avx-row ${!selfView && sel === a.id ? 'on' : ''}" data-av="sel" data-id="${esc(a.id)}"><div class="n"><i class="avx-dot ${dotOf(a)}" title="${esc(a.state.text)}"></i><span>${esc(a.name)}</span>${a.pending ? `<b>${a.pending}</b>` : ''}</div><small>${esc(scopeText(a))}</small><small>${esc(modeText(a))} · 今日处理 ${a.stats.model} 条</small></button>`).join('')}</div>
       <p class="avx-foot">每个分身是一个独立会话，在左侧「后台任务」里也能看到。</p></aside>`;
   }
   const dotOf = a => ({ on: 'g', waiting: 'w', error: 'r', paused: 'r' }[a.state.code] || '');
@@ -899,9 +906,12 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     const op = b.dataset.av, a = b.dataset.a, i = b.dataset.i, payload = { avatarId: a, itemId: i };
     if (op === 'provider-settings') { close(); window.dispatchEvent(new CustomEvent('hub-pet:open-assistant', { detail: { settingsTab: 'model' } })); return; }
     if (op === 'repair-provider') { await repairProvider(b.dataset.account, b); return; }
-    if (op === 'sel') { sel = b.dataset.id; tab = 'inbox'; logPage = 0; logPick = -1; scopePage = 0; render(); return; }
-    if (op === 'tab') { tab = b.dataset.k; logPage = 0; logPick = -1; scopePage = 0; if (['scope', 'ctx'].includes(tab)) void loadTargets(); if (tab === 'try' && cur()) void loadTryout(sel); if (tab === 'learn' && cur()) void loadLearned(sel, true); render(); return; }
-    if (op === 'try-go') { sel = b.dataset.id; tab = 'try'; logPage = 0; logPick = -1; scopePage = 0; void loadTryout(sel); render(); return; }
+    if (op === 'self-open') { selfView = true; wiz = null; render(); void portrait.load(); return; }
+    if (op === 'self-back') { selfView = false; render(); return; }
+    if (op.startsWith('sd-')) { await portrait.act(op, b.dataset); return; }
+    if (op === 'sel') { selfView = false; sel = b.dataset.id; tab = 'inbox'; logPage = 0; logPick = -1; scopePage = 0; render(); return; }
+    if (op === 'tab') { selfView = false; tab = b.dataset.k; logPage = 0; logPick = -1; scopePage = 0; if (['scope', 'ctx'].includes(tab)) void loadTargets(); if (tab === 'try' && cur()) void loadTryout(sel); if (tab === 'learn' && cur()) void loadLearned(sel, true); render(); return; }
+    if (op === 'try-go') { selfView = false; sel = b.dataset.id; tab = 'try'; logPage = 0; logPick = -1; scopePage = 0; void loadTryout(sel); render(); return; }
     if (op.startsWith('try-')) { await tryAct(op, b); return; }
     if (op === 'item') { itemSel[b.dataset.k] = b.dataset.id; render(); return; }
     if (op.startsWith('fix-') || op.startsWith('retarget-') || op === 'not-me' || op.startsWith('learn-')) { await fixAct(op, b); return; }
@@ -1056,6 +1066,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
       const it = data.items.find(x => keyOf(x) === t.dataset.edit), risk = document.getElementById('avx-risk');
       if (risk && it) risk.textContent = (it.flags || []).some(f => f === 'leader' || f === 'leader-present') && COMMIT_HINT.test(t.value) ? '这句话可能在向上级应承一件事，请确认后再发。' : '';
     }
+    if (t.dataset.sdEdit !== undefined) portrait.input(t.value);
     if (t.dataset.wiz) wiz[t.dataset.wiz] = t.value;
     if (t.dataset.pickQ && !event.isComposing) onPickQuery(t);
     if ('tryAsk' in t.dataset && cur()) tryOf(sel).ask = t.value;
@@ -1064,6 +1075,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   }
   async function onChange(event) {
     const t = event.target, c = t.dataset.chg, av = cur();
+    if (c === 'sd-apply') { await portrait.change(c, t); return; }
     if (t.dataset.save && av) { if (t.dataset.save === 'persona' && t.value.trim()) delete personaNotes[av.id]; if (t.value !== av[t.dataset.save]) { t.blur(); await save({ [t.dataset.save]: t.value }); flash('已保存'); render(); } return; }
     if (!c) return;
     if (c === 'wiz-account') { wiz.account = t.value; render(); return; }
@@ -1118,7 +1130,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   ipcRenderer.on?.('company-assistant:changed', onAssistantChanged);
   // 同页「⚙ Agent」或设置里改了功能 Agent（含分身用部门 key、手填模型）：后端卡跟着刷新（审查 P2）。
   ipcRenderer.on?.('feature-agents:changed', onChanged);
-  return { open, close, isOpen, destroy() { close(); window.removeEventListener('resize', place); ipcRenderer.removeListener?.('avatar:changed', onChanged); ipcRenderer.removeListener?.('company-assistant:changed', onAssistantChanged); ipcRenderer.removeListener?.('feature-agents:changed', onChanged); page?.remove(); page = null; } };
+  return { open, close, isOpen, destroy() { close(); portrait.destroy(); window.removeEventListener('resize', place); ipcRenderer.removeListener?.('avatar:changed', onChanged); ipcRenderer.removeListener?.('company-assistant:changed', onAssistantChanged); ipcRenderer.removeListener?.('feature-agents:changed', onChanged); page?.remove(); page = null; } };
 }
 
 // 点回 CodeAgent 账号卡时「功能使用的 Agent → 分身」要存成什么（R49-2 窄复审 P2-1）：网关行此刻选中（手动选的或自动默认）

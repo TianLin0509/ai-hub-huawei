@@ -424,7 +424,7 @@ test('一键全切 Lite：默认与 CodeAgent 的切到 Lite 并保留原模型/
   const dataDir = presetEnv(t);
   const choice = require('../core/feature-agent-choice');
   const routes = require('../core/codeagent-assistant-route');
-  const ids = choice.FEATURES.filter(f => f.kinds.includes('codeagent-lite')).map(f => f.id);
+  const ids = choice.FEATURES.filter(f => f.kinds.includes('codeagent-lite') && !f.noPreset).map(f => f.id);
   assert.deepEqual(ids.sort(), ['assistant', 'avatar', 'forum', 'meeting', 'ppt', 'pptImgtext', 'pptMake', 'text'].sort());
   routes.setFeaturePreference(dataDir, 'assistant', { kind: 'api-gateway', model: 'g1' });
   routes.setFeaturePreference(dataDir, 'ppt', { kind: 'codeagent', model: 'm2', codeagentModelProvider: 'w3', codeagentModelProviderLabel: 'W3', codeagentModelMenuLabel: 'm2 · W3' });

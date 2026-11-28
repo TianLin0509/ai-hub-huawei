@@ -52,11 +52,41 @@ function dayOk(d, date) {
   return false;
 }
 
+// 「像我」句（2026-11-28 蒸馏自己）：画像应用到桌宠时，闲聊里混进本人的仿写闲聊例句和口头禅。
+// self：forTarget(pet) 的结果 { catchphrases:[字符串], examples:[字符串，已只剩闲聊类] }；没有（没勾「应用到桌宠」）时选句与以前逐字一致。
+// 提醒类情境（久坐）不混，免得提醒变成一句口头禅。
+const SELF_SHARE = 0.3;
+const SELF_SKIP_CTX = new Set(['sit', 'sitAgain']);
+const SELF_TEXT_MAX = 60;
+const cleanSelf = s => Array.from(String(s == null ? '' : s).replace(/<[^>]*>/g, '').replace(/[\u0000-\u001f\u007f{}<>]+/g, '').replace(/\s+/g, ' ').trim()).slice(0, SELF_TEXT_MAX).join('');
+function selfLines(self) {
+  if (!self || typeof self !== 'object') return [];
+  const out = [], seen = new Set();
+  const put = s => { if (s && !seen.has(s)) { seen.add(s); out.push({ t: 'chat', s, id: lineId('me', s) }); } };
+  for (const e of Array.isArray(self.examples) ? self.examples : []) if (typeof e === 'string') put(cleanSelf(e));
+  for (const c of Array.isArray(self.catchphrases) ? self.catchphrases : []) { const t = typeof c === 'string' ? cleanSelf(c) : ''; if (t) put(`「${t}」——跟你学的`); }
+  return out;
+}
+function pickSelf(ctx, self, { prefs, recent, rng }) {
+  if (SELF_SKIP_CTX.has(ctx)) return null;
+  const pool = selfLines(self);
+  if (!pool.length) return null;
+  // 「闲聊」被点少说时，像我句跟着少说。
+  if (rng() >= SELF_SHARE * Math.min(1, typeWeight(prefs, 'chat'))) return null;
+  const seen = new Set(normalizeRecent(recent));
+  const cand = pool.filter(l => !seen.has(l.id));
+  if (!cand.length) return null;
+  const line = cand[Math.min(cand.length - 1, Math.floor(rng() * cand.length))];
+  const chips = (TYPE_CHIPS.chat || []).map(([id, label]) => ({ id, label }));
+  return { id: line.id, ctx, type: 'chat', text: line.s, named: false, chips, me: true };
+}
+
 // 挑一句。返回 { id, ctx, type, text, named, chips } 或 null（这一情境此刻不说）。
-// opts：{ now, name, prefs, recent, rng }。rng 默认 Math.random，单测里固定。
-function pickLine(ctx, { now = Date.now(), name = '', prefs = null, recent = [], rng = Math.random } = {}) {
+// opts：{ now, name, prefs, recent, rng, self }。rng 默认 Math.random，单测里固定。
+function pickLine(ctx, { now = Date.now(), name = '', prefs = null, recent = [], rng = Math.random, self = null } = {}) {
   const pool = LINES[ctx];
   if (!pool) return null;
+  if (self) { const mine = pickSelf(ctx, self, { prefs, recent, rng }); if (mine) return mine; }
   const date = new Date(now);
   // 当天限定的句子（周一、周五、周末）优先：有就只在它们和通用句里挑，权重翻倍，让「周一了」这类话更容易出现。
   const all = pool.filter(l => dayOk(l.d, date)).map(l => ({ ...l, id: lineId(ctx, l.s), w: typeWeight(prefs, l.t) * (l.d ? 2 : 1) }));
@@ -108,4 +138,4 @@ function lineCount() {
   return Object.values(LINES).reduce((n, list) => n + list.length, 0);
 }
 
-module.exports = { NAME_MAX, RECENT_MAX, TYPES, applyReply, cleanName, lineCount, lineId, noteSpoken, normalizePrefs, normalizeRecent, pickLine, typeWeight };
+module.exports = { NAME_MAX, RECENT_MAX, SELF_SHARE, TYPES, applyReply, selfLines, cleanName, lineCount, lineId, noteSpoken, normalizePrefs, normalizeRecent, pickLine, typeWeight };
