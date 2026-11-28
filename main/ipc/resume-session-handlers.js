@@ -362,6 +362,9 @@ function createResumeSessionHandler(deps) {
       ...(meta.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: meta.codeagentForkSourceSessionId } : {}),
       ...(meta.codeagentPrefixFork ? { codeagentPrefixFork: meta.codeagentPrefixFork } : {}),
       ...(meta.codeagentPoolAccount && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentPoolAccount: meta.codeagentPoolAccount } : {}),
+      // 聊过却没绑定上对话号的 CodeAgent 会话（R57 P4）：只能新开，session-manager 据此给出「这次是新对话」提示并记诊断。
+      ...(/^codeagent(?:-resume)?$/.test(meta.kind) && !meta.ccSessionId && !codeagentFork.forkCCSessionId && !meta.codeagentPrefixFork
+        && require('../../core/codeagent-prefix-branch').hadConversation(meta) ? { codeagentResumeNoIdentity: true } : {}),
       ...(meta.codeagentConfigDir && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentConfigDir: meta.codeagentConfigDir } : {}),
       ...(meta.codeagentRunMode === 'serve' && meta.ccSessionId && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentRunMode: 'serve',
         // 功能选了 CodeAgent-Lite 的后台会话：恢复时仍走共享 serve。

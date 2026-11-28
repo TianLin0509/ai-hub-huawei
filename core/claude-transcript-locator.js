@@ -49,6 +49,16 @@ function rememberTranscript(key, entry) {
   transcriptLookupCache.set(key, entry);
 }
 
+// 按根目录优先顺序，第一个有这个号的根目录里最后修改的那份（带 root 字段）；都没有返回 null。
+function freshestInFirstRoot(ccSessionId, roots) {
+  const sync = require('./transcript-resume-sync');
+  for (const root of roots) {
+    const best = sync.freshest(sync.listCopies(ccSessionId, root));
+    if (best) return { ...best, root };
+  }
+  return null;
+}
+
 function findTranscriptByCCSessionId(ccSessionId, homeDir = defaultHomeDir(), projectsRoots = null) {
   if (!ccSessionId) return null;
   const key = lookupKey(ccSessionId, homeDir, projectsRoots);
@@ -59,18 +69,10 @@ function findTranscriptByCCSessionId(ccSessionId, homeDir = defaultHomeDir(), pr
     transcriptLookupCache.delete(key);
   }
   const roots = projectsRoots || claudeProjectRoots(homeDir);
-  let found = null;
-  for (const projectsDir of roots) {
-    try {
-      const entries = fs.readdirSync(projectsDir, { withFileTypes: true });
-      for (const d of entries) {
-        if (!d.isDirectory()) continue;
-        const candidate = path.join(projectsDir, d.name, ccSessionId + '.jsonl');
-        if (fs.existsSync(candidate)) { found = candidate; break; }
-      }
-    } catch {}
-    if (found) break;
-  }
+  // R57：同一个号可能在同一配置目录的几个记录目录里各有一份（回落、归档都会复制），卡片和续接都要用最新的那份，
+  // 不取枚举到的第一份。不同根目录是不同账号或 CLI，仍按给定的优先顺序：第一个有副本的根目录里取最新的。
+  const best = freshestInFirstRoot(ccSessionId, roots);
+  const found = best ? best.file : null;
   rememberTranscript(key, { path: found, at: Date.now(), roots: roots.map(lookupPath), home: lookupPath(homeDir), id: ccSessionId });
   return found;
 }
@@ -86,6 +88,11 @@ function projectSlug(cwd) {
 // Copy each session's transcript into the bucket for `toCwd` so the post-archive
 // `--resume` finds it. Best-effort: the archive itself already succeeded, so a
 // failure here must degrade to "resumes without history", never abort the move.
+// 续接前把最新副本放到当前目录以后，清掉这个号的查找缓存，下次查找重新按最新的一份算（R57）。
+function forgetTranscriptLookup(ccSessionId) {
+  for (const [key, entry] of transcriptLookupCache) if (entry.id === ccSessionId) transcriptLookupCache.delete(key);
+}
+
 function migrateTranscriptsForCwdChange(opts = {}) {
   const { toCwd, ccSessionIds = [] } = opts;
   // configDir：只在这个 CLI 配置目录里找（CodeAgent 账号各有自己的目录，默认根找不到）。
@@ -99,7 +106,13 @@ function migrateTranscriptsForCwdChange(opts = {}) {
   for (const ccSessionId of ccSessionIds) {
     if (!ccSessionId) continue;
     try {
-      const source = findTranscriptByCCSessionId(ccSessionId, homeDir, roots);
+      // R57：同一个号可能在几个记录目录里各有一份（回落、自愈、归档都会复制）。按最后修改时间取最新的当源，
+      // 不再取「枚举到的第一份」——那样会拿回落那天的旧副本盖掉今天的记录。
+      const sync = require('./transcript-resume-sync');
+      const searchRoots = roots || claudeProjectRoots(homeDir);
+      const best = freshestInFirstRoot(ccSessionId, searchRoots);
+      const copies = best ? sync.listCopies(ccSessionId, best.root) : [];
+      const source = best ? best.file : null;
       if (!source) {
         result.missing.push(ccSessionId);
         continue;
@@ -109,12 +122,18 @@ function migrateTranscriptsForCwdChange(opts = {}) {
       const projectsDir = path.dirname(path.dirname(source));
       const targetDir = path.join(projectsDir, slug);
       const target = path.join(targetDir, `${ccSessionId}.jsonl`);
-      if (path.resolve(source) === path.resolve(target)) {
+      const current = copies.find(c => lookupPath(c.file) === lookupPath(target)) || null;
+      if (path.resolve(source) === path.resolve(target) || sync.isUpToDate(current, best)) {
         result.copied.push(target);
         continue;
       }
-      fs.mkdirSync(targetDir, { recursive: true });
-      fs.copyFileSync(source, target);
+      // 只有要盖掉已有的那份时才核对（对话号一致、非空、没截断）；目标不存在时复制不会覆盖任何东西。
+      const rejected = current ? sync.rejectReason(ccSessionId, best, current) : '';
+      if (rejected) {
+        result.errors.push(`${ccSessionId}: ${rejected}`);
+        continue;
+      }
+      sync.replaceWith(source, target);
       // 归档后旧副本仍存在；同步同账号的缓存，避免续写后卡片一直读取旧记录。
       for (const entry of transcriptLookupCache.values()) {
         if (entry.home !== lookupPath(homeDir) || entry.id !== ccSessionId) continue;
@@ -192,6 +211,7 @@ module.exports = {
   codeAgentProjectsRoot,
   extractCwdFromTranscript,
   findTranscriptByCCSessionId,
+  forgetTranscriptLookup,
   healPersistedCwds,
   migrateTranscriptsForCwdChange,
   projectSlug,

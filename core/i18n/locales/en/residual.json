@@ -257,5 +257,7 @@
   "时间没看懂，已按不定时记下": "Couldn't read the time; saved without one",
   "这个时间已经过了，已按不定时记下": "That time has passed; saved without one",
   "相对时间要在 1 分钟到 7 天之间，先按不定时记下": "Relative times must be 1 minute to 7 days; it will be saved without a time",
-  "相对时间要在 1 分钟到 7 天之间，已按不定时记下": "Relative times must be 1 minute to 7 days; saved without a time"
+  "相对时间要在 1 分钟到 7 天之间，已按不定时记下": "Relative times must be 1 minute to 7 days; saved without a time",
+  "后台稍后答完，已补回": "Answered later in the background; restored here",
+  "先前提示：": "Earlier notice: "
 }

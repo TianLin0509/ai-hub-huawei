@@ -1154,6 +1154,8 @@ const memoryReleasePanel = require('./memory-release-panel').attachMemoryRelease
   lowOverhead: lowOverheadStore,
   onLowOverheadError: message => showToast(message, 'error'),
 });
+// R59 内存紧张就地提示：会话栏顶部 + 启动中心「新建会话」页顶部（renderer/memory-pressure-bar.js）。
+try { require('./memory-pressure-bar').mountMemoryPressureBar({ document, window, ipcRenderer, escapeHtml, lowOverhead: lowOverheadStore }); } catch (error) { console.warn('[memory-pressure] mount failed:', error && error.message); }
 // 入口只在内存面板顶部与设置「资源与后台」顶行（P1 v2：不再往已满的「常用」页加控件）。
 // L5：低开销模式下只有当前及分屏可见的终端闪光标；分屏切回单屏、换副屏时也要重算（Gemini P2-2）。
 function applyLowOverheadTerminals(state = lowOverheadStore.get()) {

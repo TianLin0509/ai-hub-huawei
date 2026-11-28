@@ -439,7 +439,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         const { body: text, coverage } = answerCoverage(c);
         const pptLinks = (c.pptResults || []).map(p => `<div class="ca-ppt-reference"><span>${esc(p.name)} · 第 ${esc(p.page)} 页</span><button type="button" class="ca-link" data-ca="ppt-open:${esc(p.id)}">打开到第 ${esc(p.page)} 页</button></div>`).join('');
         answer = `<div class="ca-answer">${tagSources(body(text, false), labelOf)}</div>${pptLinks}${coverageLine(coverage, id)}`;
-        meta = `${c.answeredAt ? `<time>${when(c.answeredAt)}</time>` : ''}${c.answeredAt && (c.startedAt || c.askedAt) ? `<span>用时 ${secondsText(c.answeredAt - (c.startedAt || c.askedAt))}${c.startedAt && c.answeringAt ? `（准备 ${secondsText(c.answeringAt - c.startedAt)} · 回答 ${secondsText(c.answeredAt - c.answeringAt)}）` : ''}</span>` : ''}`;
+        // 先判了没答上、后来会话里补出回答的（core/company-assistant/service.js collectLateAnswers）：注明是后台稍后答完补回的。
+        meta = `${c.lateAnswer ? `<span class="ca-late-answer" title="${esc(c.lateAnswer.failedWith ? '先前提示：' + c.lateAnswer.failedWith : '')}">后台稍后答完，已补回</span>` : ''}${c.answeredAt ? `<time>${when(c.answeredAt)}</time>` : ''}${c.answeredAt && (c.startedAt || c.askedAt) ? `<span>用时 ${secondsText(c.answeredAt - (c.startedAt || c.askedAt))}${c.startedAt && c.answeringAt ? `（准备 ${secondsText(c.answeringAt - c.startedAt)} · 回答 ${secondsText(c.answeredAt - c.answeringAt)}）` : ''}</span>` : ''}`;
       } else if (c.state === 'error') {
         // 部门 API key（网关）报错另给「打开网关设置 / 换个模型」（core/assistant-gateway-route.js 的 actions），不套 CodeAgent 修复卡。
         const why = c.stopped ? '已停止这一问' : `没答上：${esc(c.error || '原因未知')}`;

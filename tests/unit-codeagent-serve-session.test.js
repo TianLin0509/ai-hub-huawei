@@ -253,7 +253,7 @@ test('R-03：仅事件流断线不清当前轮次，重连后的最终输出完�
   const terminal = await session.attachTerminal({});
   assert.equal(terminal.ok, true);
   serve.crash();
-  await until(() => notices.some(text => text.includes('已重新订阅')), '自动恢复', 5000);
+  await until(() => notices.some(text => text.includes('已自动接上')), '自动恢复', 5000);
   assert.equal(session.runtime.connection, 'connected');
   assert.equal(session.active, active);
   assert.equal(session.client, client);
@@ -663,4 +663,159 @@ test('运行方式：默认 PTY，组队、会议和自动会话不走 serve', (
     assert.equal(usesServeRuntime('codeagent', { codeagentRunMode: 'serve', ...extra }), false);
   }
   assert.deepEqual(withRunModeInJson({ runtime: { agent: 'pty' }, x: 1 }, 'serve'), { runtime: { agent: 'pty', codeagentRunMode: 'serve' }, x: 1 });
+});
+
+// R61（2026-11-27 反馈：前台一直「等待终态」或显示结果不明，后台其实已经答完）：事件流断开的空档里 serve 正好答完，
+// session.idle 丢了。CodeAgent 自己的会话记录 <配置目录>/projects/<目录>/<会话号>.jsonl 里已有终态，按它补齐正文并结束这一轮。
+const { projectSlugOf } = require('../core/codeagent-transcript-dirs');
+const { transcriptTurnOutcome } = require('../core/codeagent-serve-client');
+const { RECONNECTED_NOTICE } = require('../core/codeagent-serve-session');
+function transcriptFixture(t, serve, cwd) {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'serve-config-'));
+  t.after(() => fs.rmSync(configDir, { recursive: true, force: true }));
+  serve.configDir = configDir;
+  const dir = path.join(configDir, 'projects', projectSlugOf(fs.realpathSync.native(cwd)));
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, SID + '.jsonl');
+  const write = rows => fs.appendFileSync(file, rows.map(row => JSON.stringify({ sessionId: SID, timestamp: new Date().toISOString(), ...row }) + '\n').join(''));
+  return { file, write };
+}
+const userRow = (text, extra = {}) => ({ type: 'user', uuid: 'u-' + text, message: { role: 'user', content: text }, ...extra });
+const answerRow = (text, stop = 'end_turn', extra = {}) => ({ type: 'assistant', uuid: 'a-' + text.slice(0, 8),
+  message: { id: 'm-' + text.slice(0, 8), role: 'assistant', model: 'deepseek-v4.1-flash-1017', content: [{ type: 'text', text }], stop_reason: stop }, ...extra });
+async function gapSetup(t) {
+  const ctx = await setup(t);
+  const notices = [], cleared = [];
+  ctx.session.on('action-error', message => notices.push(message));
+  ctx.session.on('action-error-cleared', message => cleared.push(message));
+  ctx.session.client.transcriptPollMs = 20;
+  ctx.session.client.liveQuietMs = 30;
+  ctx.session.client.recoveryResultMs = 60;
+  return { ...ctx, notices, cleared, transcript: transcriptFixture(t, ctx.serve, ctx.session.options.cwd) };
+}
+
+test('R61：断线空档里答完、终态丢失：按会话记录补齐正文并结束这一轮，断线提示收起，不重发', async t => {
+  const { serve, session, notices, cleared, transcript } = await gapSetup(t);
+  serve.onPrompt = () => { serve.busy(); serve.reply('前半段'); setTimeout(() => serve.crash(), 10); };
+  await session.send('断线任务').catch(() => {});
+  await until(() => notices.includes(RECONNECTED_NOTICE), '自动接上');
+  assert.equal(lastTurn(session).status, 'inProgress');
+  // 空档里 serve 写完了回答（会话记录里有），事件流上什么都没再来。
+  transcript.write([userRow('断线任务'), answerRow('前半段，后半段也写完了。')]);
+  await until(() => session.runtime.state === 'completed', '按会话记录收尾');
+  assert.equal(lastTurn(session).status, 'completed');
+  assert.equal(agentText(session), '前半段，后半段也写完了。', '断开期间丢的正文补在原来那段后面，不重复');
+  assert.notEqual(session.runtime.submission.status, 'unknown');
+  assert.ok(cleared.includes(RECONNECTED_NOTICE), '答完后收起断线提示');
+  assert.equal(serve.promptCount, 1, '不自动重发');
+  serve.onPrompt = () => { serve.busy(); serve.reply('下一轮正常'); serve.idle(); };
+  await session.send('继续');
+  await until(() => agentText(session) === '下一轮正常', '下一轮照常');
+});
+
+test('R61：已判「结果不明」之后会话记录出现终态：解除未知、按记录完成，结果不明的提示也收起', async t => {
+  const { serve, session, cleared, transcript } = await gapSetup(t);
+  serve.onPrompt = () => { serve.busy(); serve.reply('写了一半'); setTimeout(() => serve.crash(), 10); };
+  await session.send('长任务').catch(() => {});
+  await until(() => session.runtime.submission.status === 'unknown', '结果不明');
+  transcript.write([userRow('长任务'), answerRow('写了一半，然后写完。')]);
+  await until(() => session.runtime.state === 'completed', '迟到终态从会话记录来');
+  assert.equal(session.runtime.submission.status, 'accepted');
+  assert.equal(agentText(session), '写了一半，然后写完。');
+  assert.ok(cleared.some(message => /服务端结果未知/.test(message)));
+});
+
+test('R61：会话记录里是模型接口报错：这一轮按失败结束并写明原因，不停在「结果不明」', async t => {
+  const { serve, session, transcript } = await gapSetup(t);
+  serve.onPrompt = () => { serve.busy(); serve.reply('开始'); setTimeout(() => serve.crash(), 10); };
+  await session.send('会失败的任务').catch(() => {});
+  transcript.write([userRow('会失败的任务'), { type: 'assistant', uuid: 'err-1', isApiErrorMessage: true,
+    message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'API Error: 公司模型的回复中途失败：和公司上游的连接中途断开' }], stop_reason: 'stop_sequence' } }]);
+  await until(() => session.runtime.state === 'failed', '按记录失败');
+  assert.match(lastTurn(session).error, /和公司上游的连接中途断开/);
+});
+
+test('R61：会话记录里最后的提问不是本轮（旧提问、或还在调工具）：不按记录收尾，保持原来的结果未知', async t => {
+  const { serve, session, transcript } = await gapSetup(t);
+  serve.onPrompt = () => { serve.busy(); serve.reply('处理中'); setTimeout(() => serve.crash(), 10); };
+  await session.send('本轮问题').catch(() => {});
+  transcript.write([userRow('上一轮问题', { timestamp: new Date(Date.now() - 10 * 60_000).toISOString() }), answerRow('上一轮的回答')]);
+  await until(() => session.runtime.submission.status === 'unknown', '结果不明');
+  await wait(120);
+  assert.equal(lastTurn(session).status, 'inProgress');
+  transcript.write([userRow('本轮问题'), answerRow('我先读一下文件', 'tool_use')]);
+  await wait(120);
+  assert.equal(lastTurn(session).status, 'inProgress', '工具调用中途的开场白不算答完');
+  assert.ok(session.active);
+});
+
+test('R61：事件流正常在出字时不按会话记录抢先收尾', async t => {
+  const { serve, session, transcript } = await gapSetup(t);
+  session.client.liveQuietMs = 5000;
+  serve.onPrompt = () => { serve.busy(); serve.reply('第一段'); };
+  await session.send('正常任务');
+  const previous = session.client.sse;
+  serve.crash();
+  await until(() => session.client.sse && session.client.sse !== previous && serve.streams.size, '重订');
+  serve.reply('第一段，第二段'); // 重订后的事件流在送内容
+  transcript.write([userRow('正常任务'), answerRow('第一段，第二段，第三段')]);
+  await wait(150);
+  assert.equal(lastTurn(session).status, 'inProgress');
+  serve.reply('第一段，第二段，第三段'); serve.idle();
+  await until(() => session.runtime.state === 'completed', '终态照常从事件流来');
+  assert.equal(agentText(session), '第一段，第二段，第三段');
+});
+
+test('R61：会话记录判定：一条回答拆成多行时收齐正文块；max_tokens 照实交出', () => {
+  const at = Date.now();
+  const rows = [
+    { type: 'user', timestamp: new Date(at).toISOString(), message: { content: [{ type: 'text', text: '问题 A' }] } },
+    { type: 'assistant', uuid: 'x1', message: { id: 'm1', content: [{ type: 'thinking', thinking: '' }], stop_reason: null } },
+    { type: 'assistant', uuid: 'x2', message: { id: 'm1', content: [{ type: 'text', text: '第一块' }], stop_reason: null } },
+    { type: 'assistant', uuid: 'x3', message: { id: 'm1', content: [{ type: 'text', text: '第二块' }], stop_reason: 'end_turn' } },
+  ].map(row => JSON.stringify(row));
+  assert.deepEqual(transcriptTurnOutcome(rows, { startedAt: at, promptText: '问题 A' }), { status: 'completed', id: 'x3', stopReason: 'end_turn', blocks: ['第一块', '第二块'] });
+  assert.equal(transcriptTurnOutcome(rows, { startedAt: at, promptText: '别的问题' }), null, '正文对不上不认');
+  const cut = [rows[0], JSON.stringify({ type: 'assistant', uuid: 'y', message: { id: 'm2', content: [{ type: 'text', text: '太长被截断' }], stop_reason: 'max_tokens' } })];
+  assert.equal(transcriptTurnOutcome(cut, { startedAt: at, promptText: '问题 A' }).stopReason, 'max_tokens');
+});
+
+// R61 审查修复：上一轮的同文问答不能结算本轮（P1-2）；合成 user 行不挡匹配（P2-4）；按记录补的块不被下一轮当前缀（P2-3）。
+test('R61 审查：上一轮刚答完又发同一句，本轮提问还没落盘就断流：不拿上一轮的回答结案', async t => {
+  const { serve, session, transcript } = await gapSetup(t);
+  serve.onPrompt = () => { serve.busy(); serve.reply('第一次的回答'); serve.idle(); };
+  await session.send('继续');
+  await until(() => session.runtime.state === 'completed', '第一轮');
+  transcript.write([userRow('继续', { uuid: 'u-old' }), answerRow('第一次的回答')]);
+  serve.onPrompt = () => { serve.busy(); setTimeout(() => serve.crash(), 5); };
+  await session.send('继续').catch(() => {});
+  await until(() => session.runtime.submission.status === 'unknown', '结果不明');
+  await wait(120);
+  assert.equal(lastTurn(session).status, 'inProgress', '记录里只有上一轮的问答');
+  transcript.write([userRow('继续', { uuid: 'u-new' }), answerRow('第二次的回答')]);
+  await until(() => session.runtime.state === 'completed', '本轮按自己的记录收尾');
+  assert.equal(agentText(session), '第二次的回答');
+});
+
+test('R61 审查：本轮中间夹着后台任务通知这类 CLI 自己写的 user 行，照样认出本轮并收尾', async t => {
+  const { serve, session, transcript } = await gapSetup(t);
+  serve.onPrompt = () => { serve.busy(); serve.reply('开始处理'); setTimeout(() => serve.crash(), 10); };
+  await session.send('跑一下测试').catch(() => {});
+  transcript.write([userRow('跑一下测试'), answerRow('我先在后台跑', 'tool_use'),
+    userRow('<task-notification><task-id>b1</task-id><status>completed</status></task-notification>'), answerRow('测试全部通过。')]);
+  await until(() => session.runtime.state === 'completed', '收尾');
+  assert.match(agentText(session), /测试全部通过。$/);
+});
+
+test('R61 审查：上一轮按记录补出的回答，不会被下一轮当成开头截掉', async t => {
+  const { serve, session, transcript } = await gapSetup(t);
+  serve.onPrompt = () => { serve.busy(); setTimeout(() => serve.crash(), 5); };
+  await session.send('改一下').catch(() => {});
+  transcript.write([userRow('改一下'), answerRow('好的')]);
+  await until(() => session.runtime.state === 'completed', '第一轮按记录收尾');
+  assert.equal(agentText(session), '好的');
+  await session.send('再改一下').catch(() => {});
+  transcript.write([userRow('再改一下'), answerRow('好的，已改好')]);
+  await until(() => session.runtime.state === 'completed' && agentText(session) !== '好的', '第二轮按记录收尾');
+  assert.equal(agentText(session), '好的，已改好');
 });

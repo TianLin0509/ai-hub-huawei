@@ -793,5 +793,21 @@
   "本机 CLI 配置里还没有可选的模型。": "The local CLI configuration has no models to choose from yet.",
   "自有 API 账号的模型 · 支持会话内切换；换线路请新建会话。": "Own API account models · switchable in this session; start a new session to change route.",
   "本机 CLI 配置里的模型 · 支持会话内切换；换线路请新建会话。": "Local CLI configuration models · switchable in this session; start a new session to change route.",
-  "技能广场": "Skill Plaza"
+  "技能广场": "Skill Plaza",
+  "内存 {0}%，剩 {1} GB": "Memory {0}%, {1} GB free",
+  "{0} 个会话闲着，约占 {1} GB": "{0} sessions are idle, using about {1} GB",
+  "{0} 个会话闲着，休眠后点一下即可接着用": "{0} sessions are idle; after sleeping, one click picks them back up",
+  "{0} 个会话正在运行，Hub 不会动它们；可等跑完，或关掉不用的会话": "{0} sessions are running and Hub won't touch them; wait for them to finish, or close sessions you don't need",
+  "会话占得不多，主要是其他程序；点底栏内存可看是谁": "Sessions use little; it's mostly other programs. Click the memory reading at the bottom to see which",
+  "一键休眠闲着的": "Sleep idle sessions",
+  "改用 Lite 开新会话": "Use Lite for the new session",
+  "打开低开销模式": "Turn on low-overhead mode",
+  "没有休眠成功：{0}": "Couldn't put sessions to sleep: {0}",
+  "没有可休眠的会话（可能刚有新输出，或已在运行）": "No sessions to put to sleep (they may have just produced output, or are running)",
+  "已休眠 {0} 个会话，腾出约 {1} GB；点会话即可接着用": "Put {0} sessions to sleep, freeing about {1} GB; click a session to continue it",
+  "已休眠 {0} 个会话；点会话即可接着用": "Put {0} sessions to sleep; click a session to continue it",
+  "低开销模式没打开：{0}": "Low-overhead mode didn't turn on: {0}",
+  "低开销模式只部分生效": "Low-overhead mode only partly took effect",
+  "低开销模式已打开：闲着的会话会按上限自动休眠，CodeAgent 新会话默认用 Lite": "Low-overhead mode is on: idle sessions beyond the limit sleep automatically, and new CodeAgent sessions use Lite by default",
+  "{0} 个会话刚用过，闲置满 10 分钟后可一键休眠；点底栏内存可看是谁占的": "{0} sessions were used recently; after 10 idle minutes they can be put to sleep in one click. Click the memory reading at the bottom to see what's using memory"
 }

@@ -232,7 +232,7 @@ function slimFeedback({ info = {}, description = '', contact = '', logsDir, data
   const upd = updateSummary({ dataDir, fsModule });
   const state = [
     where ? `- 出问题时在：${where}` : '',
-    info.runtime ? `- 运行快照：${String(info.runtime).slice(0, 260)}` : '',
+    info.runtime ? `- 运行快照：${String(info.runtime).slice(0, 400)}` : '',
     info.mcpDiagnostics ? `- MCP：${String(info.mcpDiagnostics).replace(/\s+/g, ' ').slice(0, 200)}` : '',
     life ? `- ${life}` : '',
     upd ? `- 上次一键更新：${upd}` : '',

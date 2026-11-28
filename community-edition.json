@@ -38,9 +38,9 @@
     "sources": []
   },
   "releaseNotes": [
-    "社区广场：桌宠在线状态和人数改用真实数据（75 分钟内打开过 AI HUB 才显示在线，离线的打盹不串门）；串门动画注明是本机随机演示"
+    "对话记录不再被意外清空（续接选对会话）；内存紧张时一键腾出；回复中途断开自动接上、后台已跑完的不再显示没答完"
   ],
-  "version": "5.6.140",
+  "version": "5.6.141",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

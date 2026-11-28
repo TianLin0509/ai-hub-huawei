@@ -532,6 +532,9 @@ test('Claude and Codex sessions point at the local proxy with a per-session key 
   assert.match(toml, /\[windows\]\nsandbox = "unelevated"/);
   // Company test Q-1106-04 r7: unelevated works only together with danger-full-access (not workspace-write).
   assert.match(toml, /^sandbox_mode = "danger-full-access"$/m);
+  // R61: a mid-reply upstream drop must be retried by Codex itself (the proxy can only retry before the first frame).
+  assert.match(toml, /^stream_max_retries = 2$/m);
+  assert.match(toml, /^request_max_retries = 0$/m);
   assert.ok(!toml.includes(endpoint.key), 'the key stays out of config files');
   assert.equal(hubProxy.codexWindowsSandbox({ AI_HUB_COMPANY_CODEX_SANDBOX: 'elevated' }), 'elevated');
   assert.equal(hubProxy.codexWindowsSandbox({ AI_HUB_COMPANY_CODEX_SANDBOX: 'bad value"' }), hubProxy.CODEX_WINDOWS_SANDBOX_DEFAULT);

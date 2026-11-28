@@ -492,7 +492,21 @@ class CodexNativeSession extends EventEmitter {
     } else if (type === 'error') {
       this.print('\n[Codex] '+(p.error && p.error.message || '执行过程发生错误')+'\n', {capture:false});
       // A retryable error notification is not a terminal turn result.
+      if (p.willRetry) this.dropAbandonedReplies();
     }
+  }
+  // 模型回复中途断流、Codex 自己重试（willRetry，公司模型线路见 core/company-model-proxy.js CODEX_STREAM_RETRIES）：
+  // Codex 重发同一次模型请求，失败那次出到一半的正文和思考没有 item/completed、也不进 Codex 历史，重试会从头再出一遍。
+  // 卡片上把这些半截条目去掉，免得同一段话显示两次、最终回答里混进半截。已完成的条目和工具条目不动。
+  // On a retried stream error, drop this turn's unfinished message/reasoning items; the retry streams them again.
+  dropAbandonedReplies() {
+    let dropped = 0;
+    for (const [id, item] of this.items) {
+      if ((item.type === 'agentMessage' || item.type === 'reasoning') && !item.hubCompletedAt) { this.items.delete(id); dropped++; }
+    }
+    if (!dropped) return;
+    this.contentRevision++;
+    this.emit('items',this.blocks());
   }
   finalText() {
     const messages = [...this.items.values()].filter(i => i.type === 'agentMessage');

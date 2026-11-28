@@ -124,7 +124,8 @@ test('会话环境：Claude 会话的 key 带 __gw、模型照网关表；Codex 
   assert.match(fs.readFileSync(path.join(codexEnv.CODEX_HOME, 'config.toml'), 'utf8'), /stream_max_retries = 2/);
   const companyCodex = {};
   proxy.applyCodexEnv(companyCodex, { dataDir: dir, sessionId: 'sess-5', model: '', projectDir: dir });
-  assert.match(fs.readFileSync(path.join(companyCodex.CODEX_HOME, 'config.toml'), 'utf8'), /stream_max_retries = 0/);
+  // R61：公司上游也交给 Codex 重发 2 次（出字后反代没法重试）
+  assert.match(fs.readFileSync(path.join(companyCodex.CODEX_HOME, 'config.toml'), 'utf8'), /stream_max_retries = 2/);
   assert.ok(proxy.dshRoute({ dataDir: dir, sessionId: 'sess-6', model: '' }).providerConfig.models.every(m => m.maxTokens === 16384));
 });
 

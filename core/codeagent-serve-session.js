@@ -14,6 +14,9 @@ function serveHandoverError(reason, cause) {
 const RECOVER_DELAY_MS = 1200;
 const RECOVER_WINDOW_MS = 5 * 60_000;
 const RECOVER_MAX = 3;
+// 事件流断开后自动接上时给用户看的一行（2026-11-27 改：旧文案「已重新订阅事件流，等待服务端终态确认」被当成出错、没答上）。
+// Shown after the event stream reconnects by itself; cleared again once the turn ends.
+const RECONNECTED_NOTICE = '和 CodeAgent 的连接断了一下，已自动接上；这一轮还在后台进行，答完会自动显示在这里。';
 
 class CodeAgentServeSession extends AcpSession {
   constructor(options) {
@@ -25,6 +28,8 @@ class CodeAgentServeSession extends AcpSession {
     this.cols = 120;
     this.rows = 30;
     this.failures = [];
+    // 本轮期间因断线、结果不明弹出的提示；轮次一结束（不论从事件流还是会话记录拿到终态）就收起，不留「没答完」的假象。
+    this.turnNotices = new Set();
     this.options.clientFactory = () => {
       const client = new CodeAgentServeClient({ host: this.host, cwd: options.cwd, model: options.model || '', provider: options.provider || '',
         permissionMode: options.permissionMode, title: options.title, systemPrompt: options.systemPrompt || '' });
@@ -44,7 +49,7 @@ class CodeAgentServeSession extends AcpSession {
           this.promptQueue.hold(message);
           this.persist();
         } catch (error) { client.fail(error); this.emit('action-error', error.message); }
-        this.emit('action-error', message);
+        this.notice(message);
       });
       client.on('disconnect', error => setTimeout(() => this.recover(client, error), 0));
       client.on('transport-disconnect', error => setTimeout(() => this.recover(client, error), 0));
@@ -98,11 +103,21 @@ class CodeAgentServeSession extends AcpSession {
     if (unknown) this.apply({ type: 'submission', submission: unknown });
   }
   finish(active, status, error, nativeResult) {
-    // 只有收到服务端终态才解除 unknown；本地等待超时不会走到这里。
+    // 只有收到服务端终态（事件流，或 CodeAgent 会话记录里的终态）才解除 unknown；本地等待超时不会走到这里。
     if (this.runtime.submission?.status === 'unknown') {
       this.apply({ type: 'submission', submission: { ...this.runtime.submission, status: 'accepted' } });
     }
-    return super.finish(active, status, error, nativeResult);
+    try { return super.finish(active, status, error, nativeResult); }
+    finally { this.clearTurnNotices(); }
+  }
+  notice(message) {
+    if (this.active) this.turnNotices.add(message);
+    this.emit('action-error', message);
+  }
+  clearTurnNotices() {
+    const notices = [...this.turnNotices];
+    this.turnNotices.clear();
+    for (const message of notices) this.emit('action-error-cleared', message);
   }
 
   // serve 的模型跟着每条消息走，不需要 ACP 配置项；思考强度第一期不开放，明确报错，不假装切换成功。
@@ -165,7 +180,7 @@ class CodeAgentServeSession extends AcpSession {
         if (client.closed) {
           this.closeTerminal();
           if (this.active) {
-            this.emit('action-error', 'CodeAgent 连接已断开，当前轮次结果不明，请核对原生会话。');
+            this.notice('CodeAgent 连接已断开，当前轮次结果不明，请核对原生会话。');
           } else {
             try { await this.reconnect(); }
             catch (recoverError) { fallBack(recoverError.message); }
@@ -178,7 +193,11 @@ class CodeAgentServeSession extends AcpSession {
           await new Promise(resolve => setImmediate(resolve));
           if (this.closed || this.client !== client) return;
           if (!client.sse || this.recoveryAgain) { this.recoveryAgain = true; continue; }
-          this.emit('action-error', '已重新订阅事件流，等待服务端终态确认。');
+          if (this.active) {
+            this.notice(RECONNECTED_NOTICE);
+            // 终态可能落在断开的空档里：马上按 CodeAgent 会话记录核对一次，答完了就直接收尾。
+            void client.reconcileNow?.();
+          }
         } catch (recoverError) { error = recoverError; this.recoveryAgain = true; }
       } while (this.recoveryAgain);
     } finally { this.recovering = false; }
@@ -273,4 +292,4 @@ class CodeAgentServeSession extends AcpSession {
   }
 }
 
-module.exports = { CodeAgentServeSession, TERMINAL_KEEP_MS, SERVE_HANDOVER };
+module.exports = { CodeAgentServeSession, TERMINAL_KEEP_MS, SERVE_HANDOVER, RECONNECTED_NOTICE };

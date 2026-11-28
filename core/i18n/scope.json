@@ -20,6 +20,7 @@
    "renderer/panel-visibility.js",
    "renderer/rail-groups.js",
    "renderer/renderer.js",
+   "renderer/memory-pressure-bar.js",
    "renderer/session-list-renderer.js",
    "renderer/session-renaming.js",
    "renderer/shell-controller.js",

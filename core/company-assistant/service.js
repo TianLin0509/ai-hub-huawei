@@ -106,6 +106,9 @@ const FRESH_MS = 3 * 60000;
 // UNMARKED_GRACE_MS 还没有新回答，按原判定收下，不让回答永远收不了。
 // 8 秒：公司模型漏写标记时每问只多等几秒（助理中位耗时约 60 秒，30 秒太贵）；会话仍须报空闲才收。
 const UNMARKED_GRACE_MS = 8000;
+// 判了「没答上」之后，这么久之内同一个助理会话里补出了这一问的回答，就把回答补回前台（2026-11-27 反馈：前台没答上，切到后台其实答完了）。
+// A failed chat turn keeps watching its session this long; a late answer for it is put back on the page.
+const LATE_ANSWER_MS = 30 * 60000;
 const STOPPED_TEXT = '已停止这一问';
 const receiptMark = token => `[助理回执:${token}]`;
 const receiptLine = token => `回答完成后，另起最后一行原样写：${receiptMark(token)}（Hub 据此判断你已答完，这一行不会显示给用户）`;
@@ -180,6 +183,7 @@ class CompanyAssistant {
     this.workspace = require('../work-file-root').directory('assistant-workspace', path.join(this.dir, 'workspace'));
     this.bus = deps.bus || noticeBus();
     // 三条互不阻塞的队列（5.5.11）：问答、简报、PPT 页各排各的，简报和 PPT 检索不再挡住提问。
+    this.lateAnswers = new Map();
     this.lanes = { chat: { name: 'chat', queue: [], job: null, pumping: false }, brief: { name: 'brief', queue: [], job: null, pumping: false }, ppt: { name: 'ppt', queue: [], job: null, pumping: false } };
     // 助理会话池：会话编号 → 用途（desk/phone/brief/ppt）。工具调用按它核对身份、决定能用哪些工具。
     this.pool = new Map();
@@ -1633,6 +1637,8 @@ class CompanyAssistant {
   retryChat(id) {
     const item = this.chat().find(c => c.id === id);
     if (!item) throw new Error('这条对话已经不在了');
+    // 用户已经重问：旧卡保持失败，不再等它的迟到回答，免得同一问题突然多出第二份回答。
+    this.dropLateAnswer(id);
     return this.ask(item.q, { via: item.via, entry: item.entry, teamOwner: item.teamOwner, taskTitle: item.taskTitle, featureAgent: item.featureAgent });
   }
   laneOf(job) { return job.type === 'brief' || job.type === 'reply-review' ? 'brief' : job.entry === 'ppt' ? 'ppt' : 'chat'; }
@@ -1853,7 +1859,19 @@ class CompanyAssistant {
   keepLast(lane, id) {
     const prev = this.lastSessions[lane];
     this.lastSessions[lane] = id;
-    if (prev && prev !== id) this.retire(prev);
+    // 还在等迟到回答的会话先不关（审查 P1-1）；不再等了由 dropLateAnswer 收尾时关。
+    if (prev && prev !== id && !this.awaitingLate(prev)) this.retire(prev);
+  }
+  awaitingLate(sessionId) { return [...this.lateAnswers.values()].some(late => late.sessionId === sessionId); }
+  // 不再等某一问的迟到回答：它的会话既不是最近答过的那个、也没别的问题在等或在用，就关掉。
+  dropLateAnswer(chatId, { retire = true } = {}) {
+    const late = this.lateAnswers.get(chatId);
+    if (!late) return;
+    this.lateAnswers.delete(chatId);
+    const id = late.sessionId;
+    if (!retire || !id || this.awaitingLate(id) || Object.values(this.lastSessions).includes(id)
+      || Object.values(this.lanes).some(lane => lane.job?.sessionId === id)) return;
+    this.retire(id);
   }
   retire(id) {
     if (!id) return;
@@ -1913,7 +1931,11 @@ class CompanyAssistant {
     const now = this.now(), four = Date.parse(D.dayKey(now) + 'T04:00:00+08:00'), boundary = now >= four ? four : four - 86400000;
     // 手机上发过 /new：那之前的问答不再带（phone.js command）。
     const resetAt = job.via === 'phone' ? Number(this.phone?.state?.().resetAt) || 0 : 0;
-    const done = this.chat().filter(c => c.id !== job.chatId && c.state === 'done' && c.entry !== 'ppt' && (c.via || '') === (job.via || '') && Number(c.answeredAt) >= boundary && Number(c.askedAt) > resetAt);
+    let done = this.chat().filter(c => c.id !== job.chatId && c.state === 'done' && c.entry !== 'ppt' && (c.via || '') === (job.via || '') && Number(c.answeredAt) >= boundary && Number(c.askedAt) > resetAt);
+    // 同一个问题答了两份（失败后迟到补回 + 重问）：只带较新的那份，不占两个槽位（审查 P2-5）。
+    const latestByQ = new Map();
+    for (const c of done) { const k = String(c.q || '').trim(); const seen = latestByQ.get(k); if (!seen || Number(c.answeredAt) >= Number(seen.answeredAt)) latestByQ.set(k, c); }
+    done = done.filter(c => latestByQ.get(String(c.q || '').trim()) === c).sort((x, y) => Number(x.answeredAt) - Number(y.answeredAt));
     const last = done[done.length - 1];
     if (!last || now - last.answeredAt > HISTORY_IDLE_MS) return '';
     const picked = done.slice(-2).filter(c => last.answeredAt - c.answeredAt <= HISTORY_IDLE_MS * 2);
@@ -2052,6 +2074,8 @@ class CompanyAssistant {
       const prompt = (job.teamOwner ? job.prompt : this.composePrompt(job, toolset)) + '\n\n' + receiptLine(job.token);
       // 等回答时让用户看到：按哪类问题作答、Hub 已备好几条材料（体感更快，也知道它在干什么）。
       if (job.type === 'chat' && job.intents?.length) this.patchChat(job.chatId, { guide: { kinds: job.intents.map(k => AC.TITLES[k]).filter(Boolean), items: job.materialItems || 0 } });
+      // 这个会话要答新问题了：之前在它上面等迟到回答的那一问不再等，免得把新问题的回答错补给它。
+      for (const [chatId, late] of this.lateAnswers) if (late.sessionId === id) this.dropLateAnswer(chatId, { retire: false });
       job.baseline = this.lastFinal(id)?.id || null;
       job.apiErrorBaseline = this.turnApiError(id)?.id || null;
       job.sessionId = id;
@@ -2109,7 +2133,7 @@ class CompanyAssistant {
     }
   }
   async collectJob(laneName) {
-    if (!laneName) { for (const name of Object.keys(this.lanes)) await this.collectJob(name); return; }
+    if (!laneName) { this.collectLateAnswers(); for (const name of Object.keys(this.lanes)) await this.collectJob(name); return; }
     const lane = this.lanes[laneName], job = lane?.job;
     if (!job || !job.sentAt) { if (!job) void this.pump(laneName); return; }
     try { this.verifyTeamOwner(job); } catch (error) {
@@ -2190,6 +2214,29 @@ class CompanyAssistant {
     if (this.undelivered(job)) { this.resendOrFail(job, lane, laneName); return; }
     if (this.now() - job.sentAt > limit) this.failJob(job, `助理会话 ${Math.round(limit / 60000)} 分钟没给出回答`);
   }
+  // 判了「没答上」的提问，回答后来才写进会话记录（超时、接口报错后 CLI 自己重试成功、会话状态没及时报空闲等）：
+  // 按收回答的同一套规则（新回答、带本问回执标记，或会话空闲且稳定 8 秒）补回前台并标完成，卡片上注明是后来补上的。
+  collectLateAnswers() {
+    for (const [chatId, late] of this.lateAnswers) {
+      const chat = this.chat().find(c => c.id === chatId);
+      if (!chat || chat.state !== 'error' || chat.stopped || this.now() > late.until || !this.deps.getSession(late.sessionId)) { this.dropLateAnswer(chatId); continue; }
+      const latest = this.lastFinal(late.sessionId);
+      const fresh = latest && latest.id !== late.baseline && String(latest.text || '').trim() ? latest : null;
+      if (!fresh) continue;
+      if (!String(fresh.text).includes(late.token)) {
+        if (this.sessionBusy(late.sessionId)) { late.unmarked = null; continue; }
+        if (late.unmarked?.id !== fresh.id) { late.unmarked = { id: fresh.id, at: this.now() }; continue; }
+        if (this.now() - late.unmarked.at < UNMARKED_GRACE_MS) continue;
+      }
+      this.dropLateAnswer(chatId);
+      const text = stripReceiptMark(fresh.text, late.token);
+      if (!text) continue;
+      this.memory.touch(text);
+      this.patchChat(chatId, { state: 'done', a: text, agentText: text, sources: this.sourceLabels(text), error: null, providerRepair: null, gatewayError: null,
+        lateAnswer: { failedWith: chat.error || '', at: this.now() }, answeredAt: this.now() });
+      this.changed();
+    }
+  }
   // 发出后 90 秒，会话既没在忙、也没绑定到任何记录：这一问没进 CodeAgent，或进了也读不到回答，再等也等不到（绿区实录：空等 12 分钟）。
   undelivered(job) {
     if (job.teamOwner || job.toolset === 'ppt' || job.deliveryUnconfirmed || this.now() - job.sentAt < UNDELIVERED_MS) return false;
@@ -2211,6 +2258,10 @@ class CompanyAssistant {
   }
   failJob(job, message, { stopped = false } = {}) {
     if (stopped) job.stopped = true;
+    // 问题已经送进会话、不是用户自己停的：会话还在就接着等它的迟到回答（collectLateAnswers）。
+    if (!stopped && job.type === 'chat' && job.chatId && job.sentAt && job.token && job.sessionId && !job.teamOwner && job.toolset !== 'ppt') {
+      this.lateAnswers.set(job.chatId, { sessionId: job.sessionId, baseline: job.baseline || null, token: job.token, until: this.now() + LATE_ANSWER_MS });
+    }
     this.metering.finish(job, stopped ? 'stopped' : 'failure');
     if (job.toolset === 'ppt' || job.entry === 'ppt') { this.ppt.takeTaskReport?.(job.id); this.ppt.takeTaskResult?.(job.id); }
     this.query.finishAnswer(job.id, '', job.sessionId);

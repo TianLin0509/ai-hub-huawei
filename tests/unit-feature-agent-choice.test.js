@@ -117,7 +117,7 @@ test('PPT 做页与图转字的独立选型随问题排队和重试保留', () =
     CompanyAssistant.prototype.ask.call(a, '任务', { entry: 'ppt', featureAgent });
     assert.equal(queued.featureAgent, featureAgent); assert.equal(saved.featureAgent, featureAgent);
     let retried;
-    CompanyAssistant.prototype.retryChat.call({ chat: () => [saved], ask: (_q, opts) => { retried = opts; } }, saved.id);
+    CompanyAssistant.prototype.retryChat.call({ chat: () => [saved], dropLateAnswer() {}, ask: (_q, opts) => { retried = opts; } }, saved.id);
     assert.equal(retried.featureAgent, featureAgent);
   }
 });

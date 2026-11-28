@@ -30,7 +30,8 @@ test('migrate copies the transcript into the new cwd bucket under the given conf
 
 test('session manager migrates before building the CodeAgent launch when cwd fell back', () => {
   const src = fs.readFileSync(require.resolve('../core/session-manager.js'), 'utf8');
-  const migrate = src.indexOf('toCwd: spawnCwd, ccSessionIds: [opts.resumeCCSessionId]');
+  // R57 起改为每次按号续接前都同步最新副本（包含回落的情况）。
+  const migrate = src.indexOf('syncResumeTranscript({ id, kind, opts, cwd: spawnCwd, configDir: codeagentConfig.configDir, cwdFellBack })');
   const build = src.indexOf('codeagentLaunch = buildCodeAgentPtyLaunch(id, kind, opts, spawnCwd');
   assert.ok(migrate > 0 && build > migrate);
 });

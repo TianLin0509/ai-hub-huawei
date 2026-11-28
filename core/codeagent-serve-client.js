@@ -6,6 +6,9 @@ const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
+const { projectSlugOf } = require('./codeagent-transcript-dirs');
+const { parseAssistantContent, isClaudeTurnStopReasonTerminal } = require('./claude-transcript-parser');
+const { isSyntheticUserEntry } = require('./synthetic-user-filter');
 
 const PERMISSION_OPTIONS = [
   { optionId: 'once', name: '允许一次', kind: 'allow_once' },
@@ -21,6 +24,59 @@ const partIndex = id => String(id || '').match(/_(\d+)$/)?.[1] ?? String(id || '
 const PENDING_TIMEOUT_MS = 30 * 60_000;
 const RECOVERY_RESULT_MS = 30_000;
 const UNKNOWN_RESULT = '连接中断，服务端结果未知，请在后台终端查看。';
+// 事件流断过之后，终态（session.idle）可能正好落在断开的空档里，重订后再也等不到（2026-11-25 / 11-27 反馈：前台一直「等待终态」，
+// 后台其实早答完了）。这时改看 CodeAgent 自己写的会话记录 <配置目录>/projects/<目录>/<会话号>.jsonl（公司真机 1.2615.02.03 实测：
+// serve 会话同样落这份记录，Hub 读 CodeAgent 回答也靠它的 stop_reason）。只在事件流断过或已判结果不明时才看，事件流正在出字时不看。
+// After an event-stream gap the idle event may be lost; settle the turn from CodeAgent's own transcript (same file the TUI writes).
+const TRANSCRIPT_POLL_MS = 5000;
+const TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024;
+const TRANSCRIPT_LIVE_QUIET_MS = 3000;
+// 卡片自己发的提问：记录里的提问时间不会早于发出前一刻，只留 2 秒时钟余量；终端里自己发、卡片接管的提问会先落盘，放宽到 30 秒。
+const PROMPT_CLOCK_SLACK_MS = 2000;
+const ADOPTED_CLOCK_SLACK_MS = 30_000;
+const squash = text => String(text || '').replace(/\s+/g, '');
+// 会话记录里一条用户提问的正文；工具结果、系统插入的元信息不算提问。
+function transcriptPromptText(entry) {
+  if (entry?.type !== 'user' || entry.isMeta || entry.isSidechain) return '';
+  const content = entry.message?.content;
+  if (typeof content === 'string') return isSyntheticUserEntry(entry, content) ? '' : content;
+  if (!Array.isArray(content) || content.some(block => block?.type === 'tool_result')) return '';
+  const text = content.filter(block => block?.type === 'text').map(block => block.text || '').join('\n');
+  // 后台任务通知、斜杠命令回显等 CLI 自己写的 user 行不是提问，不能挡住本轮提问的匹配。
+  return isSyntheticUserEntry(entry, text) ? '' : text;
+}
+// 从会话记录尾部判断「这一轮」是否已经结束：最后一条真实提问必须是本轮发的（时间、正文都对得上），
+// 它之后的最后一条记录是带终态 stop_reason 且有正文的回答，或模型接口报错。认不出就返回 null，继续按原来的「结果未知」处理。
+// Returns null unless the last real prompt is this turn's and is followed by a terminal answer or an API error row.
+function transcriptTurnOutcome(lines, { startedAt, promptText, adopted = false }) {
+  const entries = [];
+  for (const line of lines) {
+    if (!line || (!line.includes('"user"') && !line.includes('"assistant"'))) continue;
+    let entry; try { entry = JSON.parse(line); } catch { continue; }
+    if ((entry?.type === 'user' || entry?.type === 'assistant') && !entry.isSidechain) entries.push(entry);
+  }
+  let start = -1;
+  for (let i = entries.length - 1; i >= 0; i--) { if (transcriptPromptText(entries[i]).trim()) { start = i; break; } }
+  if (start < 0) return null;
+  const asked = Date.parse(entries[start].timestamp);
+  if (!(asked >= startedAt - (adopted ? ADOPTED_CLOCK_SLACK_MS : PROMPT_CLOCK_SLACK_MS))) return null;
+  const want = squash(promptText).slice(0, 200);
+  if (want && !squash(transcriptPromptText(entries[start])).includes(want)) return null;
+  const tail = entries.slice(start + 1), last = tail.at(-1);
+  if (!last || last.type !== 'assistant') return null;
+  const message = last.message || {};
+  const lastText = parseAssistantContent(message.content).text || '';
+  if (last.isApiErrorMessage || (message.model === '<synthetic>' && /^\s*API Error/i.test(lastText))) {
+    return { status: 'failed', id: last.uuid || '', error: lastText.trim().slice(0, 300) || 'CodeAgent 模型接口报错' };
+  }
+  if (!isClaudeTurnStopReasonTerminal(message.stop_reason) || !lastText.trim()) return null;
+  // 同一条回答可能拆成几行（每个内容块一行），按 message.id 收齐正文块。
+  const rows = message.id ? tail.filter(entry => entry.type === 'assistant' && entry.message?.id === message.id) : [last];
+  const blocks = rows.flatMap(entry => (Array.isArray(entry.message?.content) ? entry.message.content : [{ type: 'text', text: entry.message?.content }])
+    .filter(block => block?.type === 'text' && typeof block.text === 'string' && block.text.trim()).map(block => block.text.replace(/\r\n/g, '\n')));
+  const stopReason = ['end_turn', 'stop_sequence'].includes(message.stop_reason) ? 'end_turn' : message.stop_reason;
+  return { status: 'completed', id: last.uuid || message.id || '', stopReason, blocks };
+}
 
 function userText(info) {
   const content = info?.payload?.message?.content;
@@ -56,6 +112,9 @@ class CodeAgentServeClient extends EventEmitter {
     this.recoveryResultMs = RECOVERY_RESULT_MS;
     this.snapshotRequired = false;
     this.deltaReady = new Set();
+    this.transcriptPollMs = TRANSCRIPT_POLL_MS;
+    this.liveQuietMs = TRANSCRIPT_LIVE_QUIET_MS;
+    this.transcriptFile = null;
     this.onHostExit = error => this.fail(error);
   }
   get proc() { return this.host?.pid ? { pid: this.host.pid } : null; }
@@ -143,6 +202,8 @@ class CodeAgentServeClient extends EventEmitter {
       }, this.recoveryResultMs);
       pending.recoveryTimer.unref?.();
     }
+    // 断开前的出字不能证明新订阅在送内容：只认重订之后的。
+    if (this.pending) { this.pending.lastLiveAt = 0; this.watchTranscript(this.pending); }
     req.destroy();
     this.emit('transport-disconnect', error);
   }
@@ -152,6 +213,94 @@ class CodeAgentServeClient extends EventEmitter {
     this.pending.unknown = true;
     // 保留 promise、轮次及 Stop，迟到终态仍归原轮；绝不把本地期限当服务端终态。
     this.emit('turn-unknown', message);
+    // 结果不明期间继续看会话记录：后台答完了就按记录收尾（不是本地期限，是 CodeAgent 写下的终态）。
+    if (this.pending) this.watchTranscript(this.pending);
+  }
+
+  // 这个 serve 会话的记录文件：先查本工作目录对应的子目录，找不到再扫 projects 下各子目录（公司实测探针同样这么找）。
+  locateTranscript() {
+    const configDir = this.host?.configDir;
+    if (!configDir || !/^[A-Za-z0-9_-]{8,128}$/.test(String(this.sessionId || ''))) return null;
+    const name = this.sessionId + '.jsonl';
+    if (this.transcriptFile && path.basename(this.transcriptFile) === name && fs.existsSync(this.transcriptFile)) return this.transcriptFile;
+    const base = path.join(configDir, 'projects');
+    const preferred = [projectSlugOf(this.cwd), this.cwd.replace(/[^A-Za-z0-9]/g, '-')];
+    let dirs;
+    try { dirs = [...new Set([...preferred, ...fs.readdirSync(base)])]; } catch { return null; }
+    for (const dir of dirs) {
+      const file = path.join(base, dir, name);
+      if (fs.existsSync(file)) { this.transcriptFile = file; return file; }
+    }
+    return null;
+  }
+  transcriptSize() {
+    const file = this.locateTranscript();
+    if (!file) return this.host?.configDir ? 0 : null;
+    try { return fs.statSync(file).size; } catch { return 0; }
+  }
+  watchTranscript(pending) {
+    if (pending.transcriptTimer || this.closed || !this.host?.configDir) return;
+    pending.transcriptTimer = setInterval(() => { void this.checkTranscript(pending); }, this.transcriptPollMs);
+    pending.transcriptTimer.unref?.();
+  }
+  // 重订成功后马上核对一次：终态落在断开空档里的，不用再等下一次轮询。
+  reconcileNow() { return this.pending ? this.checkTranscript(this.pending) : Promise.resolve(false); }
+  async checkTranscript(pending) {
+    if (this.pending !== pending || this.closed || pending.checking) return false;
+    // 事件流正在送本轮的内容：终态会照常从事件流来，不抢先按记录收尾。
+    if (pending.lastLiveAt && Date.now() - pending.lastLiveAt < this.liveQuietMs) return false;
+    const file = this.locateTranscript();
+    if (!file) return false;
+    pending.checking = true;
+    try {
+      const stat = await fs.promises.stat(file);
+      const stamp = `${stat.size}:${stat.mtimeMs}`;
+      if (pending.transcriptStamp === stamp) return false;
+      const base = Number.isFinite(pending.transcriptBase) && pending.transcriptBase <= stat.size ? pending.transcriptBase : null;
+      const start = Math.max(stat.size - TRANSCRIPT_TAIL_BYTES, base ?? 0), length = stat.size - start;
+      const handle = await fs.promises.open(file, 'r');
+      let text;
+      try { const buffer = Buffer.alloc(length); await handle.read(buffer, 0, length, start); text = buffer.toString('utf8'); }
+      finally { await handle.close(); }
+      const lines = text.split(/\r?\n/);
+      // 从行中间开始读的，第一行不完整，丢掉；从发出前的文件末尾开始读的，正好在行首。
+      if (start > 0 && start !== base) lines.shift();
+      const outcome = transcriptTurnOutcome(lines, pending);
+      pending.transcriptStamp = stamp;
+      if (!outcome || this.pending !== pending || this.closed) return false;
+      this.settleFromTranscript(pending, outcome);
+      return true;
+    } catch { return false; } finally { pending.checking = false; }
+  }
+  // 按记录补齐卡片上缺的正文（断开期间丢掉的增量），再按记录里的终态结束这一轮。
+  settleFromTranscript(pending, outcome) {
+    if (outcome.status === 'completed') {
+      const used = new Set();
+      outcome.blocks.forEach((full, index) => {
+        let best = null;
+        for (const [key, text] of this.parts) {
+          if (!key.endsWith(':text') || used.has(key) || !text) continue;
+          if (pending.knownMessages.has(key.slice(0, key.indexOf(':')))) continue;
+          if (full.startsWith(text) && (!best || text.length > best.text.length)) best = { key, text };
+        }
+        if (best) {
+          used.add(best.key);
+          if (best.text.length < full.length) { this.parts.set(best.key, full); this.chunk(true, best.key, full.slice(best.text.length)); }
+          return;
+        }
+        const key = `transcript-${outcome.id}:${index}:text`;
+        // 记成已知消息：下一轮按前缀续接时不会把它当成本轮的开头（审查 P2-3）。
+        this.messageIds.add(`transcript-${outcome.id}`);
+        used.add(key);
+        this.parts.set(key, full);
+        this.chunk(true, key, full);
+      });
+      if (outcome.stopReason !== 'end_turn') pending.stopReason = outcome.stopReason;
+    } else pending.error = outcome.error;
+    pending.sawBusy = true;
+    pending.staleTail = false;
+    this.emit('transcript-settled', { status: outcome.status });
+    this.finishTurn();
   }
 
   async request(method, params = {}) {
@@ -245,7 +394,8 @@ class CodeAgentServeClient extends EventEmitter {
   _prompt({ sessionId, prompt }) {
     if (this.pending) return Promise.reject(new Error('上一轮结果尚未确认，请在后台终端查看。'));
     return new Promise((resolve, reject) => {
-      const pending = { resolve, reject, round: ++this.round, sawBusy: false, error: null, cancelled: false, knownMessages: new Set(this.messageIds) };
+      const pending = { resolve, reject, round: ++this.round, sawBusy: false, error: null, cancelled: false, knownMessages: new Set(this.messageIds),
+        startedAt: Date.now(), promptText: '', lastLiveAt: 0 };
       this.pending = pending;
       this.snapshotRequired = false;
       pending.timer = setTimeout(() => {
@@ -256,6 +406,7 @@ class CodeAgentServeClient extends EventEmitter {
       // 这一轮是用户在真实终端里发的：serve 已经在跑，只接管结果，绝不再发一遍。
       const adopting = this.adopting;
       const promptText = (prompt || []).filter(part => part.type === 'text').map(part => part.text).join('\n');
+      pending.promptText = promptText;
       if (adopting && adopting.text === promptText) {
         this.adopting = null;
         pending.sawBusy = true;
@@ -263,9 +414,12 @@ class CodeAgentServeClient extends EventEmitter {
         // 接管时不丢弃正在接收的终端事件；同一订阅重新绑定到本轮。
         this.round -= 1;
         pending.round = this.round;
+        pending.adopted = true;
         if (adopting.idle) setImmediate(() => this.finishTurn());
         return;
       }
+      // 发出前记下会话记录当时的长度：之后只在新写入的部分里找本轮提问，上一轮的问答再像也认不成本轮（审查 P1-2）。
+      pending.transcriptBase = this.transcriptSize();
       const parts = (prompt || []).map((part, index) => (part.type === 'image'
         ? { type: 'file', mime: part.mimeType, filename: `image-${index}`, url: `data:${part.mimeType};base64,${part.data}` }
         : { type: 'text', text: part.text }));
@@ -332,6 +486,7 @@ class CodeAgentServeClient extends EventEmitter {
       this.pending.staleTail = false;
     }
     if (!this.pending && !['message.updated', 'session.status', 'session.idle'].includes(event.type)) return;
+    if (this.pending && ['message.part.delta', 'message.part.updated', 'permission.asked', 'question.asked'].includes(event.type)) this.pending.lastLiveAt = Date.now();
     // 低开销模式 L7：转忙碌、要审批、要回答时唤醒共享 serve；其余事件（输出、答完）只刷新活动时间，2 分钟空闲从这时算起。
     try {
       if ((event.type === 'session.status' && p.status?.type === 'busy') || event.type === 'permission.asked' || event.type === 'question.asked') this.host?.noteActivity?.();
@@ -451,9 +606,10 @@ class CodeAgentServeClient extends EventEmitter {
     this.pending = null;
     clearTimeout(pending.timer);
     clearTimeout(pending.recoveryTimer);
+    clearInterval(pending.transcriptTimer);
     if (pending.cancelled) pending.resolve({ stopReason: 'cancelled' });
     else if (pending.error) pending.reject(new Error(pending.error));
-    else pending.resolve({ stopReason: 'end_turn' });
+    else pending.resolve({ stopReason: pending.stopReason || 'end_turn' });
   }
   fail(error) {
     if (this.closed) return;
@@ -465,10 +621,11 @@ class CodeAgentServeClient extends EventEmitter {
     this.pending = null;
     clearTimeout(pending?.timer);
     clearTimeout(pending?.recoveryTimer);
+    clearInterval(pending?.transcriptTimer);
     if (pending) { const uncertain = new Error(failure.message); uncertain.uncertain = true; pending.reject(uncertain); }
     this.emit('disconnect', failure);
   }
   close() { this.fail(new Error('CodeAgent serve 连接已关闭')); }
 }
 
-module.exports = { CodeAgentServeClient, PERMISSION_OPTIONS, canonicalDir };
+module.exports = { CodeAgentServeClient, PERMISSION_OPTIONS, canonicalDir, transcriptTurnOutcome };

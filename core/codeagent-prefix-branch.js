@@ -7,12 +7,16 @@ function prefixBranch(session) {
   return /^codeagent(?:-resume)?$/.test(session?.kind || '') && value?.version === 1 ? value : null;
 }
 
+// 这个会话聊过没有：跑过、答完过、发过话或有输出预览，任一就算（R57 P4 的无号提示也用它）。
+function hadConversation(session) {
+  return ['runStartedAt', 'lastRunStartedAt', 'lastCompletedAt', 'lastPrompt', 'lastOutputPreview'].some(key => {
+    const value = session?.[key];
+    return typeof value === 'string' ? !!value.trim() && value.trim() !== '0' : !!value;
+  });
+}
+
 function unusedEmptyPrefix(session) {
-  return prefixBranch(session)?.empty === true && !session.codeagentPrefixFork.newSessionId
-    && !['runStartedAt', 'lastRunStartedAt', 'lastCompletedAt', 'lastPrompt', 'lastOutputPreview'].some(key => {
-      const value = session[key];
-      return typeof value === 'string' ? !!value.trim() && value.trim() !== '0' : !!value;
-    });
+  return prefixBranch(session)?.empty === true && !session.codeagentPrefixFork.newSessionId && !hadConversation(session);
 }
 
 // A SessionStart hook can announce an ID before the CLI creates its file.
@@ -44,4 +48,4 @@ function logPrefixRecovery(session, result, reason, dataDir) {
   } catch { console.warn('[prefix-fork] diagnostic write failed'); }
 }
 
-module.exports = { prefixBranch, unusedEmptyPrefix, missingPrefixChild, logPrefixRecovery };
+module.exports = { prefixBranch, unusedEmptyPrefix, hadConversation, missingPrefixChild, logPrefixRecovery };

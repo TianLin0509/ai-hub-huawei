@@ -2297,6 +2297,18 @@ function codeAgentSwitchLocationOk(parsed, session) {
   catch { return false; }
 }
 
+// R57 诊断：CodeAgent 会话的对话号绑定、改绑被拒、外来 hook 丢弃写进 logs/codeagent-resume.log（一键反馈会按名字带上）。
+// 同一会话、同一个来号、同一原因只记一次，免得被拒后每个 hook 都写一行。
+const codeAgentIdentityLogSeen = new Set();
+function logCodeAgentIdentity(session, event, fields = {}) {
+  if (!session || !isCodeAgentKind(session.kind)) return;
+  const key = [session.id, event, fields.incoming || '', fields.why || ''].join('|');
+  if (codeAgentIdentityLogSeen.has(key)) return;
+  if (codeAgentIdentityLogSeen.size > 2000) codeAgentIdentityLogSeen.clear();
+  codeAgentIdentityLogSeen.add(key);
+  require('./core/transcript-resume-sync').appendResumeLog(getHubDataDir(), event, { session: String(session.id || '').slice(0, 8), ...fields });
+}
+
 function updateSessionTranscriptBinding(hubSessionId, fields = {}) {
   if (!hubSessionId) return null;
   const next = {};
@@ -3938,7 +3950,20 @@ try {
     if (path.resolve(s.cwd).toLowerCase() === homeDir) return true;
     try { return !fs.statSync(s.cwd).isDirectory(); } catch { return true; }
   });
+  const cwdBefore = new Map(suspect.map(s => [s, s.cwd]));
   const healed = suspect.length ? healPersistedCwds(suspect) : 0;
+  // R57 诊断：自愈改了 CodeAgent 会话的工作目录时记一行（续接时会按最新副本同步，见 core/transcript-resume-sync.js）。
+  for (const s of suspect) {
+    if (cwdBefore.get(s) === s.cwd) continue;
+    // 恢复时会话存档会合并到恢复参数上（main/ipc/resume-session-handlers.js），只改 state.json 自愈就白做了：存档里的工作目录一并改掉。
+    // 改回原目录后续接前会同步最新副本（core/transcript-resume-sync.js），不会接到旧记录。
+    try {
+      const saved = sessionStore.loadSessionFile(s.hubId || s.id, { strict: true });
+      if (saved && saved.cwd !== s.cwd) sessionStore.saveSessionFile(s.hubId || s.id, { ...saved, cwd: s.cwd });
+    } catch (error) { console.warn('[群聊] boot cwd 自愈写回会话存档失败：', error.message); }
+    if (isCodeAgentKind(s.kind)) require('./core/transcript-resume-sync').appendResumeLog(getHubDataDir(), 'boot-cwd-healed',
+      { session: String(s.hubId || s.id || '').slice(0, 8), requested: String(s.ccSessionId || '').slice(0, 8) });
+  }
   if (healed > 0) {
     stateStore.save({
       version: 1,
@@ -4223,6 +4248,34 @@ registerMemoryReleaseIpc(ipcMain, {
   getChildStatus: () => childLifecycle.status(),
   logger: console,
 });
+// R59 内存紧张就地提示：每分钟看一次整机内存，紧张时在会话栏和启动中心提示「几个闲着、约占多少」，一键休眠闲着的（main/memory-pressure-watch.js）。
+const memoryPressureWatch = require('./main/memory-pressure-watch').createMemoryPressureWatch({
+  getSessionManager: () => sessionManager,
+  isLowOverheadOn: () => { try { return optionalFeatures.lowOverhead() === true; } catch { return false; } },
+  send: payload => sendToRenderer('memory-pressure:changed', payload),
+  // 受保护会话（同自动休眠与低开销软上限）+ 组队负责人与成员（组队流程自己休眠和唤醒）。
+  getProtectedSessionIds: () => {
+    const ids = collectProtectedSessionIds({
+      agentLeagueBridge, groupChatDispatcher, loopEngine: global.__loopEngine, meetingManager, studyBridge,
+      getCompanyMeetings: () => companyAssistantService && companyAssistantService.meetings,
+      getWelinkLinkedIds: () => welinkLinkDetector.linkedIds(),
+    });
+    for (const [sid, s] of sessionManager?.sessions?.entries?.() || []) {
+      if (s?.info?.hubTeamMember || global.__teamService?.teamOfMember?.(sid) || global.__teamService?.teamOfLead?.(sid)) ids.add(sid);
+    }
+    return ids;
+  },
+  // 只供隔离 E2E：AI_HUB_E2E_MEMORY_USAGE=0.91 假装整机内存占用 91%（不影响内存压力自动休眠，那边仍读真实值）。
+  ...(process.env.CLAUDE_HUB_E2E === '1' && Number(process.env.AI_HUB_E2E_MEMORY_USAGE) > 0
+    ? { osApi: { totalmem: () => require('os').totalmem(), freemem: () => require('os').totalmem() * (1 - Number(process.env.AI_HUB_E2E_MEMORY_USAGE)) } } : {}),
+});
+memoryPressureWatch.start();
+ipcMain.handle('memory-pressure:state', async () => {
+  try { return { ok: true, ...(await memoryPressureWatch.check({ measure: true })) }; } catch (error) { return { ok: false, error: error && error.message }; }
+});
+ipcMain.handle('memory-pressure:suspend-idle', async () => {
+  try { return await memoryPressureWatch.suspendIdle(); } catch (error) { return { ok: false, error: error && error.message }; }
+});
 registerDesktopOrganizerIpc(ipcMain, { dataDir: getHubDataDir(), shell });
 registerDiskReleaseIpc(ipcMain, {
   app,
@@ -4500,6 +4553,7 @@ const hookServer = http.createServer((req, res) => {
             if (bound && bound.ccSessionId === incomingClaudeSessionId) {
               boundClaudeSessionId = incomingClaudeSessionId;
               console.log(`[codeagent hook] ${parsed.sessionId.slice(0, 8)} bound to CLI identity ${incomingClaudeSessionId.slice(0, 8)} (${event})`);
+              logCodeAgentIdentity(hookTargetSession, 'identity-bound', { incoming: incomingClaudeSessionId.slice(0, 8), hook: event });
               if (parsed.transcriptPath) void transcriptTap.watchClaudeTranscript(parsed.sessionId, parsed.transcriptPath, { turnId: null, newTurn: false });
               if (event === 'session-start') { res.writeHead(200); res.end(JSON.stringify({ ok: true, identity: 'bound' })); return; }
             } else {
@@ -4554,6 +4608,9 @@ const hookServer = http.createServer((req, res) => {
             }
           } else if (verdict.action === 'ignore' && verdict.why !== 'no-identity') {
             console.warn(`[claude hook] ignored ${event} for ${parsed.sessionId.slice(0, 8)}: ${verdict.why}`);
+            if (incomingClaudeSessionId && boundClaudeSessionId && incomingClaudeSessionId !== boundClaudeSessionId) logCodeAgentIdentity(hookTargetSession, 'identity-switch-rejected', {
+              bound: boundClaudeSessionId.slice(0, 8), incoming: incomingClaudeSessionId.slice(0, 8), why: verdict.why, source: parsed.source || null,
+              note: '续接异常：CLI 换了对话号，Hub 没有跟上，下次恢复可能接回换号前的对话' });
           }
           res.writeHead(200); res.end(JSON.stringify({ ok: true, identity: verdict.action })); return;
         }
@@ -4565,6 +4622,8 @@ const hookServer = http.createServer((req, res) => {
           // this Hub session, even when it inherited the correct local token.
           console.warn(`[claude hook] ignored foreign ${event} for ${parsed.sessionId.slice(0, 8)}`
             + ` (${initialCwdMismatch ? 'cwd' : initialTranscriptBucketMismatch ? 'transcript-dir' : 'native-id'})`);
+          logCodeAgentIdentity(hookTargetSession, 'identity-foreign-hook', { bound: String(boundClaudeSessionId || '').slice(0, 8) || null,
+            incoming: String(incomingClaudeSessionId || '').slice(0, 8) || null, why: initialCwdMismatch ? 'cwd' : initialTranscriptBucketMismatch ? 'transcript-dir' : 'native-id' });
           res.writeHead(202); res.end('{"ignored":"foreign-session"}'); return;
         }
         // Prefer the UserPromptSubmit payload's `prompt` field when present —
@@ -5270,7 +5329,9 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
               const list = [...(sessionManager?.sessions?.values?.() || [])];
               const kinds = {}; for (const e of list) { const k = e?.info?.kind || e?.kind || '?'; kinds[k] = (kinds[k] || 0) + 1; }
               const os = require('os'), mb = n => Math.round(n / 1048576);
-              return `${fallbackMessage(hookBinding)} · 会话 ${list.length} 个（${Object.entries(kinds).map(([k, n]) => `${k} ${n}`).join('、') || '无'}）· 主进程内存 ${mb(process.memoryUsage().rss)} MB · 系统剩余 ${mb(os.freemem())}/${mb(os.totalmem())} MB · 已运行 ${Math.round(process.uptime() / 60)} 分钟`;
+              return `${fallbackMessage(hookBinding)} · 会话 ${list.length} 个（${Object.entries(kinds).map(([k, n]) => `${k} ${n}`).join('、') || '无'}）· 主进程内存 ${mb(process.memoryUsage().rss)} MB · 系统剩余 ${mb(os.freemem())}/${mb(os.totalmem())} MB · 已运行 ${Math.round(process.uptime() / 60)} 分钟`
+                // R59：低开销模式开没开、各会话进程树合计占多少（缓存 1 分钟，打开反馈窗口时顺手刷新，提交时一般已量好）。
+                + ` · ${require('./main/memory-pressure-watch').runtimeText({ lowOverheadOn: optionalFeatures?.lowOverhead?.() === true, allMem: memoryPressureWatch.allMemCached() })}`;
             } catch (e) { return '读取失败：' + e.message; } })() }) });
         registerHubFeedbackIpc(ipcMain, feedbackService);
         // AI_HUB_FEEDBACK_RETRY_MS 只供隔离 E2E 缩短补发间隔；正常每 10 分钟一轮、启动 1 分钟后先试一次。

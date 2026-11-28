@@ -225,9 +225,8 @@ function ensureCodexHome(dataDir, { model, projectDir, gateway = false }) {
     'requires_openai_auth = false',
     'supports_websockets = false',
     'request_max_retries = 0',
-    // 网关偶尔在回答中途断流（11-28 黄区夜测 Codex·GLM 20 轮里 4 轮因此失败）；已经出字后反代没法重试，交给 Codex 自己重发这一步。
-    // 公司上游仍是 0：断流后反代会换号重试，Codex 再叠一层只会拉长等待。
-    `stream_max_retries = ${gateway ? 2 : 0}`,
+    // 两条线路都交给 Codex 重发这一步：已经出字后反代没法重试（R61）；网关偶尔在回答中途断流（11-28 黄区夜测 Codex·GLM 20 轮里 4 轮因此失败）。
+    `stream_max_retries = ${CODEX_STREAM_RETRIES}`,
     'stream_idle_timeout_ms = 600000',
     '',
     `[projects.${tomlString(projectKey)}]`,
@@ -236,6 +235,13 @@ function ensureCodexHome(dataDir, { model, projectDir, gateway = false }) {
   ].join('\n'));
   return home;
 }
+// 回复到一半公司上游断开（2026-11-27 反馈 2 人：Codex 报 stream disconnected，这一轮直接失败）：反代只能在第一帧之前重试，
+// 字节已经交给 Codex 之后断开只能写一条 response.failed。以前这里把 Codex 自己的流重试关成 0 次，于是一次断流就是一轮报错。
+// 交还给 Codex 重试 2 次：Codex 重发整次请求、丢掉半截输出，终端里显示「Reconnecting 1/2」（core/stream-disconnect.js 不当断开）。
+// HTTP 层（request_max_retries）仍为 0：首帧前的失败反代已经重试过，限流由号池换号处理。
+// 部门 API 网关线路同样 2 次：11-28 黄区夜测网关中途断流是 Codex·GLM 失败的主因之一，实测重发能接上。
+// Mid-reply upstream drops can only be reported as response.failed by the proxy; let Codex re-run the request twice.
+const CODEX_STREAM_RETRIES = 2;
 function applyCodexEnv(env, { dataDir, sessionId, model, projectDir, account, gateway = false }) {
   const endpoint = requireEndpoint(dataDir, { gateway });
   env.CODEX_HOME = ensureCodexHome(dataDir, { model, projectDir, gateway });

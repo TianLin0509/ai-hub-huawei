@@ -105,7 +105,31 @@ const MEMORY_RELEASE_SUSPEND_OPTIONS = Object.freeze({
   minIdleMs: MEMORY_RELEASE_MIN_IDLE_MS,
   excludeFocused: true,
   excludeMeeting: true,
+  // R59 审查：CodeAgent 回合外还有输入、停在待用户确认的会话，满 10 分钟也不收（与自动休眠、低开销软上限同口径）。
+  requireSettledCodeAgent: true,
+  excludeNeedsInput: true,
 });
+// R59 内存紧张提示的「闲着」计数与一键休眠：在面板口径上再豁免置顶会话和 CodeAgent-Lite 会话
+// （Lite 共用后台进程，单休眠一个腾不出内存）。组队、WeLink 连线、会议录制等受保护会话由调用方经 excludeSessionIds 传入。
+const MEMORY_HINT_SUSPEND_OPTIONS = Object.freeze({
+  ...MEMORY_RELEASE_SUSPEND_OPTIONS,
+  excludePinned: true,
+  excludeServe: true,
+});
+// 休眠闸门用的「最后活动时刻」：卡片 / Lite / 原生会话不走终端输入输出（lastInputAt、lastOutputAt 常为 0），
+// 回合开始、结束和最后一条消息也算活动，否则刚答完 1 秒就被当成闲置很久（R59 审查 P0；同 main/low-overhead-controller.js）。
+function suspendActivityAt(session) {
+  const info = (session && session.info) || {};
+  return Math.max(
+    Number(session && session.startedAt) || 0,
+    Number(session && session.lastInputAt) || 0,
+    Number(session && session.lastOutputAt) || 0,
+    Number(session && session.agentTurnStartedAt) || 0,
+    Number(session && session.agentTurnFinishedAt) || 0,
+    Number(info.lastCompletedAt) || 0,
+    Number(info.lastMessageTime) || 0,
+  );
+}
 // One default for ordinary/group Codex sessions and every new/resume/fork/relaunch path.
 const CODEX_REASONING_EFFORT = 'max';
 // Codex 的思考深度档位。2026-08-16 查 ~/.codex/models_cache.json 实测：
@@ -413,6 +437,25 @@ function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
 //   已有历史    → --resume <id>
 //   id 已分配但从未开聊（原生时代的懒启动席位）→ --session-id <同一个 id>
 //   --continue / 选择器 → 身份未知，等第一个 hook 上报
+// 续接前同步对话记录（R57）：CLI 的 --resume 只读当前工作目录对应的记录桶，回落、自愈、归档都会复制记录，
+// 同一个号于是有几份、各自增长。续接前把最新的那份放到这个桶（旧的改名备份），卡片也绑到这一份。
+// 返回要合并进 opts 的字段（没有要改的返回 {}）。分支、前缀分支写的是新记录，不在这里处理。
+function syncResumeTranscript({ id, kind, opts, cwd, configDir, cwdFellBack }) {
+  if (!opts.resumeCCSessionId || opts.forkCCSessionId || opts.codeagentPrefixFork || !configDir) return {};
+  const resumeSync = require('./transcript-resume-sync');
+  let synced;
+  try { synced = resumeSync.syncFreshestForResume({ sessionId: opts.resumeCCSessionId, cwd, configDir }); }
+  catch (error) { synced = { action: 'error', reason: error.message, copies: [] }; }
+  if (['synced', 'anomaly', 'error'].includes(synced.action)) console.warn(`[resume-sync] ${String(id).slice(0, 8)} 续接前记录同步：${synced.action}${synced.reason ? '（' + synced.reason + '）' : ''}`);
+  resumeSync.logSync(getHubDataDir(), { hubSessionId: id, kind, sessionId: opts.resumeCCSessionId, cwdFellBack: !!cwdFellBack, result: synced });
+  if (synced.action === 'synced') require('./claude-transcript-locator').forgetTranscriptLookup(opts.resumeCCSessionId);
+  // 卡片读 transcriptPath：同步后当前桶里那份就是要续接的，不再指向枚举到的旧副本。
+  return synced.target && ['synced', 'kept'].includes(synced.action) && fs.existsSync(synced.target) ? { resumeTranscriptPath: synced.target } : {};
+}
+function claudeSessionConfigDir(env) {
+  return env.CLAUDE_CONFIG_DIR || path.join(env.USERPROFILE || env.HOME || os.homedir(), '.claude');
+}
+
 // PTY 里启动 Claude Code 用的程序：与首页检测同一套查找（PATH → npm 全局 → ~\.local\bin → Hub 一键安装的）。
 function claudePtyExecutable(env, platform = process.platform) {
   if (platform !== 'win32') return null;
@@ -726,8 +769,19 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   // 请求恢复某个对话，但当前配置目录里找不到记录：会按全新会话启动，要让用户知道（A1-06）。
   const resumeHistoryMissing = !!opts.resumeCCSessionId && !opts.forkCCSessionId && isUuid(opts.resumeCCSessionId) && identity.length === 0;
   if (resumeHistoryMissing) console.warn(`[codeagent] ${String(id || '').slice(0, 8)} resume requested for ${String(opts.resumeCCSessionId).slice(0, 8)} but no history found under ${config.configDir}; starting a new conversation`);
+  // 恢复一个从没绑定上对话号的会话（hook 没上报或被拒）：只能新开，和「找不到记录」一样要让用户知道（R57 P4）。
+  const resumeWithoutIdentity = opts.codeagentResumeNoIdentity === true && !opts.resumeCCSessionId && !opts.forkCCSessionId && identity.length === 0;
+  // 诊断（R57）：每次启动记下请求续接的号和实际做法；新开且本该续接的带「异常」，一键反馈只留报错行时也能带上。
+  require('./transcript-resume-sync').appendResumeLog(hubDataDir, 'launch', {
+    session: String(id || '').slice(0, 8), kind, requested: String(opts.resumeCCSessionId || '').slice(0, 8) || null,
+    decision: opts.forkCCSessionId ? 'fork' : identity[0] === '--resume' ? (identity[1] ? 'resume' : 'picker') : 'fresh',
+    resumed: identity[0] === '--resume' && identity[1] ? String(identity[1]).slice(0, 8) : null,
+    ...(resumeHistoryMissing ? { reason: 'history-missing', note: '续接异常：当前配置目录里找不到这个对话的记录，按新对话启动' } : {}),
+    ...(resumeWithoutIdentity ? { reason: 'no-identity', note: '续接异常：这个会话之前没绑定上对话号，按新对话启动' } : {}),
+    ...(opts.cwdFellBackFrom ? { cwdFellBack: true } : {}),
+  });
   return { cmd, sessionId, ...pin, requiresMenu: !!requestedModel && !(settingsFile && launchArgs.includes('--settings')),
-    ...(resumeHistoryMissing ? { resumeHistoryMissing: true } : {}), ...(marketMcpNotice ? { marketMcpNotice } : {}), model: requestedModel,
+    ...(resumeHistoryMissing ? { resumeHistoryMissing: true } : {}), ...(resumeWithoutIdentity ? { resumeWithoutIdentity: true } : {}), ...(marketMcpNotice ? { marketMcpNotice } : {}), model: requestedModel,
     // 按 bypass 档启动：第一次用这个档的配置目录会弹「Bypass Permissions mode」确认框，启动后自动选 Yes（见 _createSession）。
     bypassLaunch: permissionMode === 'bypassPermissions' && launchArgs.includes('--permission-mode'),
     settingsModel: settingsFile && launchArgs.includes('--settings') ? settingsModel : '', ...(memberMcpLearn ? { memberMcpLearn } : {}),
@@ -2627,6 +2681,7 @@ class SessionManager extends EventEmitter {
       // 信任框根本不出现；写在 CLI 起来之前，没有与运行中 CLI 的竞态。
       require('./claude-project-trust.js').ensureClaudeProjectTrusted(spawnCwd,
         { configDir: sessionEnv.CLAUDE_CONFIG_DIR || null });
+      opts = { ...opts, ...syncResumeTranscript({ id, kind, opts, cwd: spawnCwd, configDir: claudeSessionConfigDir(sessionEnv), cwdFellBack }) };
       claudePtyLaunch = buildClaudePtyLaunch(id, kind, opts, spawnCwd, sessionEnv, getLaunchValues());
       // 身份在启动前就定下来：独占声明和卡片都立即可用，不等第一个 hook。
       if (claudePtyLaunch.sessionId && !opts.forkCCSessionId) opts = { ...opts, resumeCCSessionId: claudePtyLaunch.sessionId };
@@ -2642,6 +2697,7 @@ class SessionManager extends EventEmitter {
       if (!opts.mcpProfile) opts = { ...opts, mcpProfile: 'none' };
       // Claude 的 fast 档是 Claude 订阅专属，DeepSeek 不叠；落盘为 false，状态栏也不显示 fast。
       opts = { ...opts, fastMode: false };
+      opts = { ...opts, ...syncResumeTranscript({ id, kind, opts, cwd: spawnCwd, configDir: deepseekClaudeLaunch.configDir, cwdFellBack }) };
       claudePtyLaunch = buildClaudePtyLaunch(id, kind, {
         ...opts,
         model: deepseekClaudeLaunch.wireModel,
@@ -2681,16 +2737,9 @@ class SessionManager extends EventEmitter {
       const auth = require('./codeagent-launch-env').applyAccountEnv(sessionEnv, codeagentConfig);
       // 完成提醒只留一个（反馈 1ce04c14）：默认 Hub 回执或桌宠在提醒时关掉 CodeAgent 自己的桌面通知（core/codeagent-cli-notify.js）。
       try { require('./codeagent-cli-notify').applyCliNotifyEnv(sessionEnv); } catch (error) { console.warn('[codeagent] 完成提醒开关读取失败：' + error.message); }
-      // 原工作目录已不存在、回落到主目录时，CLI 的 --resume 只看新目录对应的记录桶：
-      // 先把记录复制过去，否则会"有记录却恢复失败"，重启也没用（A1-15）。
-      if (cwdFellBack && opts.resumeCCSessionId && !opts.forkCCSessionId) {
-        try {
-          const moved = require('./claude-transcript-locator').migrateTranscriptsForCwdChange({
-            toCwd: spawnCwd, ccSessionIds: [opts.resumeCCSessionId], configDir: codeagentConfig.configDir,
-          });
-          if (moved.errors.length) console.warn('[codeagent] 回落目录后迁移对话记录失败：' + moved.errors.join('; '));
-        } catch (error) { console.warn('[codeagent] 回落目录后迁移对话记录出错：' + error.message); }
-      }
+      // CLI 的 --resume 只看当前工作目录对应的记录桶。回落、启动自愈、归档都会复制记录，同一个号于是有几份、各自增长：
+      // 续接前把最新的那份放到这个桶（旧的改名备份），否则会"有记录却恢复失败"（A1-15），或接到停在回落那天的旧上下文（R57）。
+      opts = { ...opts, ...syncResumeTranscript({ id, kind, opts, cwd: spawnCwd, configDir: codeagentConfig.configDir, cwdFellBack }) };
       try { codeagentLaunch = buildCodeAgentPtyLaunch(id, kind, opts, spawnCwd, sessionEnv, codeagentConfig, auth, codeagentPool); }
       catch (error) {
         if (error.code === 'SESSION_MODEL_UNAVAILABLE' && !opts.modelCreationContext) this.emit('session-notice', { sessionId: id, level: 'error', persistent: true,
@@ -3295,6 +3344,11 @@ class SessionManager extends EventEmitter {
       ptyProcess.on('action-error', message => {
         info.nativeActionError = message; publish();
       });
+      // 轮次结束后收起本轮的断线 / 结果不明提示（core/codeagent-serve-session.js clearTurnNotices）；换成别的提示了就不动。
+      ptyProcess.on('action-error-cleared', message => {
+        if (info.nativeActionError !== message) return;
+        info.nativeActionError = null; publish();
+      });
       ptyProcess.on('diagnostic', message => console.warn('[codex-native]',id,message));
       ptyProcess.on('backstage-updated', event => {
         if (this.sessions.get(id)?.pty === ptyProcess) this.emit('codex-backstage-updated', {sessionId:id,...event});
@@ -3360,6 +3414,10 @@ class SessionManager extends EventEmitter {
     if (codeagentLaunch && codeagentLaunch.resumeHistoryMissing) {
       setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning', noticeKind: 'data-risk',
         message: '没有找到这个会话之前的对话记录（可能已被清理或配置目录换过），这次是一段新对话，AI 不记得之前聊过的内容。' }), 0);
+    }
+    if (codeagentLaunch && codeagentLaunch.resumeWithoutIdentity) {
+      setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning', noticeKind: 'data-risk',
+        message: '这个会话之前没有记下 CodeAgent 的对话编号，接不上原来的对话，这次是一段新对话，AI 不记得之前聊过的内容。' }), 0);
     }
 
     const agentPtyLaunch = claudePtyLaunch || codeagentLaunch;
@@ -4025,6 +4083,13 @@ try {
     if (options.excludeFocused && this.focusedSessionId === sessionId) {
       return { ok: false, error: 'focused', message: '当前会话不会被批量休眠' };
     }
+    if (options.excludeServe && session.info && session.info.codeagentRunMode === 'serve') {
+      return { ok: false, error: 'codeagent-lite', message: 'CodeAgent-Lite 共用后台进程，单独休眠腾不出内存' };
+    }
+    if (options.excludeNeedsInput && session.info && (session.info.modelConfirmationRequired === true
+        || require('./session-attention-state').sessionNeedsUserInput(session.info) === true)) {
+      return { ok: false, error: 'needs-user-input', message: '会话在等你确认或回答，不会被批量休眠' };
+    }
     const excludedSessionIds = options.excludeSessionIds;
     const isExplicitlyExcluded = excludedSessionIds instanceof Set
       ? excludedSessionIds.has(sessionId)
@@ -4034,11 +4099,7 @@ try {
     }
 
     const now = Number(options.now) || Date.now();
-    const lastActivityAt = Math.max(
-      Number(session.startedAt) || 0,
-      Number(session.lastInputAt) || 0,
-      Number(session.lastOutputAt) || 0,
-    );
+    const lastActivityAt = suspendActivityAt(session);
     const minIdleMs = Math.max(0, Number(options.minIdleMs) || 0);
     const idleMs = Math.max(0, now - lastActivityAt);
     if (minIdleMs > 0 && idleMs < minIdleMs) {
@@ -4120,14 +4181,14 @@ try {
   // 能否休眠直接走 _evaluateSuspendEligibility，和真执行用同一套判据。
   describeSessionsForMemory(options = {}) {
     const now = Number(options.now) || Date.now();
-    const suspendOptions = { ...MEMORY_RELEASE_SUSPEND_OPTIONS, now };
+    // options.suspendOptions：换一组闸门参数（内存紧张提示用 MEMORY_HINT_SUSPEND_OPTIONS）；excludeSessionIds：受保护会话。
+    const suspendOptions = { ...(options.suspendOptions || MEMORY_RELEASE_SUSPEND_OPTIONS), now,
+      ...(options.excludeSessionIds ? { excludeSessionIds: options.excludeSessionIds } : {}) };
     const rows = [];
     for (const [sessionId, session] of this.sessions) {
       const info = session.info || {};
       const verdict = this._evaluateSuspendEligibility(sessionId, suspendOptions);
-      const lastActivityAt = Math.max(
-        Number(session.startedAt) || 0, Number(session.lastInputAt) || 0, Number(session.lastOutputAt) || 0,
-      );
+      const lastActivityAt = suspendActivityAt(session);
       const ptyPid = Number(session.pty && session.pty.pid);
       rows.push({
         id: sessionId,
@@ -5597,6 +5658,7 @@ async function readTranscriptTail(kind, sourcePath, n = 10, opts = {}) {
 module.exports = {
   SessionManager,
   MEMORY_RELEASE_SUSPEND_OPTIONS,
+  MEMORY_HINT_SUSPEND_OPTIONS,
   readTranscriptTail,
   dismissCodexUpdatePrompt,
   dismissCodexRateLimitDialog,
@@ -5619,6 +5681,7 @@ module.exports = {
     buildClaudePtyLaunch,
     createNativeClaudeDriver,
     buildCodeAgentPtyLaunch,
+    syncResumeTranscript,
     syncCodeAgentProjectMcp,
     singleCodeAgentMcpConfig,
     scheduleNativeMcpLearn,
