@@ -7,10 +7,12 @@
 //   kind 可选 codeagent / claude / codex / deepseek-acp（DSH，也可写 dsh）。
 //   省略 model 时沿用账号模型；不支持修改推理档位和速度。
 //   hub-team propose --plan-file 计划.json        计划：{"goal":"…","members":[{"role":"…","task":"…","kind":"codeagent|claude|codex|deepseek-acp","account":"…","model":"…","cwd":"…","title":"…"}]}
+//   赛马：{"goal":"…","race":true,"task":"所有参赛者做的同一道题","members":[{"account":"…","model":"…"},{"account":"…","model":"…"}]}（同题多人各做一版；交齐后 Hub 出成绩单，只叫醒负责人一次）
 //   hub-team send --to lead|m1 --message "…" [--wake|--no-wake] [--interrupt] [--deliver]
 //   hub-team send --to m1 --message-file 消息.md
 //   hub-team read --id 12（短号数字或 msg-xxx 长编号）读取完整原文；仅本队负责人和消息参与者可读
 //   hub-team allow --a m1 --b m2 [--off] [--reason "…"]
+//   hub-team pass --to m1     负责人放行该成员最近被权限守卫拦下的那一条命令（30 分钟内原样重试一次有效）
 //   hub-team restart --member m1
 //   hub-team dismiss --member m1
 const fs = require('node:fs');
@@ -49,8 +51,12 @@ function buildRequest(argv) {
       return { action, args: { messageId: opt.id } };
     }
     case 'allow': return { action, args: { memberA: String(opt.a || ''), memberB: String(opt.b || ''), allow: !opt.off, reason: opt.reason ? String(opt.reason) : '' } };
+    case 'pass': {
+      if (typeof opt.to !== 'string' || !opt.to.trim()) throw Error('用法：pass --to <成员编号>（放行该成员最近被拦的那一条命令，30 分钟内原样重试一次有效）');
+      return { action, args: { to: opt.to.trim() } };
+    }
     case 'restart': case 'dismiss': return { action, args: { memberId: String(opt.member || '') } };
-    default: throw Error('动作：status / accounts / propose / send / read / allow / restart / dismiss');
+    default: throw Error('动作：status / accounts / propose / send / read / allow / pass / restart / dismiss');
   }
 }
 

@@ -72,6 +72,7 @@ test('real native and group broadcasts after a rejected save can apply external 
   const renamer=require('../renderer/session-renaming').createSessionRenamer({getSession:()=>kind==='native'?target:null,getMeeting:()=>kind==='meeting'?meetings.target:null,render(){},persist:async()=>{throw Error('EIO');},ipcRenderer:{invoke:async channel=>{if(channel==='session:rename-title')throw Error('EIO');return kind==='meeting'?true:{id:target.id};}}});
   const context={require:createRequire(filename),ipcRenderer:{on:(name,fn)=>listeners.set(name,fn)},sessions,meetings,activeMeetingId:null,sessionRenamer:renamer,
    queueMicrotask:fn=>fn(),turnCardRenderer:{refreshCardActions(){}},nativeSessionBootstrap:{record(){}},
+   sessionUpdateGate:require('../renderer/surface-change-gate').createSessionUpdateGate({render(){},persist(){},telemetryPersist(){}}),
    window:{dispatchEvent(){}},CustomEvent:function(){},_updateStreamingIndicator(){},scheduleSessionListRender(){},scheduleFloatingBarState(){},meetingUnread:{preserveMeetingAttention(){}},MeetingRoom:{updateMeetingData(){}}};
   const event=kind==='meeting'?'meeting-updated':'session-updated',start=source.indexOf("ipcRenderer.on('"+event+"',"),end=source.indexOf(kind==='meeting'?"ipcRenderer.on('groupchat-turn-targets',":'// --- Session persistence',start);
   vm.runInNewContext(source.slice(start,end),context,{filename});await assert.rejects(renamer.rename('target','本地失败名'),/EIO/);

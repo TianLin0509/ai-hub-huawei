@@ -126,6 +126,10 @@ function createSessionContextMenuController({
     }
     // 群聊分支入口：会话看到「加入群聊…」，群聊看到「分支群聊」。能不能分支由主进程
     // 最终判定（要有原生会话 ID），这里只做最粗的类型过滤，不在前端复制那套规则。
+    // 负责人多一项「创建子会话…」：打开启动中心并预选这位负责人（renderer/launch-center-lead-picker.js）。
+    const childBtn = contextMenuEl.querySelector('[data-action="create-child"]');
+    // 休眠的负责人不给这一项：挂成员要负责人醒着收通知，先点开它叫醒再来。
+    if (childBtn) childBtn.style.display = session && !meeting && session.status !== 'dormant' && typeof window !== 'undefined' && window.__teamUi?.isLead?.(sessionId) ? '' : 'none';
     const joinGroupBtn = contextMenuEl.querySelector('[data-action="join-group"]');
     if (joinGroupBtn) {
       joinGroupBtn.style.display = session && !meeting && forkUi && session.purpose !== 'xresearch-research' ? '' : 'none';
@@ -157,6 +161,11 @@ function createSessionContextMenuController({
 
         const session = sessions.get(sid);
         const meeting = meetings[sid];
+
+        if (action === 'create-child') {
+          window.LaunchCenter?.openSubSession?.(sid);
+          return;
+        }
 
         if (action === 'folder-move') {
           const key = folderEntityKey(sid);

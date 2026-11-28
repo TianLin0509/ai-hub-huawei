@@ -130,3 +130,25 @@
   :root[data-hw-shell] #progress-panel .pg-board { padding: 16px; }
   :root[data-hw-shell] #progress-panel .pg-cols { gap: 10px; }
 }
+
+/* 交卷 / 请拍板简述条（renderer/brief-bar.js）：窗口顶部居中、工具栏下面，哪个页面都看得到；最多三张，两行一张。颜色只用主题变量。 */
+.brief-bar { position: fixed; top: calc(var(--app-toolbar-h, 44px) + 8px); left: 50%; transform: translateX(-50%); z-index: 9980; width: min(560px, calc(100vw - 48px));
+  display: flex; flex-direction: column; gap: 6px; font-family: inherit; font-size: 13px; -webkit-app-region: no-drag; }
+.brief-card { display: flex; align-items: center; gap: 12px; padding: 9px 12px 9px 14px; border: 1px solid var(--ro-line, var(--border-subtle)); border-left: 3px solid var(--brand);
+  border-radius: var(--radius-md, 8px); background: var(--bg-card, var(--surface-raised)); color: var(--text-primary); box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,.12)); }
+.brief-card[data-kind="decide"] { border-left-color: var(--pg-ask); }
+.brief-body { flex: 1 1 auto; min-width: 0; }
+.brief-body p { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.6; }
+.brief-head { display: flex; align-items: center; gap: 8px; }
+.brief-tag { flex: none; font-size: 12px; font-weight: 600; padding: 0 6px; border-radius: 4px; color: var(--brand-text, var(--brand)); background: rgba(var(--rgb-info, 52,120,246), .1); }
+.brief-card[data-kind="decide"] .brief-tag { color: var(--pg-ask); background: var(--pg-ask-tint); }
+.brief-title { min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.brief-line.sub { color: var(--text-secondary); font-size: 12px; }
+.brief-acts { flex: none; display: flex; align-items: center; gap: 4px; }
+.brief-acts button, .brief-foot button { font: inherit; cursor: pointer; border-radius: 5px; }
+.brief-open { padding: 4px 12px; border: 1px solid var(--brand); background: var(--brand); color: var(--text-on-brand, #fff); } /* theme-ok: 品牌色按钮上的白字兜底 */
+.brief-open:hover { filter: brightness(.95); }
+.brief-x { width: 26px; height: 26px; border: none; background: none; color: var(--text-muted); font-size: 17px; line-height: 1; }
+.brief-x:hover { color: var(--text-primary); background: rgba(var(--rgb-info, 52,120,246), .08); }
+.brief-foot { align-self: flex-end; display: flex; gap: 6px; padding: 4px; border: 1px solid var(--ro-line, var(--border-subtle)); border-radius: var(--radius-md, 8px); background: var(--bg-card, var(--surface-raised)); box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,.12)); }
+.brief-foot button { padding: 2px 10px; border: 1px solid var(--ro-line, var(--border-subtle)); background: var(--bg-card, var(--surface-raised)); color: var(--text-secondary); font-size: 12px; }

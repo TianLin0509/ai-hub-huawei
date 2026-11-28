@@ -14,5 +14,10 @@ function registerTeamIpc(ipcMain, getService) {
     leadSid: String(a.leadSid || ''), planId: String(a.planId || ''), approve: a.approve === true,
     note: String(a.note || '').slice(0, 2000), edits: Array.isArray(a.edits) ? a.edits.slice(0, 16) : null,
   })));
+  // 启动中心「负责人」下拉与用户手动加成员（来源 22dff5bd）。
+  ipcMain.handle('team:lead-options', call(s => s.leadOptions()));
+  ipcMain.handle('team:attach-member', call((s, a) => s.attachMember({
+    leadSid: String(a.leadSid || ''), sessionId: String(a.sessionId || ''), task: String(a.task || '').slice(0, 4000), title: String(a.title || '').slice(0, 80),
+  })));
 }
 module.exports = { registerTeamIpc };

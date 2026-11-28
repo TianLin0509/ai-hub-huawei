@@ -404,10 +404,11 @@ async function _saveImplAsync(state, { strict = false } = {}) {
 // 500 ms, rewrote the whole file on nearly every change. Each timer always
 // writes the newest pending state, and flushPending() bypasses the wait.
 const SAVE_DELAY_MS = 500;
-const SAVE_MIN_INTERVAL_MS = 2000;
-// 低开销模式（2026-11-23 P1 L6）运行期把最短间隔放宽到 5 秒；关掉恢复 2 秒。退出前 flushPending 照常立刻刷盘。
+// 200 ms 内已落每会话文件（core/session-store.js），启动时按 updatedAt 合回总表，所以放宽到 15 秒一写不丢数据；退出时 flushPending 照旧立即写。
+const SAVE_MIN_INTERVAL_MS = 15000;
+// 低开销模式（2026-11-23 P1 L6）运行期把最短间隔再放宽（见 core/low-overhead-policy.js）；关掉恢复默认。退出前 flushPending 照常立刻刷盘。
 let saveMinIntervalMs = SAVE_MIN_INTERVAL_MS;
-// 已挂着的保存按新间隔重排（Codex 非阻断 / Gemini 建议）：从 5 秒切回 2 秒时，当次待存的状态不再多等 3 秒。
+// 已挂着的保存按新间隔重排（Codex 非阻断 / Gemini 建议）：从长间隔切回短间隔时（当时是 5→2 秒，2026-11-28 起默认 30→15 秒），当次待存的状态不多等。
 // 只提前、不推后：新间隔更长时已挂的那次照旧按原时刻落盘。
 let saveDebounceDueAt = 0;
 function setSaveMinInterval(ms) {

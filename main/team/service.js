@@ -8,7 +8,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes } = require('node:crypto');
-const { delegationGuidance, RECEIPT_FORMAT } = require('./member-guidance');
+const { delegationGuidance, guardGuidance, RECEIPT_FORMAT } = require('./member-guidance');
 const { NO_UPDATE_MARK } = require('../../core/team-silent-reply');
 const { formatAbsoluteTime } = require('../../core/beijing-time');
 
@@ -23,6 +23,7 @@ const RETRY_BACKOFF_MS = [60 * 1000, 3 * 60 * 1000, 10 * 60 * 1000];
 const { PERSONAL_ACCOUNT_ID, PERSONAL_SHARED_NOTE } = require('./codeagent-accounts');
 const TeamBackends = require('./backends');
 const MemberWorktree = require('./member-worktree');
+const TeamRace = require('./race');
 const RESTART_COOLDOWN_MS = 30 * 60 * 1000;
 const NOWAKE_MAX_AGE_MS = 20 * 60 * 1000;
 const NOWAKE_MAX_COUNT = 8;
@@ -240,10 +241,11 @@ function createTeamService(deps) {
 
   // 个人账号的并发名额按全 Hub 算：多个负责人共用同一个号。
   function personalSlotsFull(target) {
-    if (target?.account !== PERSONAL_ACCOUNT_ID) return false;
+    // 用户在启动中心手动挂进来的成员是用户自己开的会话，不受个人账号同时干活名额约束，也不占名额。
+    if (target?.manual || target?.account !== PERSONAL_ACCOUNT_ID) return false;
     let busy = 0;
     for (const team of teams.values()) for (const m of team.members || []) {
-      if (m.account !== PERSONAL_ACCOUNT_ID || m.status !== 'active' || !m.sid || m.sid === target.sid) continue;
+      if (m.manual || m.account !== PERSONAL_ACCOUNT_ID || m.status !== 'active' || !m.sid || m.sid === target.sid) continue;
       if (sessionState(m.sid) === 'running' || sending.has(team.leadSid + ':' + m.memberId) || now() - (personalClaims.get(m.sid) || 0) < PERSONAL_CLAIM_MS) busy++;
     }
     return busy >= PERSONAL_MEMBER_LIMIT;
@@ -251,9 +253,10 @@ function createTeamService(deps) {
   function publicView(team) {
     return {
       leadSid: team.leadSid, createdAt: team.createdAt, updatedAt: team.updatedAt,
-      members: (team.members || []).map(m => ({ memberId: m.memberId, sid: m.sid, role: m.role, kind: m.kind, account: m.account || '', ...(m.account === PERSONAL_ACCOUNT_ID ? { sharedNote: PERSONAL_SHARED_NOTE } : {}), title: m.title, status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid), reason: modelWaitFor(m.sid)?.reason || '', ...(m.model ? {model:m.model} : {}),
-        ...(m.dismissReason ? { dismissReason: m.dismissReason } : {}), ...(m.deliveredAt ? { delivered: true } : {}) })),
-      plans: (team.plans || []).map(p => ({ id: p.id, status: p.status, goal: p.goal, members: p.members, submittedAt: p.submittedAt, decidedAt: p.decidedAt || 0, note: p.note || '' })),
+      members: (team.members || []).map(m => ({ memberId: m.memberId, sid: m.sid, role: m.role, kind: m.kind, account: m.account || '', ...(m.account === PERSONAL_ACCOUNT_ID ? { sharedNote: PERSONAL_SHARED_NOTE } : {}), title: m.title, status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid), reason: modelWaitFor(m.sid)?.reason || '', ...(m.model ? {model:m.model} : {}), ...(m.manual ? { manual: true } : {}),
+        ...(m.dismissReason ? { dismissReason: m.dismissReason } : {}), ...(m.deliveredAt ? { delivered: true } : {}), ...(m.access === 'read' ? { access: 'read' } : {}) })),
+      plans: (team.plans || []).map(p => ({ id: p.id, status: p.status, goal: p.goal, members: p.members, submittedAt: p.submittedAt, decidedAt: p.decidedAt || 0, note: p.note || '',
+        ...(p.race ? { race: true, task: p.task || '', raceState: p.raceState || '', ...(p.raceCard ? { raceCard: p.raceCard } : {}) } : {}) })),
       grants: (team.grants || []).slice(),
       messages: (team.messages || []).map(m => deliveryView(team, m)),
     };
@@ -272,14 +275,18 @@ function createTeamService(deps) {
     const list = Array.isArray(args.members) ? args.members : [];
     if (!goal) throw Error('计划要写 goal：这批人一起要完成什么');
     if (!list.length) throw Error('计划至少招 1 人：members 是数组，每项写 role、task，可选 title、cwd、kind、account、model');
+    const race = args.race === true, raceTask = String(args.task || '').trim();
+    if (race && !raceTask) throw Error('赛马计划要写 task：所有参赛者做的同一道题（长的写任务书路径）');
+    if (race && list.length < 2) throw Error('赛马至少 2 位参赛者');
     const active = occupiedSlots(team);
     if (checkCapacity && active + list.length > MAX_MEMBERS) throw Error(`每位负责人最多 ${MAX_MEMBERS} 名成员（现有 ${active} 名）`);
     const accountList=listAccounts();
     let backendList=null;
     const backendOf=kind=>(backendList||(backendList=listBackends()||[])).find(b=>b.kind===kind);
-    return { goal, members: list.map((raw, i) => {
+    return { goal, ...(race ? { race: true, task: raceTask } : {}), members: list.map((raw, i) => {
       rejectTuning(raw);
-      const role = String(raw?.role || '').trim(), task = String(raw?.task || '').trim();
+      const role = String(raw?.role || (race ? `赛马参赛（${String(raw?.model || raw?.account || '默认模型').trim()}）` : '')).trim();
+      const task = String(raw?.task || (race ? raceTask : '')).trim();
       const kind = TeamBackends.resolveKind(raw?.kind || 'codeagent');
       if (!role || !task) throw Error(`第 ${i + 1} 人要写 role（分工）和 task（开工任务，可写任务书路径）`);
       if (!allowedKinds.includes(kind)) throw Error(`第 ${i + 1} 人的 kind「${String(raw?.kind)}」不可用；可选 ${allowedKinds.join(' / ')}，不写就是 codeagent。DeepSeek、GLM 等模型写在 CodeAgent 成员的 model 里，先跑 accounts 从账号 models 中选`);
@@ -323,8 +330,10 @@ function createTeamService(deps) {
       }
       const cwd = String(raw?.cwd || '').trim();
       if (cwd && !fs.existsSync(cwd)) throw Error(`第 ${i + 1} 人的工作目录不存在：${cwd}`);
+      const access = raw?.access == null || raw.access === '' ? 'write' : String(raw.access).trim().toLowerCase();
+      if (access !== 'read' && access !== 'write') throw Error(`第 ${i + 1} 人的 access 只能写 read 或 write`);
       return { role, task, kind, account, cwd, title: String(raw?.title || role).trim().slice(0, 40), model,
-        ...(raw?.fresh === true ? { fresh: true } : {}), ...(raw?.worktree === false ? { worktree: false } : {}) };
+        ...(raw?.fresh === true ? { fresh: true } : {}), ...(raw?.worktree === false ? { worktree: false } : {}), ...(access === 'read' ? { access } : {}) };
     }) };
   }
   function memberPlanKey(spec, callerSid) {
@@ -378,7 +387,7 @@ function createTeamService(deps) {
       note: '10 分钟内相同计划已提交，没有重复招人；先用 status 核对原计划和成员，失败项可单独重交。' };
     if (occupiedSlots(team) + plan.members.length > MAX_MEMBERS) throw Error(`每位负责人最多 ${MAX_MEMBERS} 名成员（现有 ${occupiedSlots(team)} 名）`);
     const recalled = [], hints = [];
-    if (team && antiStall()) {
+    if (team && antiStall() && !plan.race) {
       const { planRecalls, recallText } = require('./recall-match');
       const sessionInfo = sid => {
         const live = sessionManager.getSession(sid);
@@ -404,8 +413,10 @@ function createTeamService(deps) {
       }
       plan.members = keep;
     }
+    const raceQueueNote = plan.race ? TeamRace.personalQueueNote(plan, PERSONAL_ACCOUNT_ID, PERSONAL_MEMBER_LIMIT, raceStragglerCtx()()) : '';
     const reuse = r => ({ ...r, ...(duplicates.length ? { duplicates } : {}), ...(recalled.length ? { recalled } : {}), ...(hints.length ? { hints,
-      hintNote: '岗位相近的老成员可用 send --to 编号 叫回；明确要新人时在计划项中加 fresh: true。' } : {}) });
+      hintNote: '岗位相近的老成员可用 send --to 编号 叫回；明确要新人时在计划项中加 fresh: true。' } : {}),
+      ...(raceQueueNote ? { raceQueueNote, note: `${r.note || ''}${raceQueueNote}` } : {}) });
     if (!plan.members.length) {
       for (const p of team.plans) if (p.status === 'pending') { p.status = 'withdrawn'; p.decidedAt = now(); p.note = '负责人改为叫回原成员'; }
       save(team);
@@ -431,7 +442,7 @@ function createTeamService(deps) {
   }
 
   // 只由界面调用（main/ipc/team-handlers.js）：用户点批准或驳回。
-  function occupiedSlots(team) { return (team?.members || []).filter(m => !['dismissed', 'failed', 'interrupted'].includes(m.status)).length; }
+  function occupiedSlots(team) { return (team?.members || []).filter(m => !m.manual && !['dismissed', 'failed', 'interrupted'].includes(m.status)).length; }
   function decide(request) {
     if (frozen) return Promise.reject(Error('Hub 正在关闭'));
     const previous = decisions.get(request.leadSid);
@@ -470,7 +481,7 @@ function createTeamService(deps) {
     for (const spec of plan.members) {
       spec.memberId = 'm' + (++nextId); spec.status = 'creating';
       team.members.push({ memberId: spec.memberId, sid: null, role: spec.role, kind: spec.kind,
-        account: spec.account, title: spec.title, planId: plan.id, status: 'creating', model: spec.model });
+        account: spec.account, title: spec.title, planId: plan.id, status: 'creating', model: spec.model, ...(spec.access === 'read' ? { access: 'read' } : {}) });
     }
     save(team);
     const lead = sessionManager.getSession(leadSid);
@@ -490,8 +501,9 @@ function createTeamService(deps) {
         // 等 git 期间 Hub 开始关闭：不再建会话，名额留 creating，重启时按 interrupted 通知负责人（Codex 审查 P1）。
         if (frozen) break;
         // hubTeamMember：成员的系统提示不带组队指路（core/team-guide.js），成员不能再招人。Members skip the team guide.
+        // memberGuard：启动叠加文件里挂上成员危险动作硬拦（core/workspace-guard.js、main/team/member-guard.js；hook 只对支持的后端生效）。
         const codeagent = spec.kind === 'codeagent';
-        const opts = { cwd: worktree?.path || baseCwd, title: spec.title, workspaceLabel: spec.title, openInBackground: true, hubTeamMember: true,
+        const opts = { cwd: worktree?.path || baseCwd, title: spec.title, workspaceLabel: spec.title, openInBackground: true, hubTeamMember: true, memberGuard: true,
           ...(!codeagent ? {} : spec.account === PERSONAL_ACCOUNT_ID ? { codeagentAccount: 'personal' } : { codeagentAccount: 'pool', codeagentPoolPick: spec.account }),
           modelCreationContext: `负责人 ${lead?.title || leadSid} / 新成员 ${spec.title || spec.role}` };
         if (spec.model) { opts.model = spec.model; if (codeagent) opts.codeagentModelPick = true; }
@@ -541,13 +553,20 @@ function createTeamService(deps) {
   }
 
   function kickoff(team, member, spec, plan) {
-    const cmd = commandPath();
     return [
       `【组队开工 · 来自负责人】你是成员 ${member.memberId}（${TeamBackends.LABELS[spec.kind] || spec.kind}），分工：${spec.role}。`,
       `团队目标：${plan.goal}`,
       `你的任务：${spec.task}`,
       '',
       ...MemberWorktree.kickoffLines(member.worktree),
+      ...(plan.race ? TeamRace.kickoffLines({ worktreeReady: !!member.worktree?.path }) : []),
+      ...guardGuidance(spec.access),
+      ...teamRules(),
+    ].join('\n');
+  }
+  function teamRules() {
+    const cmd = commandPath();
+    return [
       '通信规矩：',
       `- 向负责人汇报：\`"${cmd}" send --to lead --message "结论 + 文件路径"\`。默认留言，攒满 8 条或最老一条超过 20 分钟时负责人空闲就会收到；卡住、失败、要拍板或影响别人判断的发现，加 \`--wake\`。`,
       ...(antiStall() ? [`- 任务做完、交可验收的结果时加 \`--deliver\`（\`"${cmd}" send --to lead --deliver --message "…"\`）：负责人收到并处理完后，Hub 让你离队休眠、腾出内存；要返工负责人直接发消息，Hub 会叫醒你接着干。汇报进度、提问、卡住时不加。`] : []),
@@ -559,7 +578,63 @@ function createTeamService(deps) {
       '- 普通告知无需回执；任务、合同变更、阻塞解除确认一次即可。同一提交已审过时引用原结论。',
       '- 普通收到、开工确认、纯进度和排期更新无需发消息。',
       ...RECEIPT_FORMAT,
+    ];
+  }
+
+  // ---- 用户手动加成员（来源 22dff5bd、deda1cae）----
+  // 启动中心选了负责人（或侧栏右键负责人「创建子会话…」）建的会话，直接挂到该负责人名下：不走招人计划，
+  // 不占个人账号同时干活的名额、不计入每队人数（是用户自己开的会话）。通知负责人；给成员发组队说明，有任务就一并带上。
+  // 公司组队只用 CodeAgent：负责人和成员都要是 CodeAgent 会话。
+  const isCodeAgent = s => /^codeagent(?:-resume)?$/.test(String(s?.kind || ''));
+  function attachMember(args = {}) {
+    if (frozen) throw Error('Hub 正在关闭');
+    const leadSid = String(args.leadSid || ''), sid = String(args.sessionId || '');
+    const lead = safeSid(leadSid) && sessionManager.getSession(leadSid);
+    const session = safeSid(sid) && sessionManager.getSession(sid);
+    if (!lead) throw Error('负责人会话已不在 Hub 里');
+    if (!session) throw Error('子会话不存在');
+    if (leadSid === sid) throw Error('不能把负责人加成自己的成员');
+    if (!isCodeAgent(lead) || !isCodeAgent(session)) throw Error('组队只支持 CodeAgent 会话：负责人和新会话都要是 CodeAgent');
+    if (teamOfMember(sid)) throw Error('这个会话已经是某个团队的成员');
+    if (teamOfLead(sid)) throw Error('这个会话本身是负责人，不能再当成员');
+    if (teamOfMember(leadSid)) throw Error('所选会话是别人团队的成员，不能当负责人');
+    const task = String(args.task || '').trim().slice(0, 4000);
+    const title = String(args.title || session.title || '').trim().slice(0, 40) || '子会话';
+    let team = teamOfLead(leadSid);
+    if (!team) {
+      team = { leadSid, createdAt: now(), updatedAt: now(), plans: [], members: [], grants: [], messages: [] };
+      teams.set(leadSid, team);
+    }
+    const nextId = Math.max(0, ...(team.members || []).map(m => Number(String(m.memberId).slice(1)) || 0)) + 1;
+    const member = { memberId: 'm' + nextId, sid, role: `${approver}手动加入`, kind: 'codeagent', title, status: 'active', joinedAt: now(), manual: true,
+      account: session.codeagentPoolAccount || '' };
+    team.members.push(member);
+    save(team);
+    // 和招来的成员一样标成团队成员：休眠后恢复时系统提示不再带「组队指路」（core/team-guide.js），它不会再去招人。
+    try { sessionManager.updateSessionMeta?.(sid, { hubTeamMember: true }); } catch (error) { logger.warn?.('[team] 标记成员失败', sid, error.message); }
+    enqueue(team, 'hub', member.memberId, manualKickoff(team, member, task), { kickoff: true });
+    enqueue(team, 'hub', LEAD, `${approver}手动加了成员 ${member.memberId}（${title}），任务是：${task || `${approver}会在它的会话里直接布置`}。`
+      + `它是${approver}自己开的会话，不占同时干活名额；用 send --to ${member.memberId} 和它沟通，它交付后同样会离队休眠。它已收到组队说明（怎么向你汇报、交付）。`, { wake: true });
+    return { ok: true, leadSid, memberId: member.memberId, sessionId: sid, team: publicView(team) };
+  }
+  function manualKickoff(team, member, task) {
+    const leadTitle = String(sessionManager.getSession(team.leadSid)?.title || '负责人').slice(0, 40);
+    return [
+      `【组队说明 · 来自 Hub】${approver}把你手动加入了负责人「${leadTitle}」的团队，你是成员 ${member.memberId}。`,
+      task ? `你的任务：${task}` : `${approver}会在本会话里直接给你布置任务；在那之前只回复一句「已入队，等待任务」，不做别的。`,
+      '',
+      ...teamRules(),
     ].join('\n');
+  }
+  // 启动中心「负责人」下拉的选项：现有负责人按最近活动排序；会话已不在 Hub 的、本身是别人成员的不列。
+  function leadOptions() {
+    load();
+    const activity = sid => { const s = sessionManager.getSession(sid); return Math.max(lastOutputAt(sid) || 0, Number(s?.lastMessageTime) || 0, Number(s?.createdAt) || 0); };
+    const activeMembers = sid => (teams.get(sid)?.members || []).filter(m => m.status === 'active').length;
+    // 休眠的负责人不列（挂上去也要先叫醒它）；右键菜单同样不给休眠负责人「创建子会话…」。
+    return [...teams.keys()].filter(sid => sessionManager.getSession(sid) && sessionManager.getSession(sid).status !== 'dormant' && !teamOfMember(sid))
+      .map(sid => ({ sid, title: String(sessionManager.getSession(sid)?.title || sid.slice(0, 8)), lastActive: activity(sid), members: activeMembers(sid) }))
+      .sort((a, b) => b.lastActive - a.lastActive);
   }
 
   // ---- 消息 ----
@@ -615,6 +690,7 @@ function createTeamService(deps) {
     const interrupt = caller.memberId === LEAD && args.interrupt === true;
     // 负责人给已交付的成员派新活：交付作废，它重新算在干活，不会被收工。
     if (rec && rec.deliveredAt) for (const key of ['deliveredAt', 'deliverMsgId', 'deliverSentAt']) delete rec[key];
+    if (rec && rec.raceDeliveryPath && (team.plans || []).some(p => p.race && p.id === rec.planId && p.raceState !== 'done')) for (const key of ['raceDeliveryPath', 'raceDeliveredAt']) delete rec[key];
     // 先完整落盘再排队；不能把只剩前半段的合同当成功投递。
     const id = newId('msg'), at = now(), seq = nextSeq(team);
     const archiveDir = path.join(dir(), 'messages', team.leadSid);
@@ -623,6 +699,15 @@ function createTeamService(deps) {
     if (bodyPath) fs.writeFileSync(bodyPath, text, { encoding: 'utf8', flag: 'wx' });
     fs.writeFileSync(path.join(archiveDir, id + '.json'), JSON.stringify({ id, seq, from: caller.memberId, to: target.memberId, at, text, bodyPath }), { encoding: 'utf8', flag: 'wx' });
     const notice = bodyPath ? `正文已完整保存（${text.length} 字符），执行前先读：${bodyPath}\n以下仅为预览：${text.slice(0, 240)}…` : text;
+    const racePlan = deliver ? (team.plans || []).find(p => p.race && !p.raceState && p.id === (team.members || []).find(m => m.memberId === caller.memberId)?.planId) : null;
+    if (racePlan) {
+      const self = team.members.find(m => m.memberId === caller.memberId);
+      self.raceDeliveryPath = TeamRace.recordDelivery(raceDir(team, racePlan), self, text, id); self.raceDeliveredAt = at;
+      self.deliveredAt = at; self.deliverMsgId = id; delete self.deliverSentAt;
+      save(team); setImmediate(() => { try { checkRaces(team); } catch (error) { logger.warn?.('[team] 赛马巡检失败', error.message); } });
+      const left = TeamRace.stragglers(team, racePlan).length;
+      return { messageId: id, seq, status: 'held', note: left ? `赛马交付已登记，还有 ${left} 位参赛者没交；全员交齐后 Hub 出成绩单统一交给负责人。` : '赛马交付已登记，你是最后一位；Hub 正在出成绩单交给负责人。' };
+    }
     if (deliver) {
       // 交付消息送进负责人会话、负责人处理完后再离队休眠，见 releaseDelivered。
       const self = (team.members || []).find(m => m.memberId === caller.memberId);
@@ -841,6 +926,11 @@ function createTeamService(deps) {
   }
   // 交付消息进了负责人会话：从这一刻起等负责人处理完，再让该成员离队休眠（见 releaseDelivered）。
   function noteDeliverySent(team, batch) {
+    // 赛马结果送达负责人：参赛者的交付算送达，负责人处理完后按常规离队休眠。
+    for (const m of batch.filter(x => x.raceMembers)) for (const id of m.raceMembers) {
+      const rec = (team.members || []).find(x => x.memberId === id);
+      if (rec && rec.deliveredAt) rec.deliverSentAt = m.sentAt;
+    }
     for (const m of batch.filter(x => x.deliver)) {
       const rec = (team.members || []).find(x => x.memberId === m.from);
       if (rec && rec.deliverMsgId === m.id) rec.deliverSentAt = m.sentAt;
@@ -1162,17 +1252,47 @@ function createTeamService(deps) {
       case 'allow': return allow(callerSid, args);
       case 'restart': return restart(callerSid, args);
       case 'dismiss': return dismiss(callerSid, args);
-      default: throw Error('未知动作；可用：status / accounts / propose / send / read / allow / restart / dismiss');
+      case 'pass': if (!memberGuard) throw Error('成员权限守卫没有启动'); return memberGuard.pass(callerSid, args);
+      default: throw Error('未知动作；可用：status / accounts / propose / send / read / allow / pass / restart / dismiss');
+    }
+  }
+
+  // ---- 赛马 ----
+  const scoring = new Set();
+  // Hub 关闭（stop）时中止还在跑的成绩单测试，子进程树随之结束；重启后 checkRaces 重做（审查建议 2）。
+  let raceAbort = new AbortController();
+  function raceDir(team, plan) { return path.join(dir(), 'race', team.leadSid, plan.id); }
+  // 只有仍要判断的赛马才读一次掉队时限（config team.raceStragglerMinutes）；一轮心跳所有团队共用。
+  function raceStragglerCtx() {
+    let ms = null;
+    return () => ms ?? (ms = Math.max(1, Number(getConfig()?.team?.raceStragglerMinutes) || TeamRace.STRAGGLER_MS / 60000) * 60000);
+  }
+  // 赛马交齐了（或掉队超时）就出成绩单；重启后 scoring 状态会重做一次。
+  function checkRaces(team, stragglerOf = raceStragglerCtx()) {
+    if (frozen) return;
+    for (const plan of team.plans || []) {
+      if (!plan.race || plan.status !== 'approved' || plan.raceState === 'done' || scoring.has(plan.id)) continue;
+      const stragglerMs = stragglerOf();
+      if (!TeamRace.ready(team, plan, { now: now(), stragglerMs })) continue;
+      const late = TeamRace.stragglers(team, plan).map(m => m.memberId);
+      scoring.add(plan.id); plan.raceState = 'scoring'; save(team);
+      TeamRace.score({ team, plan, dir: raceDir(team, plan), signal: raceAbort.signal }).then(({ file, rows }) => {
+        plan.raceState = 'done'; plan.raceCard = file;
+        const racers = TeamRace.planMembers(team, plan).filter(m => m.raceDeliveryPath).map(m => m.memberId);
+        enqueue(team, 'hub', LEAD, TeamRace.leadMessage({ plan, file, rows, cmd: commandPath(), late, stragglerMin: stragglerMs / 60000 }), { wake: true, raceMembers: racers });
+      }).catch(error => logger.warn?.('[team] 赛马成绩单失败', error.message)).finally(() => scoring.delete(plan.id));
     }
   }
 
   function tick() {
     if (frozen) return;
     try { watch(); } catch (error) { logger.warn?.('[team] 心跳巡检失败', error.message); }
+    { const stragglerOf = raceStragglerCtx();
+      for (const team of teams.values()) { try { checkRaces(team, stragglerOf); } catch (error) { logger.warn?.('[team] 赛马巡检失败', error.message); } } }
     for (const team of teams.values()) flush(team).catch(error => logger.warn?.('[team] 投递失败', error.message));
   }
   function start() { sessionManager.off?.('session-model-wait', onModelWait); sessionManager.on?.('session-model-wait', onModelWait); sessionManager.off?.('session-submission-handoff', onSubmissionHandoff); sessionManager.on?.('session-submission-handoff', onSubmissionHandoff); load(); if (!timer) { timer = setInterval(tick, TICK_MS); timer.unref?.(); } }
-  function stop() { clearInterval(timer); timer = null; sessionManager.off?.('session-model-wait', onModelWait); sessionManager.off?.('session-submission-handoff', onSubmissionHandoff); }
+  function stop() { raceAbort.abort(); raceAbort = new AbortController(); clearInterval(timer); timer = null; sessionManager.off?.('session-model-wait', onModelWait); sessionManager.off?.('session-submission-handoff', onSubmissionHandoff); }
 
   function accounts() {
     const list = listAccounts();
@@ -1184,7 +1304,18 @@ function createTeamService(deps) {
       + '按 recommendedMix 配队（建议，不强制）。用户在批准时可改账号和模型。'
       + (list.recommendedId === PERSONAL_ACCOUNT_ID ? `号池没有可用号，成员会用个人账号：${PERSONAL_SHARED_NOTE}。` : '') };
   }
-  return { start, stop, invoke, decide, accounts, listTeams, teamOfLead, teamOfMember, flush: lead => { const t = teamOfLead(lead); return t ? flush(t) : null; },
+  let memberGuard = null;
+  function setMemberGuard(guard) { memberGuard = guard || null; }
+  function notifyLead(leadSid, text, { wake = true } = {}) {
+    const team = teamOfLead(leadSid);
+    return team ? enqueue(team, 'hub', LEAD, String(text || ''), { wake }) : null;
+  }
+  function notifyMember(leadSid, memberId, text) {
+    const team = teamOfLead(leadSid);
+    const target = team && memberById(team, String(memberId || ''));
+    return target && target.memberId !== LEAD ? enqueue(team, 'hub', target.memberId, String(text || ''), { wake: true }) : null;
+  }
+  return { start, stop, invoke, decide, accounts, listTeams, attachMember, leadOptions, teamOfLead, teamOfMember, setMemberGuard, notifyLead, notifyMember, flush: lead => { const t = teamOfLead(lead); return t ? flush(t) : null; },
     freeze: () => { frozen = true; }, unfreeze: () => { frozen = false; }, watch: () => { lastWatch = 0; watch(); } };
 }
 

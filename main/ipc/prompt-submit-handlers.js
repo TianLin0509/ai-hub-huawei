@@ -478,6 +478,10 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     }
     return result;
   });
+  function startScreenNote(sessionId) {
+    const file = require('../../core/cli-start-timeout-dump').recentDumpFor({ sid: sessionId });
+    return file ? `终端最后一屏已存：${file}` : '';
+  }
   async function submitCodeAgentPrompt(event, request) {
     const controller = new AbortController();
     let handedOff = false, timer;
@@ -490,7 +494,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
         resolve({ ok: false, code: 'CODEAGENT_SEND_TIMEOUT', error: 'CODEAGENT_SEND_TIMEOUT',
           ...(handedOff ? { unconfirmed: true } : { notSent: true }),
           message: handedOff ? 'CodeAgent 提交确认超时，消息可能已收到；请先核对会话，避免重复发送。'
-            : 'CodeAgent 在 120 秒内未能接收消息，本条未发送；请检查终端状态后重新发送。' });
+            : 'CodeAgent 在 120 秒内未能接收消息，本条未发送；请检查终端状态后重新发送。' + startScreenNote(request?.sessionId) });
       }, CODEAGENT_SEND_TIMEOUT_MS);
     });
     try {

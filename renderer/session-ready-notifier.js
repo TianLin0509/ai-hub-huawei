@@ -47,7 +47,8 @@ function notificationPayload(session, readyCount, newCount) {
   };
 }
 
-function createSessionReadyNotifier({ ipcRenderer, getSessions } = {}) {
+// isCovered(sessionId)：这个会话已有更具体的提醒（顶部交卷/请拍板简述条，renderer/brief-bar.js）时，这一轮不再弹回执，避免同一件事提醒两遍。
+function createSessionReadyNotifier({ ipcRenderer, getSessions, isCovered = () => false } = {}) {
   if (!ipcRenderer || typeof ipcRenderer.send !== 'function') throw new Error('ipcRenderer.send is required');
   if (typeof getSessions !== 'function') throw new Error('getSessions is required');
   let armed = false;
@@ -86,14 +87,16 @@ function createSessionReadyNotifier({ ipcRenderer, getSessions } = {}) {
       ? !notifiedNativeTurns.has(nativeKey(session)) : !eligibleIds.has(String(session.id)));
     entered.forEach(rememberNative);
     eligibleIds = nextIds;
-    if (entered.length === 0) return { armed, readyCount: eligible.length, notified: false };
+    let fresh = entered;
+    try { fresh = entered.filter(session => !isCovered(String(session.id))); } catch {}
+    if (fresh.length === 0) return { armed, readyCount: eligible.length, notified: false, covered: entered.length };
 
-    const latest = entered[entered.length - 1];
-    const payload = notificationPayload(latest, eligible.length, entered.length);
+    const latest = fresh[fresh.length - 1];
+    const payload = notificationPayload(latest, eligible.length, fresh.length);
     ipcRenderer.send('desktop-notification:show', payload);
     notificationCount += 1;
     lastPayload = payload;
-    return { armed, readyCount: eligible.length, newCount: entered.length, notified: true, payload };
+    return { armed, readyCount: eligible.length, newCount: fresh.length, notified: true, payload };
   }
 
   return {

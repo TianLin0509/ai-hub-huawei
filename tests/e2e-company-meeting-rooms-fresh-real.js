@@ -35,7 +35,8 @@ const pageScroll = () => c.eval(`({ scrollH: document.scrollingElement.scrollHei
 
 async function main() {
   // 隔离副本会被内源静默升级写回 app.asar，那时实际跑的是原包而不是要测的代码：发现就停，不测。
-  if (fs.existsSync(path.join(path.dirname(exe), 'resources', 'app.asar'))) throw new Error('隔离副本的 resources 下又出现了 app.asar（可能被静默升级写回），实际会跑原包；请先改名或重建副本再测');
+  // --released：有意测已发布的原包（如按真实路径升到 v5.6.149 的副本），这时 app.asar 本来就该在。
+  if (!process.argv.includes('--released') && fs.existsSync(path.join(path.dirname(exe), 'resources', 'app.asar'))) throw new Error('隔离副本的 resources 下又出现了 app.asar（可能被静默升级写回），实际会跑原包；请先改名或重建副本再测');
   fs.mkdirSync(out, { recursive: true }); fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(path.join(dataDir, 'optional-features.json'), j({ assistant: true, forum: false }));
   // 不让隔离实例用本机真实 WeLink 登录去拉消息、整理助理（2026-11-28 真机压测踩到：后台读了几百次历史消息并占住 CodeAgent）。

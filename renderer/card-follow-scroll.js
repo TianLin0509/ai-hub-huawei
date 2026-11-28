@@ -120,7 +120,8 @@ function createCardFollowScroll({ element, window: win, document: doc, button: s
     else if (['ArrowDown','PageDown','End',' '].includes(event.key)) { cancelLanding(); userDirection = 1; }
   }
   function disclosure(event) {
-    if (event.target.closest?.('summary, .body-expand-btn, [data-action="toggle-body"]')) pause();
+    // 点开折叠（含相邻团队消息的组摘要行 .notice-group-bar）是在读上面的内容，停止自动跟到底部。
+    if (event.target.closest?.('summary, .body-expand-btn, [data-action="toggle-body"], .notice-group-bar')) pause();
   }
   function touchStart(event) { touchY = event.touches[0]?.clientY ?? null; }
   function touchMove(event) {

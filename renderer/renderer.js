@@ -1077,6 +1077,15 @@ function normalizeMarkdownPathBreaks(text) {
 }
 
 const { createSessionListRenderer } = require('./session-list-renderer.js');
+let renderAccountSnapshot = null;
+let lastSidebarAccountKey = null;
+function accountSnapshotForRender() {
+  if (!renderAccountSnapshot) {
+    renderAccountSnapshot = accountUsageController.getSnapshot();
+    queueMicrotask(() => { renderAccountSnapshot = null; });
+  }
+  return renderAccountSnapshot;
+}
 const meetingUnread = require('./meeting-unread.js');
 const sidebarFoldersController = require('./sidebar-folders').createSidebarFoldersController({
   document, ipcRenderer, storage: localStorage, onChange: () => scheduleSessionListRender(),
@@ -1108,7 +1117,7 @@ const sessionListRenderer = createSessionListRenderer({
     try {
       const kind = String(s?.kind || '').replace(/-resume$/, '');
       if (kind !== 'claude' && kind !== 'codex' && kind !== 'gemini') return null;
-      const rows = accountUsageController.getSnapshot().accounts?.[kind === 'gemini' ? 'antigravity' : kind];
+      const rows = accountSnapshotForRender().accounts?.[kind === 'gemini' ? 'antigravity' : kind];
       if (!Array.isArray(rows) || rows.length < 2) return null;
       const id = kind === 'gemini' ? s.antigravityProfile : kind === 'claude' ? (s.claudeProfile || 'default') : (s.codexProfile || rows.find(r => r.selected)?.profileId);
       const index = rows.findIndex(r => r.profileId === id);
@@ -1279,6 +1288,8 @@ function markAllSessionsRead() {
 const sessionReadyNotifier = createSessionReadyNotifier({
   ipcRenderer,
   getSessions: () => sessions,
+  // 顶部已有这个会话的交卷/请拍板简述卡时，回执和桌宠不再重复说（renderer/brief-bar.js）。
+  isCovered: id => !!window.__briefBar?.covers(id),
 });
 function renderSessionSurfacesNow() {
   sessionReadyNotifier.scan();
@@ -1288,7 +1299,24 @@ function renderSessionSurfacesNow() {
 }
 // 150 ms still reads as live, and halves full sidebar rebuilds while many
 // agents stream status at once.
-const sidebarRenderCoalescer = createRenderCoalescer(renderSessionSurfacesNow, { delayMs: 150 });
+// 回车发出、按下鼠标都算「打完了」：发出后侧栏要尽快反映新消息，且推迟的重绘不能刚好落在用户去点下一个会话的那一下
+// （行被重排，点到别的行上——群聊回车冒烟 2026-11-28 抓到）。发出后紧跟的输入框清空事件不重新计时。
+let lastTypingAt = 0;
+let typingEndedAt = 0;
+const endTyping = () => { lastTypingAt = 0; typingEndedAt = Date.now(); };
+for (const type of ['keydown', 'compositionupdate', 'input']) {
+  document.addEventListener(type, (event) => {
+    if (type === 'keydown' && event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing) { endTyping(); return; }
+    if (type === 'input' && Date.now() - typingEndedAt < 200) return;
+    lastTypingAt = Date.now();
+  }, { capture: true, passive: true });
+}
+document.addEventListener('pointerdown', endTyping, { capture: true, passive: true });
+const sidebarRenderCoalescer = createRenderCoalescer(renderSessionSurfacesNow, {
+  delayMs: 150,
+  deferWhile: () => Date.now() - lastTypingAt < 600,
+  maxDeferMs: 1500,
+});
 function renderSessionList() {
   sidebarRenderCoalescer.cancel();
   renderSessionSurfacesNow();
@@ -3611,6 +3639,8 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
   }
 
   require('./conversation-message-view').syncResponseGroups(container);
+  // 相邻团队消息先同步分好组，再量高度、恢复滚动位置：否则按未分组的高度算，分组后视线会跳（renderer/notice-groups.js）。
+  window._noticeGroups?.apply(container);
   cardContentSkip().sweep();
   // Single bottom-scroll AFTER loop (don't autoScroll per mount — N reflows = jitter)
   // — 仅当 batch 开始前用户在底部才滚(scroll-respect-user)
@@ -6994,6 +7024,9 @@ const launchCenter = createLaunchCenterController({
 try { require('./launch-select-popover.js').installSelectPopover({ document, window, root: document.getElementById('new-session-menu') }); }
 catch (error) { console.warn('[launch-center] 页面内下拉未启用：', error && error.message); }
 window.LaunchCenter = launchCenter;
+// 启动中心「负责人」下拉：新建会话可挂到负责人名下当成员（renderer/launch-center-lead-picker.js）。
+try { window.LaunchLeadPicker = require('./launch-center-lead-picker.js').createLaunchLeadPicker({ document, ipcRenderer, notify: (message, level) => showToast(message, level) }); }
+catch (error) { console.warn('[launch-center] 负责人下拉未启用：', error && error.message); }
 
 // --- Unified launch center ---
 btnNew.addEventListener('click', () => launchCenter.open('session'));
@@ -8436,7 +8469,17 @@ const accountUsageController = createAccountUsageController({
   escapeHtml,
   isMemoOpen: () => memoPanel.isOpen(),
   onAccountsChanged: () => renderSessionList(),
-  onRender: () => { if (claudeQuotaPanel) claudeQuotaPanel.render(); },
+  onRender: () => {
+    if (claudeQuotaPanel) claudeQuotaPanel.render();
+    // 侧栏 logo 角上的账号序号只取决于账号列表（顺序与名字）；列表变了才重绘侧栏。
+    // 以前靠每条 status-event 顺带整表重绘捎上，现在 status-event 只为看得见的变化重绘。
+    try {
+      // 直接取新快照：同一轮里侧栏可能已缓存了旧快照（审查建议 3）；这里每次刷新只调一次，不贵。
+      const accounts = accountUsageController.getSnapshot().accounts || {};
+      const key = JSON.stringify(['claude', 'codex', 'antigravity'].map(p => (accounts[p] || []).map(r => [r.profileId, r.profileLabel, !!r.selected])));
+      if (key !== lastSidebarAccountKey) { lastSidebarAccountKey = key; scheduleSessionListRender(); }
+    } catch { /* 账号快照拿不到时等下次重绘 */ }
+  },
 });
 const renderAccountUsage = accountUsageController.render;
 {
@@ -8541,19 +8584,37 @@ const memoryPanel = createMemoryPanel({
 const capabilityPanel = createCapabilityPanel({document,ipcRenderer,escapeHtml,
   getActiveSessionId:()=>getFocusedSessionId()});
 function pctClass(pct) { return accountUsageController.pctClass(pct); }
+const { surfaceSignature, persistSignature, telemetrySignature, sameSurface, createSessionUpdateGate } = require('./surface-change-gate.js');
+function sessionSurfaceSignature(session) {
+  return surfaceSignature(session, { details: !!sessionListRenderer.isDetailsEnabled?.() });
+}
+const sessionUpdateGate = createSessionUpdateGate({
+  isDetailsEnabled: () => !!sessionListRenderer.isDetailsEnabled?.(),
+  render: () => scheduleSessionListRender(),
+  persist: () => schedulePersist(),
+  telemetryPersist: () => scheduleTelemetryPersist(),
+});
 if (typeof window !== 'undefined') window.pctClass = pctClass;
 
+// 会话累计用量只在侧栏「会话详情」打开时显示；主进程自己记账并写单会话文件（main.js 的 sessionUsageService），
+// 界面再发起保存会被主进程用自己的值覆盖（persistence-handlers 的 authoritativeUsage），等于白写一份 state.json，所以这里不再保存。
 ipcRenderer.on('session-usage-updated', (_e, { sessionId, usage }) => {
   const session = sessions.get(sessionId);
   if (!session) return;
+  const details = !!sessionListRenderer.isDetailsEnabled?.();
+  const changed = details && !sameSurface(surfaceSignature({ sessionUsage: session.sessionUsage }, { details }),
+    surfaceSignature({ sessionUsage: usage }, { details }));
   session.sessionUsage = usage;
-  scheduleSessionListRender();
-  schedulePersist();
+  if (changed) scheduleSessionListRender();
 });
 
 ipcRenderer.on('status-event', (_e, payload) => {
   const session = sessions.get(payload.sessionId);
+  let surfaceChanged = !session;
   if (session) {
+    const beforeSurface = sessionSurfaceSignature(session);
+    const beforePersist = persistSignature(session);
+    const beforeTelemetry = telemetrySignature(session);
     let persistModel = false;
     if (Object.prototype.hasOwnProperty.call(payload, 'contextPct')) session.contextPct = payload.contextPct;
     if (Object.prototype.hasOwnProperty.call(payload, 'contextUsed')) session.contextUsed = payload.contextUsed;
@@ -8614,10 +8675,14 @@ ipcRenderer.on('status-event', (_e, payload) => {
     if (typeof MeetingRoom !== 'undefined' && MeetingRoom.refreshSessionMetrics) {
       MeetingRoom.refreshSessionMetrics(payload.sessionId);
     }
-    if (persistModel) schedulePersist();
+    // 模型、外部标题、首次目录等落盘字段变了立即保存；只有上下文读数变了才走慢保存。
+    if (persistModel || !sameSurface(beforePersist, persistSignature(session))) schedulePersist();
+    else if (!sameSurface(beforeTelemetry, telemetrySignature(session))) scheduleTelemetryPersist();
+    surfaceChanged = !sameSurface(beforeSurface, sessionSurfaceSignature(session));
   }
+  // 账号额度读数变了由 accountUsageController 自己重画额度看板（onRender），不用整表重绘侧栏。
   accountUsageController.recordStatusUsage(payload);
-  scheduleSessionListRender();
+  if (surfaceChanged) scheduleSessionListRender();
 });
 
 ipcRenderer.on('agent-usage', (_e, totals) => {
@@ -10800,7 +10865,12 @@ ipcRenderer.on('session-closed', (_e, { sessionId, exitInfo, requested }) => {
   }
 });
 
+// session-updated 每个运行中的会话每秒可能来好几条（原生快照、用量记账都走这条）。
+// 只有侧栏看得见的字段变了才重绘，只有要落盘的字段变了才保存；上下文这类遥测走 30 秒慢保存。
+// 判断与排期都在 sessionUpdateGate（renderer/surface-change-gate.js）；下面处理体里的 return 都会经过 finally。
 ipcRenderer.on('session-updated', (_e, { session }) => {
+  const updateGate = sessionUpdateGate.begin(session && sessions.get(session.id));
+  try {
   session = require('../core/title-metadata').preserveTitleMetadata(session, sessions.get(session.id));
   queueMicrotask(() => turnCardRenderer.refreshCardActions());
   nativeSessionBootstrap.record(session);
@@ -10830,7 +10900,6 @@ ipcRenderer.on('session-updated', (_e, { session }) => {
     local.needsUserInput = next?.state === 'waiting';
     local.gcWorking = false;
     _updateStreamingIndicator(local.id);
-    scheduleSessionListRender();
     scheduleFloatingBarState();
     window.dispatchEvent(new CustomEvent('xresearch-session-updated', { detail: local }));
     return;
@@ -10857,7 +10926,6 @@ ipcRenderer.on('session-updated', (_e, { session }) => {
   }
   if (local.purpose === 'xresearch-research' || session.purpose === 'xresearch-research') {
     Object.assign(local, session);
-    scheduleSessionListRender();
     window.dispatchEvent(new CustomEvent('xresearch-session-updated', { detail: local }));
     return;
   }
@@ -10992,7 +11060,7 @@ ipcRenderer.on('session-updated', (_e, { session }) => {
     }
     scheduleFloatingBarState();
   }
-  scheduleSessionListRender();
+  } finally { updateGate.finish(); }
 });
 
 // --- Session persistence (dormant restore) ---
@@ -11013,13 +11081,24 @@ const cachePersistedSession = createSessionProjectionCache();
 const cachePersistedMeeting = createSessionProjectionCache();
 let previousPersistedSessions = null;
 let previousPersistedMeetings = null;
+const PERSIST_FULL_EVERY = 30;
+let persistSeq = 0, persistBaseSeq = 0, persistSinceFull = 0;
+// 只有上下文这类遥测变了：30 秒内保存一次就够（崩溃时最多丢最近 30 秒的上下文读数；正常关 Hub 有收尾保存）。
+const TELEMETRY_PERSIST_MS = 30000;
+let telemetryPersistTimer = null;
+function scheduleTelemetryPersist() {
+  if (telemetryPersistTimer || persistDebounceTimer) return;
+  telemetryPersistTimer = setTimeout(() => { telemetryPersistTimer = null; schedulePersist(); }, TELEMETRY_PERSIST_MS);
+}
+ipcRenderer.on('persist-sessions:resync', () => { persistBaseSeq = 0; previousPersistedSessions = null; previousPersistedMeetings = null; schedulePersist(); });
 function schedulePersist() {
   if (persistDebounceTimer) return;
   const delay = Math.max(PERSIST_DELAY_MS, lastPersistSentAt + PERSIST_MIN_INTERVAL_MS - Date.now());
   persistDebounceTimer = setTimeout(() => { persistDebounceTimer=null; persistWorkscene(); }, delay);
 }
-function persistWorkscene(flush = false) {
+function persistWorkscene(flush = false, forceFull = false) {
     if (flush && persistDebounceTimer) { clearTimeout(persistDebounceTimer);persistDebounceTimer=null; }
+    if (telemetryPersistTimer) { clearTimeout(telemetryPersistTimer); telemetryPersistTimer = null; } // 这次保存已带上最新遥测
     lastPersistSentAt = Date.now();
     const list = [];
     for (const s of sessions.values()) {
@@ -11159,12 +11238,26 @@ function persistWorkscene(flush = false) {
       orchestration: (m.orchestration && typeof m.orchestration === 'object') ? m.orchestration : null,
       completionNotificationEnabled: m.completionNotificationEnabled === true,
     })));
-    if (flush) return ipcRenderer.invoke('persist-sessions:flush', list, meetingList);
+    // 显式保存后：主进程不留底稿，这边也清掉引用缓存，下一次一律整份、不会因引用相同被跳过（审查建议 2）。
+    if (flush) { persistBaseSeq = 0; previousPersistedSessions = null; previousPersistedMeetings = null; return ipcRenderer.invoke('persist-sessions:flush', list, meetingList); }
     if (previousPersistedSessions && meetingList.length === previousPersistedMeetings.length
         && meetingList.every((row, i) => row === previousPersistedMeetings[i])
         && list.length === previousPersistedSessions.length
         && list.every((row, i) => row === previousPersistedSessions[i])) return;
-    ipcRenderer.send('persist-sessions', list, meetingList);
+    const seq = ++persistSeq;
+    const ids = list.map(row => row.hubId), meetingIds = meetingList.map(row => row.id);
+    const canDelta = persistBaseSeq && !forceFull && previousPersistedSessions && previousPersistedMeetings
+      && persistSinceFull < PERSIST_FULL_EVERY && new Set(ids).size === ids.length && new Set(meetingIds).size === meetingIds.length;
+    if (canDelta) {
+      const sentRows = new Set(previousPersistedSessions), sentMeetings = new Set(previousPersistedMeetings);
+      ipcRenderer.send('persist-sessions:delta', { base: persistBaseSeq, seq, order: ids, meetingOrder: meetingIds,
+        changed: list.filter(row => !sentRows.has(row)), changedMeetings: meetingList.filter(row => !sentMeetings.has(row)) });
+      persistSinceFull++;
+    } else {
+      ipcRenderer.send('persist-sessions', list, meetingList, { seq });
+      persistSinceFull = 0;
+    }
+    persistBaseSeq = seq;
     previousPersistedSessions = list;
     previousPersistedMeetings = meetingList;
 }
@@ -11176,7 +11269,8 @@ window.schedulePersist = schedulePersist;
 // knows the workscene arrived before it runs the final save.
 ipcRenderer.on('hub:flush-workscene', (_event, { requestId } = {}) => {
   if (persistDebounceTimer) { clearTimeout(persistDebounceTimer); persistDebounceTimer = null; }
-  try { persistWorkscene(); }
+  // 关 Hub 前的最后一次保存发整份：不依赖主进程手里的底稿，序号对不上也不会丢最后几秒。
+  try { previousPersistedSessions = null; persistWorkscene(false, true); }
   finally { ipcRenderer.send('hub:flush-workscene:done', requestId); }
 });
 
@@ -11681,7 +11775,8 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
 
 // Persist on relevant changes — listen at renderer-level for mutations that
 // touch persistable fields. Debounced.
-for (const ch of ['session-created', 'session-closed', 'session-suspended', 'session-updated', 'meeting-created', 'meeting-updated', 'meeting-closed']) {
+// session-updated 的保存在它自己的处理里按「落盘字段真变了」判断（见上面的 session-updated 与 sessionUpdateGate）。
+for (const ch of ['session-created', 'session-closed', 'session-suspended', 'meeting-created', 'meeting-updated', 'meeting-closed']) {
   ipcRenderer.on(ch, () => schedulePersist());
 }
 

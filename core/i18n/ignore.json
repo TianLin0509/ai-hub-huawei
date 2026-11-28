@@ -68,6 +68,15 @@
     "- 原始报错： {0}": "update 组：troubleshoot-feedback.js 预填进一键反馈输入框、发给中文维护人的排查结果",
     "（这个会话里还没有 Agent 的回答）": "update 组：troubleshoot-feedback.js 预填进一键反馈输入框、发给中文维护人的排查结果",
     "【原始报错上下文】": "update 组：troubleshoot-feedback.js 预填进一键反馈输入框、发给中文维护人的排查结果",
-    "（没有找到开会话时保存的报错上下文）": "update 组：troubleshoot-feedback.js 预填进一键反馈输入框、发给中文维护人的排查结果"
+    "（没有找到开会话时保存的报错上下文）": "update 组：troubleshoot-feedback.js 预填进一键反馈输入框、发给中文维护人的排查结果",
+    "团队消息": "session：notice-groups.js 组摘要的拼句片段，整句带消息原文、标了 data-i18n-skip，不翻",
+    "组队消息": "session：notice-groups.js 组摘要的拼句片段，整句带消息原文、标了 data-i18n-skip，不翻",
+    "程序消息": "session：notice-groups.js 组摘要的拼句片段，整句带消息原文、标了 data-i18n-skip，不翻",
+    "（{0} 方）": "session：notice-groups.js 组摘要的拼句片段，整句带消息原文、标了 data-i18n-skip，不翻",
+    "{0} 条{1}{2}{3}": "session：notice-groups.js 组摘要的拼句片段，整句带消息原文、标了 data-i18n-skip，不翻",
+    "· 最新{0}：": "session：notice-groups.js 组摘要的拼句片段，整句带消息原文、标了 data-i18n-skip，不翻",
+    "推荐：": "frame：brief-bar.js 简述卡里与进展卡原文拼在一起的行，整行标了 data-i18n-skip，不翻",
+    "到会话里回复": "frame：brief-bar.js 简述卡里与进展卡原文拼在一起的行，整行标了 data-i18n-skip，不翻",
+    "任务已完成": "frame：brief-bar.js 简述卡里与进展卡原文拼在一起的行，整行标了 data-i18n-skip，不翻"
   }
 }

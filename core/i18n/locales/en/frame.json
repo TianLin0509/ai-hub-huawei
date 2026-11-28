@@ -485,6 +485,7 @@
   "{0} 已用 {1}{2} · 点击释放硬盘空间": "{0} used {1}{2} · Click to free up disk space",
   "{0} 已用 {1}，点击打开硬盘释放": "{0} used {1}, click to open disk cleanup",
   "硬盘": "Disk",
+  "{0}盘": "{0}:",
   "本机物理网卡合计：{0} 下行 {1} KB/s · 上行 {2} KB/s 最近 {3} 秒均值；含所有应用，非 VPN 专属流量；K/M/G 表示 KB/s、MB/s、GB/s，按 1024 换算": "All local physical NICs: {0} down {1} KB/s · up {2} KB/s, average over the last {3} seconds; includes all apps, not just VPN traffic; K/M/G mean KB/s, MB/s, GB/s, base 1024",
   "网速暂不可用": "Network speed unavailable",
   "没有已连接的物理网卡": "No connected physical NIC",
@@ -860,5 +861,19 @@
   "整机物理内存，与任务管理器同口径（已用 = 总量 − 可用，可用含缓存）": "Whole-machine physical memory, same measure as Task Manager (used = total − available; available includes cache)",
   "最近 {0} 秒均值（任务管理器是每秒瞬时值）": "Average over the last {0} s (Task Manager shows the instant value each second)",
   "整机 CPU，与任务管理器同口径（忙碌时间占比）": "Whole-machine CPU, same measure as Task Manager (share of busy time)",
-  "整机 CPU，按忙碌时间计（读不到处理器利用率计数器，任务管理器按睿频折算时会比这里高）": "Whole-machine CPU from busy time (processor utility counter unavailable; Task Manager reads higher when it adjusts for turbo)"
+  "整机 CPU，按忙碌时间计（读不到处理器利用率计数器，任务管理器按睿频折算时会比这里高）": "Whole-machine CPU from busy time (processor utility counter unavailable; Task Manager reads higher when it adjusts for turbo)",
+  "展开概览条": "Expand overview strip",
+  "收起概览条": "Collapse overview strip",
+  "概览条": "Overview strip",
+  "等你": "Waiting",
+  "卡住": "Stuck",
+  "一览{0}": "Overview{0}",
+  "在跑一览 · 在跑 {0} 个": "Running overview · {0} running",
+  "{0}（概览条已收起）": "{0} (strip collapsed)",
+  "{0} · 等你：停在确认、答完等你，或进展卡在等你拍板": "{0} · Waiting: stopped at a confirmation, finished and waiting for you, or a progress card awaits your decision",
+  "{0} · 卡住：运行异常、自报卡住、很久没输出，或进展卡与状态矛盾": "{0} · Stuck: runtime error, self-reported stuck, no output for a long time, or progress card contradicts status",
+  "一览": "Overview",
+  "请拍板": "Decision needed",
+  "交卷": "Delivered",
+  "全部收起": "Dismiss all"
 }

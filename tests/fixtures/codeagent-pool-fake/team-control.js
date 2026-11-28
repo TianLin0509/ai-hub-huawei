@@ -4,6 +4,24 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
+// 按 --settings 文件里的 PreToolUse 登记跑 hook：matcher 匹配工具名的逐条执行，载荷走 stdin；任何一条退出码 2 即拒绝。
+function runPreToolUse(payload) {
+  const at = process.argv.indexOf('--settings');
+  if (at < 0) return { code: 0, ran: 0, err: '' };
+  let settings = {};
+  try { settings = JSON.parse(fs.readFileSync(process.argv[at + 1], 'utf8')); } catch { return { code: 0, ran: 0, err: 'settings unreadable' }; }
+  let ran = 0;
+  for (const group of settings.hooks?.PreToolUse || []) {
+    if (group.matcher && !new RegExp(`^(${group.matcher})$`).test(payload.tool_name)) continue;
+    for (const h of group.hooks || []) {
+      ran++;
+      const r = spawnSync(h.command, { shell: true, input: JSON.stringify(payload), env: process.env, encoding: 'utf8', timeout: (h.timeout || 20) * 1000, windowsHide: true });
+      if (r.status === 2) return { code: 2, ran, err: r.stderr };
+    }
+  }
+  return { code: 0, ran, err: '' };
+}
+
 module.exports = ({ sessionId, transcript, cwd, fireHook, prompt, menu }) => {
   const dir = process.env.CODEAGENT_TEAM_FAKE_CONTROL_DIR;
   const sid = process.env.CLAUDE_HUB_SESSION_ID;
@@ -16,6 +34,13 @@ module.exports = ({ sessionId, transcript, cwd, fireHook, prompt, menu }) => {
     if (!fs.existsSync(file)) return;
     const req = JSON.parse(fs.readFileSync(file, 'utf8'));
     fs.unlinkSync(file);
+    // { hook: <PreToolUse 载荷> }：像真 CLI 一样跑 --settings 里登记的同步 PreToolUse hook（成员守卫端到端用）。
+    if (req.hook) {
+      const out = path.join(dir, `${sid}.${req.id}.response`);
+      fs.writeFileSync(out + '.tmp', JSON.stringify(runPreToolUse(req.hook)));
+      fs.renameSync(out + '.tmp', out);
+      return;
+    }
     const r = spawnSync(process.execPath, [path.resolve(__dirname, '../../../scripts/hub-team.js'), ...req.args],
       { env: process.env, encoding: 'utf8', timeout: 25000, windowsHide: true });
     const out = path.join(dir, `${sid}.${req.id}.response`);

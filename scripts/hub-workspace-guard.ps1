@@ -11,7 +11,14 @@
 # Any internal failure lets the call through (exit 0), so a broken guard never
 # freezes a session. A payload without a path (TodoWrite also matches "Write")
 # is let through too.
-param([string]$RootsB64 = '')
+#
+# Argument 2 "member" (team members, main/team/member-guard.js): after the local
+# work-folder check passes, the raw hook payload is also sent to the Hub
+# (/api/member-guard, session id and token from the session environment), which
+# refuses five kinds of dangerous actions. The Hub not answering, a timeout or any
+# error here lets the call through. Both checks share this one entry point, so a
+# session with both on starts only one PowerShell per tool call.
+param([string]$RootsB64 = '', [string]$Mode = '')
 
 # \\?\D:\x and \\.\D:\x -> D:\x ; \\?\UNC\srv\share -> \\srv\share
 function Remove-DevicePrefix([string]$p) {
@@ -70,7 +77,8 @@ try {
   $stdin = [Console]::OpenStandardInput()
   $buffer = New-Object System.IO.MemoryStream
   $stdin.CopyTo($buffer)
-  $payload = [System.Text.Encoding]::UTF8.GetString($buffer.ToArray()) | ConvertFrom-Json
+  $rawBytes = $buffer.ToArray()
+  $payload = [System.Text.Encoding]::UTF8.GetString($rawBytes) | ConvertFrom-Json
   $input0 = $payload.tool_input
   $target = [string]$input0.file_path
   if (-not $target) { $target = [string]$input0.notebook_path }
@@ -103,6 +111,43 @@ try {
   }
 } catch { $blocked = $null }
 
+if (-not $blocked -and $Mode -eq 'member' -and $rawBytes) {
+  $deny = $null
+  try {
+    $port = $env:CLAUDE_HUB_PORT
+    $sid = $env:CLAUDE_HUB_SESSION_ID
+    if ($port -and $sid) {
+      $request = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$port/api/member-guard")
+      $request.Method = 'POST'
+      $request.Proxy = $null
+      $request.Timeout = 15000
+      $request.ReadWriteTimeout = 15000
+      $request.ContentType = 'application/json; charset=utf-8'
+      $request.Headers.Add('X-Hub-Session', [string]$sid)
+      $request.Headers.Add('X-Hub-Token', [string]$env:CLAUDE_HUB_TOKEN)
+      $request.ContentLength = $rawBytes.Length
+      $out = $request.GetRequestStream()
+      $out.Write($rawBytes, 0, $rawBytes.Length)
+      $out.Close()
+      $response = $request.GetResponse()
+      $reader = New-Object System.IO.StreamReader($response.GetResponseStream(), [System.Text.Encoding]::UTF8)
+      $verdict = $reader.ReadToEnd() | ConvertFrom-Json
+      $reader.Close(); $response.Close()
+      if ([string]$verdict.decision -eq 'deny') {
+        $deny = [string]$verdict.reason
+        if (-not $deny) { $deny = 'Refused by AI Hub (team member guard); the team lead has been told.' }
+      }
+    }
+  } catch { $deny = $null }
+  if (-not $deny) { exit 0 }
+  try {
+    $err = [Console]::OpenStandardError()
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($deny)
+    $err.Write($bytes, 0, $bytes.Length)
+    $err.Flush()
+  } catch { }
+  exit 2
+}
 if (-not $blocked) { exit 0 }
 try {
   $first = [string]$roots[0]

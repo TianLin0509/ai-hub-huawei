@@ -467,6 +467,9 @@ test('透明 PNG 先铺白底再交给 Doctor；不透明的原样用；任务�
   const job = await service.start(image);
   assert.equal(job.flattened, true); assert.equal(job.sourceImage, image);
   assert.match(calls.find(c => c.op === 'imgtext-seed').req.image, /source-on-white\.png$/);
+  // Doctor v2.0.7 要求 seed 工作目录为空：铺白的那份不能放进工作目录（2026-11-28 v5.6.151 黄区实测 OUTPUT_EXISTS）
+  const seedReq = calls.find(c => c.op === 'imgtext-seed').req;
+  assert.ok(!path.resolve(seedReq.image).startsWith(path.resolve(seedReq.workdir) + path.sep), '铺白图不在 Doctor 工作目录里');
   assert.match(title, /slide\.png/);
 });
 

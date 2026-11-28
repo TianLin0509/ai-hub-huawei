@@ -34,6 +34,9 @@ function flattenTransparent(file, dir, nativeImage) {
   fs.writeFileSync(out, ni.createFromBitmap(bmp, { width, height }).toPNG());
   return out;
 }
+// 铺白的那份放在 Doctor 工作目录旁边（<workdir>.source），不放进工作目录：Doctor 内源基线 v2.0.7 的 imgtext-seed
+// 要求工作目录是空的（「seed 工作目录必须为空，避免覆盖已有产物」OUTPUT_EXISTS；2026-11-28 v5.6.151 黄区全新用户实测）。
+const sourceDir = workdir => workdir + '.source';
 function onWhite(file, dir, nativeImage) {
   try { return flattenTransparent(file, dir, nativeImage); }
   catch (error) { console.warn('[ppt-imgtext] 透明底铺白失败，按原图处理：', error.message); return file; }
@@ -118,7 +121,7 @@ class PptImgtext {
     const id = randomUUID(), workdir = path.join(require('./ppt-work-dir').workDir(this.a, { writable: true }), 'ppt-imgtext', id);
     const job = { id, image, workdir, state: 'seeding', step: '正在识别文字，通常数十秒', builds: 0, round: 0, agentRound: null, startedAt: this.a.now() };
     this.jobs.set(id, job); this.a.changed();
-    const flat = onWhite(image, workdir, this.ppt.deps?.nativeImage);
+    const flat = onWhite(image, sourceDir(workdir), this.ppt.deps?.nativeImage);
     if (flat !== image) { job.sourceImage = image; job.image = flat; job.flattened = true; }
     // No completed output is removed when a new task starts.
     while (this.jobs.size > 30) { const old = [...this.jobs.values()].find(j => ['done', 'error', 'needs_component'].includes(j.state)); if (!old) break; this.jobs.delete(old.id); }
@@ -280,7 +283,7 @@ async function lookupFrame(ppt, { imagePath, limit = 5 } = {}) {
   const image = imageFile(imagePath);
   if (!Number.isInteger(limit) || limit < 1 || limit > 10) throw new Error('候选页数需要1–10');
   const workdir = path.join(require('./ppt-work-dir').workDir(ppt.a, { writable: true }), 'ppt-frame-lookup', randomUUID());
-  const seed = await ppt.doctor.call('imgtext-seed', { image: onWhite(image, workdir, ppt.deps?.nativeImage), workdir });
+  const seed = await ppt.doctor.call('imgtext-seed', { image: onWhite(image, sourceDir(workdir), ppt.deps?.nativeImage), workdir });
   const document = JSON.parse(fs.readFileSync(seed.seed, 'utf8'));
   const lines = (document.elements || []).filter(e => e.type === 'text' && typeof e.text === 'string' && e.text.trim()).sort((a, b) => (a.bbox?.[1] || 0) - (b.bbox?.[1] || 0));
   const queries = [...new Set(lines.flatMap(e => splitQuery(e.text, 80)).filter(t => t.length >= 2))].slice(0, 8);

@@ -12,6 +12,21 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && !window.
   if (document.readyState === 'loading' && typeof document.addEventListener === 'function') document.addEventListener('DOMContentLoaded', mountAskAside, { once: true });
   else mountAskAside();
 }
+// 「简洁」开关（renderer/concise-view.js）与顶部常驻概览条（renderer/overview-strip.js）：和「问一下」一样随侧栏挂载。
+if (typeof window !== 'undefined' && typeof document !== 'undefined' && !window.__conciseView) {
+  const mountCardTools = () => {
+    try { require('./concise-view.js').mountConciseView(window); } catch (error) { console.warn('[concise-view] 未加载：', error && error.message); }
+    try { require('./overview-strip.js').mountOverviewStripUi(window); } catch (error) { console.warn('[overview-strip] 未加载：', error && error.message); }
+  };
+  if (document.readyState === 'loading' && typeof document.addEventListener === 'function') document.addEventListener('DOMContentLoaded', mountCardTools, { once: true });
+  else mountCardTools();
+}
+// 交卷 / 请拍板简述条（renderer/brief-bar.js）：和「问一下」一样随侧栏挂载。
+if (typeof window !== 'undefined' && typeof document !== 'undefined' && !window.__briefBar) {
+  const mountBrief = () => { try { require('./brief-bar.js').mountBriefBar(window); } catch (error) { console.warn('[brief-bar] 未加载：', error && error.message); } };
+  if (document.readyState === 'loading' && typeof document.addEventListener === 'function') document.addEventListener('DOMContentLoaded', mountBrief, { once: true });
+  else mountBrief();
+}
 const { getMeetingUnreadMemberIds } = require('./meeting-unread');
 const { compareLatestActivityDesc, latestActivityTime } = require('../core/session-recency.js');
 const {
@@ -559,7 +574,16 @@ function _sessionWarningText(session) {
     const gpuOff = !!usage.gpu?.off;
     const gpuTitle = gpuOff ? meterOffTitle : gpuPct == null ? 'GPU 占用率暂不可用' : `${usage.gpu.name || 'GPU'} · 占用 ${gpuPct}% · 每 10 秒采样`;
     const gpuMetric = `<span class="strip-resource strip-gpu${gpuOff ? ' strip-meter-off' : metricClass(gpuPct)}" tabindex="0"${gpuOff ? ' data-open-resources="liveMeter"' : ''} title="${escapeHtml(gpuTitle)}" aria-label="${escapeHtml(gpuTitle)}">GPU<b>${gpuOff ? '关' : gpuPct == null ? '—' : gpuPct + '%'}</b></span>`;
-    const diskMetric = `<span class="strip-resource strip-disk${metricClass(diskPct)}" role="button" tabindex="0" aria-haspopup="dialog" title="${escapeHtml(`${diskRoot} 已用 ${diskPct == null ? '检测中' : diskPct + '%'}${Number.isFinite(usage.disk?.totalBytes) ? ` · 总容量 ${(usage.disk.totalBytes / 1024 ** 3).toFixed(0)} GB` : ''} · 点击释放硬盘空间`)}" aria-label="${escapeHtml(`${diskRoot} 已用 ${diskPct == null ? '检测中' : diskPct + '%'}，点击打开硬盘释放`)}">硬盘<b>${diskPct == null ? '—' : diskPct + '%'}</b><span class="strip-mini-track"><i style="width:${diskPct == null ? 0 : Math.max(0, Math.min(100, diskPct))}%"></i></span></span>`;
+    const diskVolumes = Array.isArray(usage.disk?.volumes) && usage.disk.volumes.length ? usage.disk.volumes
+      : [{ root: diskRoot, usagePct: diskPct, totalBytes: usage.disk?.totalBytes }];
+    const diskMetric = diskVolumes.map(volume => {
+      const pct = Number.isFinite(volume.usagePct) ? Math.round(volume.usagePct) : null;
+      const root = volume.root || '本机磁盘';
+      const letter = /^[a-z]:/i.test(root) ? root[0].toUpperCase() : '';
+      const label = diskVolumes.length > 1 && letter ? `${letter}盘` : '硬盘';
+      const state = pct == null ? '检测中' : pct + '%';
+      return `<span class="strip-resource strip-disk${metricClass(pct)}" role="button" tabindex="0" aria-haspopup="dialog" data-disk-root="${escapeHtml(root)}" title="${escapeHtml(`${root} 已用 ${state}${Number.isFinite(volume.totalBytes) ? ` · 总容量 ${(volume.totalBytes / 1024 ** 3).toFixed(0)} GB` : ''} · 点击释放硬盘空间`)}" aria-label="${escapeHtml(`${root} 已用 ${state}，点击打开硬盘释放`)}">${label}<b>${pct == null ? '—' : pct + '%'}</b><span class="strip-mini-track"><i style="width:${pct == null ? 0 : Math.max(0, Math.min(100, pct))}%"></i></span></span>`;
+    }).join('');
     const network = usage.network;
     const rate = value => {
       if (network?.status !== 'ok' || !Number.isFinite(value)) return '—';
@@ -624,15 +648,22 @@ function _sessionWarningText(session) {
           if (memoryEl && badgeTpl.content.firstElementChild) memoryEl.after(badgeTpl.content.firstElementChild);
         }
       }
-      const currentDisk = stripEl.querySelector('.strip-disk');
-      const nextDisk = template.content.querySelector('.strip-disk');
-      if (currentDisk && nextDisk) {
+      // 盘的个数变了（比如 D 盘刚插上或读不到）就整段换；个数不变只改读数，不重建节点（焦点、悬停不丢）。
+      const currentDisks = [...stripEl.querySelectorAll('.strip-disk')];
+      const nextDisks = [...template.content.querySelectorAll('.strip-disk')];
+      if (currentDisks.length && currentDisks.length !== nextDisks.length) {
+        currentDisks.slice(1).forEach(node => node.remove());
+        currentDisks[0].outerHTML = nextDisks.map(node => node.outerHTML).join('');
+      } else currentDisks.forEach((currentDisk, index) => {
+        const nextDisk = nextDisks[index];
         currentDisk.className = nextDisk.className;
         currentDisk.title = nextDisk.title;
         currentDisk.setAttribute('aria-label', nextDisk.getAttribute('aria-label'));
+        if (nextDisk.dataset.diskRoot) currentDisk.dataset.diskRoot = nextDisk.dataset.diskRoot;
+        if (currentDisk.firstChild?.nodeType === 3) currentDisk.firstChild.textContent = nextDisk.firstChild.textContent;
         currentDisk.querySelector('b').textContent = nextDisk.querySelector('b').textContent;
         currentDisk.querySelector('i').style.width = nextDisk.querySelector('i').style.width;
-      }
+      });
       // 网络区（2026-11-23 开销优化）：5 秒心跳里常常只有 CPU 或网速变了。网络区整段没变就不动；
       // 只有网速那一小段变了就只换它，按钮（求助、用户群、VPN 行）不重建（见 sidebar-strip-diff.js）。
       const netEl = stripEl.querySelector('.strip-network');
@@ -1554,6 +1585,8 @@ sessionListEl.addEventListener('mousedown', (e) => {
     renderSidebarStrip,
     openArchiveDialog,
     getRenderStats: () => ({ ...renderStats }),
+    // 「会话详情」打开时每行显示累计用量与上下文，触发端据此判断用量变化算不算可见（renderer/surface-change-gate.js）。
+    isDetailsEnabled: () => detailsEnabled,
   };
 }
 

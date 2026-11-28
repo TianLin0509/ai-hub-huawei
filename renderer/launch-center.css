@@ -501,3 +501,18 @@
 html[lang="en"] body #session-sidebar .sidebar-header { grid-template-columns: minmax(118px, 1.15fr) minmax(0, 1fr); }
 html[lang="en"] body #session-sidebar #btn-global-search { overflow: hidden; }
 html[lang="en"] body #session-sidebar #btn-global-search span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 「负责人」下拉（来源 22dff5bd）：放在页脚按钮左边，不占正文高度；选了负责人后边框换强调色，右侧出现任务输入。没有任何负责人时整块隐藏。 */
+.new-session-menu .session-create-footer > .session-lead-inline { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
+.new-session-menu .session-create-footer > .session-lead-inline[hidden] { display: none; }
+.new-session-menu .session-lead-inline label { color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+.new-session-menu .session-lead-inline select,
+.new-session-menu .session-lead-inline input { height: 34px; min-width: 0; padding: 0 10px; border: 1px solid var(--border-mid); border-radius: 6px; background: var(--surface-card); color: var(--fg-strong); font-size: 12px; font-family: inherit; }
+.new-session-menu .session-lead-inline select { width: 180px; }
+.new-session-menu .session-lead-inline input { width: 220px; }
+.new-session-menu .session-lead-inline input[hidden] { display: none; }
+.new-session-menu .session-lead-inline.active select { border-color: var(--brand-text); color: var(--brand-text); }
+.new-session-menu .session-lead-inline :is(select, input):focus-visible { outline: 2px solid var(--brand-text); outline-offset: 2px; }
+.new-session-menu .session-lead-inline .session-lead-note { color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+.new-session-menu .session-lead-inline .session-lead-note[hidden] { display: none; }
+.new-session-menu .new-session-option[data-lead-locked] { opacity: .45; cursor: not-allowed; }

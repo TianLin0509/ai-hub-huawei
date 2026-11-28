@@ -36,7 +36,9 @@
    "renderer/status-footer-layout.js",
    "renderer/sticky-notice.js",
    "renderer/toolbar-more.js",
-   "renderer/ui-labels.js"
+   "renderer/ui-labels.js",
+   "renderer/overview-strip.js",
+   "renderer/brief-bar.js"
   ],
   "launch": [
    "core/feature-readiness.js",
@@ -67,7 +69,8 @@
    "renderer/optional-feature-gate.js",
    "renderer/optional-features.js",
    "renderer/session-welcome.js",
-   "renderer/theme-controller.js"
+   "renderer/theme-controller.js",
+   "renderer/launch-center-lead-picker.js"
   ],
   "update": [
    "core/completion-notifier.js",
@@ -117,7 +120,9 @@
    "renderer/session-runtime-status.js",
    "renderer/turn-card-renderer.js",
    "renderer/turn-speed-display.js",
-   "renderer/wait-progress.js"
+   "renderer/wait-progress.js",
+   "renderer/concise-view.js",
+   "renderer/notice-groups.js"
   ]
  },
  "allowMissing": {

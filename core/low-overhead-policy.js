@@ -12,7 +12,7 @@
 //   L3 桌宠静默省电：空闲不排帧、停装饰循环动画，提醒气泡照常
 //   L4 历史搜索子进程空闲 10 分钟退出，下次搜索自动拉起
 //   L5 终端回滚 10000→3000 行，非当前终端不闪光标
-//   L6 非关键后台刷新放慢 4 倍，state.json 最短落盘间隔 2→5 秒（退出前照常立刻刷盘）
+//   L6 非关键后台刷新放慢 4 倍，state.json 最短落盘间隔 15→30 秒（2026-11-28 前为 2→5 秒）（退出前照常立刻刷盘）
 //   L7 Windows EcoQoS（2026-11-23 P2）：答完、非当前、空闲满 2 分钟的会话整棵进程树，全部会话都空闲的共享 serve，
 //      空闲满 1 分钟的历史搜索子进程，改用节能调度；切过去、输入、转忙碌或待审批、关掉低开销模式时立刻恢复全速
 
@@ -41,8 +41,8 @@ const NORMAL_SCROLLBACK = 10000;
 const LOW_SCROLLBACK = 3000;
 // L6
 const BACKGROUND_SLOWDOWN = 4;
-const NORMAL_STATE_SAVE_MIN_MS = 2000;
-const LOW_STATE_SAVE_MIN_MS = 5000;
+const NORMAL_STATE_SAVE_MIN_MS = 15000;
+const LOW_STATE_SAVE_MIN_MS = 30000;
 // L7
 const ECO_QOS_IDLE_MS = 2 * 60 * 1000;
 const ECO_QOS_SEARCH_IDLE_MS = 60 * 1000;

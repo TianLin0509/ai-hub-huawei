@@ -455,7 +455,12 @@ function handlePersistSessions(list, meetingList, deps, { deferStateSave = false
 }
 
 function registerPersistenceIpc(ipcMain, deps) {
+  // 增量保存的底稿（见下方 persist-sessions:delta）：按发送窗口记上一份已保存的工作现场。
+  const baselines = new Map();
+  const senderKey = event => event?.sender?.id ?? 'default';
   ipcMain.handle('persist-sessions:flush', async (_e, list, meetingList) => {
+    // 显式保存（重启前）不登记底稿，界面随后一律发整份；这里也删掉旧底稿，免得过期底稿被拿来拼增量（审查建议 2）。
+    baselines.delete(senderKey(_e));
     if (!handlePersistSessions(list, meetingList, deps, { deferStateSave: true })) throw new Error('工作现场无效，未保存');
     await Promise.all([deps.sessionStore.flushPending(), deps.meetingStore.flushPending()]);
     // Background saving logs errors, whereas an explicit user save must fail
@@ -474,12 +479,52 @@ function registerPersistenceIpc(ipcMain, deps) {
     wasCleanShutdown: deps.bootWasClean,
   }));
 
-  ipcMain.on('persist-sessions', (_e, list, meetingList) => {
-    try { handlePersistSessions(list, meetingList, deps); }
+  // 现在首次与每 30 次发整份并带序号；其余只发变了的条目和顺序，这里在上一份上拼回完整列表，
+  // 浅复制后走原来的 handlePersistSessions（它会改写收到的条目，复制保证记着的那份不被改）。
+  // 序号对不上、条目缺失或重复，一律让界面下次发整份，宁可多传不少存。
+  const watchedSenders = new WeakSet();
+  // saved 为假（空列表护栏拒绝、保存抛错）时不推进底稿、直接删掉：下一次增量对不上序号，界面会重发整份（审查建议 1）。
+  const remember = (event, seq, list, meetingList, saved = true) => {
+    const key = senderKey(event);
+    if (!saved || !Number.isSafeInteger(seq)) { baselines.delete(key); return; }
+    // 窗口销毁后底稿随之丢掉，不留旧窗口的整份会话表（审查建议 4）。
+    const sender = event?.sender;
+    if (sender && typeof sender === 'object' && typeof sender.once === 'function' && !watchedSenders.has(sender)) {
+      watchedSenders.add(sender);
+      try { sender.once('destroyed', () => baselines.delete(key)); } catch { /* 拿不到事件时底稿留到下次整份覆盖 */ }
+    }
+    baselines.set(key, { seq,
+      sessions: new Map(list.filter(Boolean).map(row => [row.hubId, row])),
+      meetings: new Map((Array.isArray(meetingList) ? meetingList : []).filter(Boolean).map(row => [row.id, row])) });
+  };
+  const save = (event, list, meetingList) => {
+    try { return handlePersistSessions(list, meetingList, deps); }
     catch(error) {
       console.error('[session-persistence] save rejected:',error);
-      _e.sender?.send('session-persistence-error', {message:error.message});
+      event.sender?.send('session-persistence-error', {message:error.message});
+      return false;
     }
+  };
+  ipcMain.on('persist-sessions', (_e, list, meetingList, meta) => {
+    if (!Array.isArray(list)) { save(_e, list, meetingList); return; }
+    const rows = list.map(row => (row && typeof row === 'object' ? { ...row } : row));
+    const meetings = Array.isArray(meetingList) ? meetingList.map(row => (row && typeof row === 'object' ? { ...row } : row)) : meetingList;
+    const saved = save(_e, rows, meetings) === true;
+    remember(_e, meta?.seq, list, meetingList, saved);
+  });
+  ipcMain.on('persist-sessions:delta', (_e, delta) => {
+    const key = senderKey(_e), base = baselines.get(key);
+    const resync = () => { baselines.delete(key); _e.sender?.send('persist-sessions:resync'); };
+    if (!base || !delta || base.seq !== delta.base || !Array.isArray(delta.order) || !Array.isArray(delta.meetingOrder)) return resync();
+    const sessions = new Map(base.sessions), meetings = new Map(base.meetings);
+    for (const row of delta.changed || []) if (row?.hubId) sessions.set(row.hubId, row);
+    for (const row of delta.changedMeetings || []) if (row?.id) meetings.set(row.id, row);
+    const list = delta.order.map(id => sessions.get(id));
+    const meetingList = delta.meetingOrder.map(id => meetings.get(id));
+    if (list.some(row => !row) || meetingList.some(row => !row)
+        || new Set(delta.order).size !== delta.order.length || new Set(delta.meetingOrder).size !== delta.meetingOrder.length) return resync();
+    const saved = save(_e, list.map(row => ({ ...row })), meetingList.map(row => ({ ...row }))) === true;
+    remember(_e, delta.seq, list, meetingList, saved);
   });
 }
 

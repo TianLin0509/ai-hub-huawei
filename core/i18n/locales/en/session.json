@@ -562,5 +562,11 @@
   "截图时滚动位置被打断": "Scrolling was interrupted during capture",
   "已让位新复制": "Yielded to newer copy",
   "生成中…": "Generating…",
-  "复制失败": "Copy failed"
+  "复制失败": "Copy failed",
+  "简洁": "Concise",
+  "打开时只看你和 Agent 的对话，隐藏 Agent 之间的消息和无新进展的回合": "When on, show only your conversation with the agent; hide agent-to-agent messages and no-update turns",
+  "无新进展": "No new progress",
+  "来自：{0}": "From: {0}",
+  "点击收起这一组": "Click to collapse this group",
+  "点击展开这 {0} 条原文": "Click to expand these {0} messages"
 }

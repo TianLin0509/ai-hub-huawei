@@ -667,5 +667,19 @@
   "没检测到可用 CodeAgent，自动用 {0}（所有分身共用），这里的账号和模型选择暂不生效。": "No usable CodeAgent detected, so {0} is used automatically (shared by all avatars); the account and model picked here don't apply for now.",
   "去改那一项": "Change that setting",
   "模型不可用": "Model unavailable",
-  "公司模型（CodeAgent 账号）": "Company models (CodeAgent account)"
+  "公司模型（CodeAgent 账号）": "Company models (CodeAgent account)",
+  "负责人": "Lead",
+  "选了负责人，新会话作为成员挂到它的团队下，并收到怎么汇报、交付的说明": "Pick a lead to add the new session to its team as a member; it receives instructions on how to report and deliver",
+  "子会话任务（可选）": "Sub-session task (optional)",
+  "任务（可选，随组队说明发给它）": "Task (optional, sent with the team instructions)",
+  "所选负责人": "Selected lead",
+  "无（独立会话）": "None (standalone session)",
+  "新会话会作为「{0}」的成员；Hub 通知负责人，并给它发组队说明（怎么汇报、交付）。不占同时干活的名额。": "The new session joins “{0}” as a member; Hub notifies the lead and sends it team instructions (how to report and deliver). It does not use a concurrent-work slot.",
+  "{0} · 子会话": "{0} · sub-session",
+  "挂到负责人失败": "Failed to join the lead's team",
+  "会话已建好，但没能挂到负责人下面：{0}": "Session created, but it could not join the lead's team: {0}",
+  "加入负责人团队…": "Joining the lead's team…",
+  "选了负责人时只能建 CodeAgent 会话（组队只支持 CodeAgent）；负责人选「无」即可恢复": "With a lead selected only CodeAgent sessions can be created (teams support CodeAgent only); choose \"None\" to restore",
+  "组队只支持 CodeAgent": "Teams: CodeAgent only",
+  "{0}（{1} 名成员）": "{0} ({1} members)"
 }

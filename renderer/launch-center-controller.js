@@ -227,10 +227,16 @@ function createLaunchCenterController({
     }
   });
   initializeTrigger();
+  // 侧栏右键负责人「创建子会话…」：打开新建会话页，「负责人」下拉预选这位负责人。
+  function openSubSession(leadSid) {
+    open('session', { leadSid: typeof leadSid === 'string' ? leadSid : '' });
+  }
+
   return {
     close,
     getActiveIntent: () => activeIntent,
     open,
+    openSubSession,
     selectIntent,
     toggle,
   };

@@ -171,6 +171,9 @@ function createTurnCardRenderer(options = {}) {
     formatTime: ts => formatAbsoluteTime(ts), avatarSrc: (kind, model) => chatAvatarSrc(kind, { model }),
     postProcess: slot => { if (typeof wrapPathLinksInElement === 'function') wrapPathLinksInElement(slot, { sessionId: slot.closest('.turn-card')?.dataset.sessionId }); },
   };
+  // 相邻的团队消息合并成一组（renderer/notice-groups.js，来源 3dea7fba）：公开版也带。
+  const noticeGroups = require('./notice-groups').createNoticeGrouper({ doc, win, escapeHtml });
+  if (!options.root) win._noticeGroups = noticeGroups;
   const bridgeThreads = { act: async () => {}, schedule: () => {} };
   if (!options.root) win._bridgeThreads = bridgeThreads;
 
@@ -484,6 +487,8 @@ function patchTurnCardInPlace(existing, newCard, sessionId) {
   _postProcessTurnCard(existing, sessionId, true);
   const selectionRestored = _restoreCardUiState(existing, snapshot);
   require('./message-disclosure-state').restore(existing);
+  // 原位重绘会重置 class 和子节点：所有重绘路径（流式更新、rerenderTurn）都在这里补回相邻消息的分组标记。
+  noticeGroups.schedule(existing.parentElement);
   require('./conversation-message-view').syncResponseNeighbors(existing);
   if (!win.__cardRenderMetrics) win.__cardRenderMetrics = { inPlacePatches: 0, rootReplacements: 0 };
   win.__cardRenderMetrics.inPlacePatches += 1;
@@ -672,7 +677,8 @@ function renderTurnCardContent(turn, context = {}) {
       : `<span class="turn-avatar av-letter">${escapeHtml(aiLetterFallback(turn.kind))}</span>`;
   }
 
-  const emptyNative = !String(turn.text || '').trim() && (({completed:'本轮已完成，没有回答正文',interrupted:'本轮已中断',failed:'本轮执行失败'})[turn.nativeOutcome]
+  // 负责人「无新进展」暗号（core/team-silent-reply.js）：卡片本来就不占位置（renderer/team-ui.css）；万一样式没加载，也只写一句「无新进展」，不露暗号原文。
+  const emptyNative = noUpdate ? '无新进展' : !String(turn.text || '').trim() && (({completed:'本轮已完成，没有回答正文',interrupted:'本轮已中断',failed:'本轮执行失败'})[turn.nativeOutcome]
     || (!turn.toolCalls?.length && !turn.attachments?.length && !turn.replySegments?.length
       && !(typeof turn.thinking === 'string' && turn.thinking.trim()) && !turn.presentation?.activities?.length
       && '这条消息没有正文，可切到后台终端查看。'));
@@ -739,7 +745,7 @@ function renderTurnCardContent(turn, context = {}) {
   const processHtml = isSimple && (toolHtml || (!isUser && _renderMetaPills(turn)))
     ? `<details class="chat-process" data-copy-exclude><summary title="展开本轮工具结果与用量">工具${processCount ? ` ${processCount} 条` : ''}${processFailures ? `<span class="chat-process-warning"> · ${processFailures} 项失败</span>` : ''}</summary><div class="chat-process-body">${toolHtml}${_renderMetaPills(turn)}</div></details>` : '';
 
-  return `<div class="${cls}"${isSimple ? ' data-chat-style="message"' : ''}${isUser && turn.promptReceipt ? ` data-submission-id="${escapeHtml(turn.clientSubmissionId)}" data-receipt-authoritative="${turn.receiptAuthoritative === true}" data-delivery-status="${escapeHtml(turn.deliveryStatus || '')}"` : ''} data-turn-id="${escapeHtml(turn.id || '')}" data-response-id="${escapeHtml(turn.logicalTurnId || '')}" data-response-agent="${escapeHtml(turn.kind || '')}" data-phase="${escapeHtml(turn.phase || 'message')}" data-presentation-source="${escapeHtml(presentation.source || 'deterministic')}"${turn.inherited ? ' data-inherited="1"' : ''}>
+  return `<div class="${cls}"${isSimple ? ' data-chat-style="message"' : ''}${isUser && turn.promptReceipt ? ` data-submission-id="${escapeHtml(turn.clientSubmissionId)}" data-receipt-authoritative="${turn.receiptAuthoritative === true}" data-delivery-status="${escapeHtml(turn.deliveryStatus || '')}"` : ''} data-turn-id="${escapeHtml(turn.id || '')}" data-response-id="${escapeHtml(turn.logicalTurnId || '')}" data-response-agent="${escapeHtml(turn.kind || '')}" data-phase="${escapeHtml(turn.phase || 'message')}"${teamFold ? ` data-notice-kind="${escapeHtml(teamFold.kind)}" data-notice-from="${escapeHtml(who)}" data-notice-line="${escapeHtml(teamFold.summary)}"` : ''} data-presentation-source="${escapeHtml(presentation.source || 'deterministic')}"${turn.inherited ? ' data-inherited="1"' : ''}>
     ${avatarHtml}
     <div class="turn-content">
       <div class="turn-head">
@@ -1076,6 +1082,7 @@ function mountTurnCard(container, turn) {
   if (turn.id) state._sessionTurns.set(turn.id, turn);
   refreshCardActions();
   _postProcessTurnCard(cardEl, getActiveSessionId());
+  noticeGroups.schedule(container);
   publishTurnPresentation(getActiveSessionId(), turn);
   scheduleModelLoads();
   return cardEl;
@@ -1366,6 +1373,8 @@ function mountSessionTurnCard(sessionId, turn, opts = {}) {
   // cards and in-place streaming patches receive identical behavior.
   _postProcessTurnCard(cardEl, sessionId);
   if (cardEl.classList?.contains?.('bridge-msg')) bridgeThreads.schedule(container);
+  // 相邻团队消息合并成一组（renderer/notice-groups.js）；普通卡片也要重算，它可能把一组断开。
+  noticeGroups.schedule(container);
 
   // 8. register in _sessionTurns (turnId → turn) — keep spec1 Map shape
   // Use turnForRender (kind merged) so rerenderTurn won't lose kind on fold/unfold

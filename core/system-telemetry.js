@@ -37,6 +37,13 @@ function localDiskRoot(cwd = process.cwd()) {
   return path.parse(resolved).root || resolved;
 }
 
+// 没有 D 盘的电脑读不到就跳过，只显示 C 盘（和以前一样）。
+function localDiskRoots(cwd = process.cwd(), platform = process.platform) {
+  const current = localDiskRoot(cwd);
+  if (platform !== 'win32') return [current];
+  return [...new Set(['C:\\', 'D:\\', current.toUpperCase()])].sort();
+}
+
 function createSystemTelemetry(options = {}) {
   // nvidia-smi is started from a worker thread: creating the process blocks
   // the calling thread on Windows (see core/off-main-exec.js).
@@ -44,6 +51,8 @@ function createSystemTelemetry(options = {}) {
   const statfs = options.statfs || fs.promises.statfs.bind(fs.promises);
   const now = options.now || Date.now;
   const cwd = options.cwd || process.cwd;
+  const platform = options.platform || process.platform;
+  const diskTimeoutMs = Math.max(100, Number(options.diskTimeoutMs) || 3_000);
   // nvidia-smi is a separate process. A 10 s cache still feels live while
   // avoiding a process spawn on every 3 s renderer resource tick.
   const gpuTtlMs = Math.max(1_000, Number(options.gpuTtlMs) || 10_000);
@@ -75,6 +84,33 @@ function createSystemTelemetry(options = {}) {
     return gpuPending;
   }
 
+  async function sampleVolume(root) {
+    let timer;
+    try {
+      // 读不到（光驱没盘、映射盘断开）或卡住的盘跳过，不能把底栏唯一一次在途采样一直占住。
+      const stats = await Promise.race([
+        statfs(root),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('statfs timeout')), diskTimeoutMs); timer.unref?.(); }),
+      ]);
+      const blockSize = Number(stats.bsize || stats.frsize || 0);
+      const totalBytes = blockSize * Number(stats.blocks || 0);
+      const freeBytes = blockSize * Number(stats.bavail ?? stats.bfree ?? 0);
+      const usedBytes = Math.max(0, totalBytes - freeBytes);
+      if (!(totalBytes > 0)) return null;
+      return {
+        root,
+        totalBytes: Number.isFinite(totalBytes) ? totalBytes : null,
+        freeBytes: Number.isFinite(freeBytes) ? freeBytes : null,
+        usedBytes: Number.isFinite(usedBytes) ? usedBytes : null,
+        usagePct: clampPercent(usedBytes / totalBytes * 100),
+      };
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function sampleDisk(force = false) {
     const at = now();
     if (!force && diskCache && at - diskCache.sampledAt < diskTtlMs) return diskCache.value;
@@ -82,19 +118,11 @@ function createSystemTelemetry(options = {}) {
     diskPending = (async () => {
       let value = null;
       try {
-        const root = localDiskRoot(cwd());
-        const stats = await statfs(root);
-        const blockSize = Number(stats.bsize || stats.frsize || 0);
-        const totalBytes = blockSize * Number(stats.blocks || 0);
-        const freeBytes = blockSize * Number(stats.bavail ?? stats.bfree ?? 0);
-        const usedBytes = Math.max(0, totalBytes - freeBytes);
-        value = {
-          root,
-          totalBytes: Number.isFinite(totalBytes) ? totalBytes : null,
-          freeBytes: Number.isFinite(freeBytes) ? freeBytes : null,
-          usedBytes: Number.isFinite(usedBytes) ? usedBytes : null,
-          usagePct: totalBytes > 0 ? clampPercent(usedBytes / totalBytes * 100) : null,
-        };
+        // 主盘（Hub 所在盘）的字段照旧放在顶层，老读者不变；volumes 是全部读得到的盘。
+        const current = localDiskRoot(cwd());
+        const volumes = (await Promise.all(localDiskRoots(cwd(), platform).map(sampleVolume))).filter(Boolean);
+        const primary = volumes.find(volume => volume.root.toUpperCase() === current.toUpperCase()) || volumes[0];
+        value = primary ? { ...primary, volumes } : null;
       } catch {
         value = null;
       }
@@ -117,5 +145,6 @@ module.exports = {
   clampPercent,
   createSystemTelemetry,
   localDiskRoot,
+  localDiskRoots,
   parseNvidiaCsv,
 };

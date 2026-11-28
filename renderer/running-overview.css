@@ -52,3 +52,21 @@
 /* 冷白主题把这一行排成 3 列网格（详细信息 / 模型 / 项目）；多了这个按钮就排成 4 列，不挤到第二行。 */
 :root body #session-sidebar .session-detail-bar:has(#btn-running-overview) { grid-template-columns: auto auto minmax(0, 1fr) minmax(0, 1fr); }
 #session-sidebar .session-detail-bar #btn-running-overview { padding: 4px 4px; height: 26px; }
+
+/* 顶部常驻概览条（来源 de959e5e 只借界面）：工具栏里一行数字，点任何一段打开在跑一览；可收起成一个小按钮。颜色只用主题变量。 */
+.ov-strip { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; height: 28px; margin: 0 6px; padding: 0 3px; border: 1px solid var(--ro-line); border-radius: 7px;
+  background: transparent; color: var(--text-secondary); font-family: inherit; font-size: 12px; line-height: 1; white-space: nowrap; -webkit-app-region: no-drag; }
+.ov-strip button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; -webkit-app-region: no-drag; }
+.ov-strip-seg { display: inline-flex; align-items: center; gap: 3px; height: 22px; padding: 0 6px; border-radius: 5px; }
+.ov-strip-seg:hover, .ov-strip-fold:hover { background: rgba(var(--rgb-info), .08); color: var(--text-primary); }
+.ov-strip-seg:focus-visible, .ov-strip-fold:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.ov-strip-seg b { min-width: 12px; text-align: center; font-weight: 600; color: var(--text-primary); }
+.ov-strip-main { font-weight: 600; color: var(--text-primary); }
+.ov-strip-waiting b { color: var(--brand-text, var(--brand)); }
+.ov-strip-suspect b { color: var(--status-danger, rgb(var(--rgb-danger))); }
+.ov-strip-fold { width: 18px; height: 22px; border-radius: 5px; color: var(--text-muted); font-size: 14px; }
+.ov-strip-dot { display: inline-block; min-width: 16px; height: 16px; padding: 0 4px; margin-left: 4px; border-radius: 8px; background: var(--text-muted); color: var(--text-on-brand, #fff); /* theme-ok: 品牌色与灰底圆点上的白字，变量缺失时的兜底 */
+  font-size: 10.5px; font-style: normal; font-weight: 600; line-height: 16px; text-align: center; }
+.ov-strip-dot.hot { background: var(--brand); }
+.ov-strip.hot { border-color: var(--brand); }
+.ov-strip[hidden] { display: none; }

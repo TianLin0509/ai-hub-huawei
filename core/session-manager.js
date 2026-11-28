@@ -375,7 +375,7 @@ function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
   const connection = require('./claude-connection-settings').connectionSettings({ values: opts.claudeConnectionValues || cv, env, model: opts.model, cwd });
   // 「只允许改工作目录内的文件」（core/workspace-guard.js）：hook 只写进本次启动的叠加文件。
   const shared = require('./agent-user-context').claudeSharedConfig(env, hubDataDir);
-  const guard = require('./workspace-guard').settingsOverlay(kind, opts, { cwd, configDir: env.CLAUDE_CONFIG_DIR, env,
+  const guard = require('./workspace-guard').settingsOverlay(kind, opts, { sessionId: id, cwd, configDir: env.CLAUDE_CONFIG_DIR, env,
     addDirs: [...claudeNativeAddDirs(opts.addDirs), ...(shared.autoMemoryDirectory ? [String(shared.autoMemoryDirectory)] : [])] });
   const settingsFile = prepareClaudeSettingsOverlay(settings, {
     directory: path.join(hubDataDir, 'native-agent-settings'), sessionId: id + '-' + require('crypto').randomUUID(),
@@ -478,7 +478,7 @@ function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
   try { cliTheme = require('./cli-coldwhite-theme').ensureClaudeTheme(env, opts.hubUiTheme); }
   catch (error) { console.warn('[CLI theme] Claude:', error.message); }
   const connection = require('./claude-connection-settings').connectionSettings({ values: cv, env, model: opts.model, cwd });
-  const guard = require('./workspace-guard').settingsOverlay(kind, opts, { cwd, addDirs: claudeNativeAddDirs(opts.addDirs), configDir: env.CLAUDE_CONFIG_DIR, env });
+  const guard = require('./workspace-guard').settingsOverlay(kind, opts, { sessionId: id, cwd, addDirs: claudeNativeAddDirs(opts.addDirs), configDir: env.CLAUDE_CONFIG_DIR, env });
   const settingsFile = prepareClaudeSettingsOverlay(settings, {
     directory: path.join(hubDataDir, 'native-agent-settings'), sessionId: id + '-' + require('crypto').randomUUID(),
     overrides: { ...(guard || {}), fastMode: fast, skipDangerousModePermissionPrompt: true, ...(cliTheme ? { theme: cliTheme } : {}),
@@ -713,7 +713,7 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   for (const dir of launchAddDirs) args.push('--add-dir', dir);
   // 「只允许改工作目录内的文件」（core/workspace-guard.js）：拦截 hook 写进本会话的启动设置文件（Hub 数据目录），
   // 不碰号的配置目录。有模型设置时同一份文件里一起写；没有时单独带一个只含 hook 的 --settings。
-  const guard = require('./workspace-guard').settingsOverlay('codeagent', opts, { cwd, addDirs: launchAddDirs, configDir: config.configDir, env });
+  const guard = require('./workspace-guard').settingsOverlay('codeagent', opts, { sessionId: id, cwd, addDirs: launchAddDirs, configDir: config.configDir, env });
   let guardSettings = false;
   try {
     if (settingsFile) writeCodeAgentLaunchSettings(hubDataDir, id, settingsModel, guard ? guard.hooks : null);
@@ -5112,7 +5112,7 @@ try {
         if (!scenes.isScenePurpose(s.info && s.info.purpose)) return [];
         try { return scenes.applySceneLaunch('claude', { purpose: s.info.purpose }, { dataDir: getHubDataDir() }).addDirs || []; } catch { return []; }
       })();
-      const guard = require('./workspace-guard').settingsOverlay(kind, s.info || {}, { cwd: s.info && s.info.cwd,
+      const guard = require('./workspace-guard').settingsOverlay(kind, s.info || {}, { sessionId, cwd: s.info && s.info.cwd,
         addDirs: [...claudeNativeAddDirs(s.info && s.info.addDirs), ...sceneAddDirs], configDir: relaunchEnv.CLAUDE_CONFIG_DIR, env: relaunchEnv });
       if (connection.env) {
         require('./claude-connection-settings').assertSettingsSupport(connection, require('./cli-capabilities').filterArgs('claude', ['--settings', 'overlay.json']).args);

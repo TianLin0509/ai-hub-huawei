@@ -60,7 +60,9 @@ test('2 首次未就绪立刻通知，重试保留起点，就绪后进入回答
 
 test('2 终端尾行移除颜色与密钥，最终失败保留可操作原因', async () => {
   const code = section('core/group-chat-watcher.js', '      const terminalLastLine =', '\n    }\n    sessionManager.setGroupChatReady');
-  const receipt = vm.runInNewContext(`(function(buf) { ${code} })(buffer)`, { buffer: '旧行\r\n\u001b[31m请登录 Bearer secret-value\u001b[0m\r\n', stripAnsi: require('../core/ansi-utils').stripAnsi, require: () => ({ sanitize }) });
+  const receipt = vm.runInNewContext(`(function(buf) { ${code} })(buffer)`, { buffer: '旧行\r\n\u001b[31m请登录 Bearer secret-value\u001b[0m\r\n', stripAnsi: require('../core/ansi-utils').stripAnsi,
+    // 2026-11-28：这一段还会落一份超时现场（core/cli-start-timeout-dump.js），这里只验回执，现场写入打桩。
+    sid: 's', kind: 'codeagent', require: () => ({ sanitize, dumpStartTimeout: () => '' }) });
   assert.equal(receipt.terminalLastLine, '请登录 Bearer <密钥>');
   assert.ok(!JSON.stringify(receipt).includes('secret-value'));
   let clock = 1;

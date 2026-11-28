@@ -90,13 +90,13 @@ test('控制器：默认关闭启动一个模块都不碰；开启后免重启�
   assert.equal(h.timers.length, 0);
   f.box.on = true;
   h.ctrl.sync();
-  assert.deepEqual(h.calls.save, [5000], 'L6 state.json 节流 2→5 秒');
+  assert.deepEqual(h.calls.save, [30000], 'L6 state.json 节流 15→30 秒（2026-11-28 默认 2→15 秒）');
   assert.deepEqual(h.calls.search, [10 * MIN], 'L4 搜索进程空闲 10 分钟退出');
   assert.equal(h.calls.pet, 1, 'L3 桌宠立即重发状态');
   assert.equal(h.timers[0].ms, policy.SOFT_CAP_CHECK_MS);
   f.box.on = false;
   h.ctrl.sync();
-  assert.equal(h.calls.save.at(-1), 2000);
+  assert.equal(h.calls.save.at(-1), 15000);
   assert.equal(h.calls.search.at(-1), null, '关闭恢复原策略（常驻）');
   assert.equal(h.timers[0].cleared, true);
   assert.equal(h.ctrl.isCapTimerRunning(), false);
@@ -126,7 +126,7 @@ test('启动时序 R2-a：持久化已开、renderer 先读、main 后 start →
   assert.deepEqual(r.store.get(), { on: true, enabled: true, keepAlive: 1 });
   h.ctrl.start();
   assert.deepEqual(h.ctrl.get(), r.store.get(), '主进程与界面一致');
-  assert.deepEqual(h.calls.save, [5000]);
+  assert.deepEqual(h.calls.save, [30000]);
   assert.equal(h.ctrl.isCapTimerRunning(), true);
 });
 
@@ -349,7 +349,7 @@ test('L5：关闭时 10000 行、闪光标且从没开过不碰终端；开启�
 });
 
 // ---------- L6 ----------
-test('L6：后台刷新正常不变、开启放慢 4 倍；state.json 节流 2↔5 秒，切回 2 秒时已挂的保存提前（不推后）', async t => {
+test('L6：后台刷新正常不变、开启放慢 4 倍；state.json 节流按设定间隔切换（本条用 2↔5 秒验机制；默认值见 L6 控制器测试的 15↔30 秒），切回短间隔时已挂的保存提前（不推后）', async t => {
   assert.equal(policy.backgroundIntervalMs(5000, { on: false }), 5000);
   assert.equal(policy.backgroundIntervalMs(5000, { on: true }), 20000);
   let state = { on: false };

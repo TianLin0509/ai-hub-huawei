@@ -18,6 +18,9 @@ const os = require('os');
 const path = require('path');
 
 const MATCHER = 'Edit|Write|MultiEdit|NotebookEdit';
+// 组队成员危险动作硬拦（main/team/member-guard.js，2026-11-28 移植）：和本守卫共用同一个 hook 入口、同一个脚本，
+// 成员会话再加上命令类工具；脚本先做本地的工作目录判断，再问 Hub 成员守卫。两项都开时只起一个 PowerShell。
+const MEMBER_MATCHER = 'Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit';
 const SCRIPT = 'hub-workspace-guard.ps1';
 
 // 哪些后端能真拦（改文件工具这一层），哪些只是提示。
@@ -66,10 +69,12 @@ function allowedRoots({ cwd, addDirs = [], configDir = '', env = process.env } =
 function encodeRoots(roots) { return Buffer.from(JSON.stringify(roots), 'utf8').toString('base64'); }
 
 // settings.hooks 片段。命令首词必须是裸命令名（见 core/hook-runner.js）；PowerShell 每台 Windows 都有。
-function claudeHooks({ roots, scriptPath }) {
-  if (!Array.isArray(roots) || !roots.length || !scriptPath) return null;
-  const command = `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath.replace(/\\/g, '/')}" ${encodeRoots(roots)}`;
-  return { PreToolUse: [{ matcher: MATCHER, hooks: [{ type: 'command', command, timeout: 20 }] }] };
+// member 为真：第二个参数写 member，脚本再问 Hub 成员守卫；只开成员守卫时第一个参数是空数组。
+function claudeHooks({ roots, scriptPath, member = false }) {
+  const list = Array.isArray(roots) ? roots : [];
+  if ((!list.length && !member) || !scriptPath) return null;
+  const command = `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath.replace(/\\/g, '/')}" ${encodeRoots(list)}${member ? ' member' : ''}`;
+  return { PreToolUse: [{ matcher: member ? MEMBER_MATCHER : MATCHER, hooks: [{ type: 'command', command, timeout: 20 }] }] };
 }
 
 function scriptPath() {
@@ -91,10 +96,24 @@ function mergeHooks(base, extra) {
 }
 
 // 会话选项 → 叠加进 --settings 的内容；没开或后端不支持时返回 null。
-function settingsOverlay(kind, opts, { cwd, addDirs, configDir, env } = {}) {
-  if (!opts || opts.workspaceGuard !== true || !supports(kind)) return null;
-  const hooks = claudeHooks({ roots: allowedRoots({ cwd, addDirs, configDir, env }), scriptPath: scriptPath() });
+// 工作目录限制（opts.workspaceGuard）和组队成员守卫合成一条 hook：一个判定入口。
+function settingsOverlay(kind, opts, { cwd, addDirs, configDir, env, sessionId } = {}) {
+  if (!opts || !supports(kind)) return null;
+  const workspace = opts.workspaceGuard === true;
+  const member = isMember(opts, sessionId);
+  if (!workspace && !member) return null;
+  const hooks = claudeHooks({ roots: workspace ? allowedRoots({ cwd, addDirs, configDir, env }) : [], scriptPath: scriptPath(), member });
   return hooks ? { hooks } : null;
 }
 
-module.exports = { HINT_ONLY, GUARD_ON, GUARD_OFF, MATCHER, GUARDED_KINDS, supports, note, allowedRoots, encodeRoots, claudeHooks, mergeHooks, scriptPath, settingsOverlay };
+// 组队成员判定（main.js 接组队名册）：新建时 opts.memberGuard，恢复、原地重拉时按名册。没接上时只认 opts。
+let memberPredicate = null;
+function setMemberPredicate(fn) { memberPredicate = typeof fn === 'function' ? fn : null; }
+function isMember(opts, sessionId) {
+  if (opts && opts.memberGuard === true) return true;
+  const id = sessionId || (opts && opts.id);
+  if (!memberPredicate || !id) return false;
+  try { return !!memberPredicate(String(id)); } catch { return false; }
+}
+
+module.exports = { HINT_ONLY, GUARD_ON, GUARD_OFF, MATCHER, MEMBER_MATCHER, setMemberPredicate, isMember, GUARDED_KINDS, supports, note, allowedRoots, encodeRoots, claudeHooks, mergeHooks, scriptPath, settingsOverlay };

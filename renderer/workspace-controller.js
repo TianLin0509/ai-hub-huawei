@@ -2165,6 +2165,8 @@
       return;
     }
     const revision = ++modalRevision;
+    // 「负责人」下拉：右键负责人「创建子会话…」进来时预选它，普通打开回到「无（独立会话）」。
+    window.LaunchLeadPicker?.reset(options.leadSid);
     claudeAccountTouched = false;
     loadClaudeRanking(revision);
     tuningMemory.clear();
@@ -2524,6 +2526,8 @@
       if (submit && companyApiKind(selectedKind) && companyPick[selectedKind]?.source === 'company' && companyProxyStatus?.state !== 'running') submit.textContent = '公司模型准备中（首次约 10–20 秒）…';
       // 会话建没建成以「拿到会话」为准（session-create-outcome.js）：创建调用报错、但已收到带本次请求标识的
       // session-created 事件，也算建成；之后的附属步骤没成只给一行提示，不再报「创建失败」。
+      // 点「创建会话」这一刻选的负责人（创建要等几秒，期间改下拉不影响这一次）。
+      const leadChoice = window.LaunchLeadPicker?.selection() || null;
       const createRequestId = createOutcome.newCreateRequestId(window.crypto);
       const createdEvents = [];
       const onCreated = (_event, payload) => { if (payload && payload.createRequestId === createRequestId) createdEvents.push(payload); };
@@ -2540,6 +2544,8 @@
         require('./launch-last-workspace').remember(localStorage, { mode: workspaceMode, workspace });
         if (guardAvailable()) { if (guardChecked()) localStorage.setItem(GUARD_STORAGE_KEY, '1'); else localStorage.removeItem(GUARD_STORAGE_KEY); }
       } catch (error) { followup = followup || { step: 'remember', error }; }
+      // 选了负责人：作为成员挂到它名下（失败只提示，不影响已建好的会话）。
+      if (leadChoice && session?.id) { if (submit) submit.textContent = '加入负责人团队…'; await window.LaunchLeadPicker.attach(session, leadChoice); }
       if (!followup && session && session.createWarning) {
         followup = { step: session.createWarning.step || 'launch', error: new Error(session.createWarning.message || String(session.createWarning)) };
       }

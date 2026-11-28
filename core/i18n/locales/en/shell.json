@@ -499,5 +499,7 @@
   "规则 · 广场、资源、账号、回顾": "Rules · Plaza, Resources, Accounts, Review",
   "规则 · 广场、资源、账号、回顾；悬停展开": "Rules · Plaza, Resources, Accounts, Review; hover to expand",
   "广场 · 员工助手、AgentCenter 和本机各家 AI 的技能": "Plaza · skills from Employee Assistant, AgentCenter and local AIs",
-  "技能广场": "Skill Plaza"
+  "技能广场": "Skill Plaza",
+  "创建子会话…": "Create sub-session…",
+  "新建一个会话，作为这位负责人的成员": "Create a new session as a member of this lead's team"
 }

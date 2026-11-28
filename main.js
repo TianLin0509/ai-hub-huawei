@@ -3803,6 +3803,13 @@ if (require('./core/distribution').featureEnabled('leadTeam')) try {
     nodeExecutable: process.versions.electron ? process.execPath : 'node', runAsNode: !!process.versions.electron,
     script: path.join(__dirname, 'scripts', 'hub-team.js'),
   });
+  // 成员危险动作硬拦（2026-11-28 移植）：成员启动时叠加文件里挂上守卫 hook（和「只允许改工作目录内的文件」同一个入口），
+  // hook 经 /api/member-guard 问这里；负责人用 hub-team pass 放行。
+  const memberGuardModule = require('./main/team/member-guard');
+  global.__memberGuard = memberGuardModule.createMemberGuard({ getTeamService: () => global.__teamService,
+    getSession: id => sessionManager.getSession(id), hubDataDir: getHubDataDir(), isolated: isIsolatedHub(), getConfig: getHubConfig, logger: console });
+  global.__teamService.setMemberGuard?.(global.__memberGuard);
+  require('./core/workspace-guard').setMemberPredicate(id => !!memberGuardModule.memberLaunchInfo(global.__teamService, id));
   require('./main/ipc/team-handlers').registerTeamIpc(ipcMain, () => global.__teamService);
   global.__teamService.start();
 } catch (error) { console.error('[team] service unavailable:', error.message); }
@@ -4400,6 +4407,11 @@ const hookServer = http.createServer((req, res) => {
   const rawHookEvent = req.method === 'POST' && /^\/api\/hook-raw\/[a-z-]+$/.test(req.url)
     ? req.url.slice('/api/hook-raw/'.length) : null;
   if (rawHookEvent) req.url = '/api/hook/' + rawHookEvent;
+  // 组队成员危险动作硬拦（main/team/member-guard.js）：成员的同步 PreToolUse hook 原样转发载荷来问放不放行；出任何错都放行。
+  if (req.method === 'POST' && req.url === '/api/member-guard') {
+    require('./main/team/member-guard').handleHttp(req, res, { hookToken: HOOK_TOKEN, getGuard: () => global.__memberGuard });
+    return;
+  }
   const isHook = req.method === 'POST' && req.url.startsWith('/api/hook/');
   const isStatus = req.method === 'POST' && req.url === '/api/status';
   const isTeam = req.method === 'POST' && req.url === '/api/team';

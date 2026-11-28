@@ -1829,6 +1829,24 @@
 .msg-overlay .turn-card.user.team-notice[data-chat-style='message'] .chat-message-bubble { flex: 1 1 auto; min-width: 0; padding: 0; border: 0; border-radius: var(--hw-r-xs); background: var(--hw-surface-2); box-shadow: none; }
 .msg-overlay .turn-card.user.team-notice[data-chat-style='message']:has(.team-notice-fold[open]) .turn-content { align-items: stretch; }
 
+/* 相邻的团队消息合并成一组（来源 3dea7fba）：收起时只留组首一行「N 条 · 最新结论」，组员和夹在中间的「无新进展」先藏起来；
+   展开后组员按原顺序逐条显示、各自原文展开。renderer/notice-groups.js 加减这些 class。 */
+.msg-overlay > .turn-card.notice-group-member:not(.notice-group-open) { display: none; }
+.turn-card.notice-group-head:not(.notice-group-open) .turn-body,
+.turn-card.notice-group-head:not(.notice-group-open) .chat-message-bubble,
+.turn-card.notice-group-head:not(.notice-group-open) .chat-word-count,
+.turn-card.notice-group-head:not(.notice-group-open) .turn-who { display: none; }
+.notice-group-bar { flex: 1 1 auto; min-width: 0; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  padding: 2px 10px; border-radius: var(--hw-r-xs); background: var(--hw-surface-2); color: var(--hw-text-2);
+  font-family: var(--hw-font); font-size: var(--hw-fs-13); line-height: var(--hw-lh); }
+.notice-group-bar:hover, .notice-group-bar:focus-visible { color: var(--hw-text-1); outline: none; }
+.notice-group-caret { display: inline-block; width: 1em; color: var(--hw-text-3); }
+.notice-group-text { font-weight: 600; color: var(--hw-text-1); }
+.turn-card.notice-group-head.notice-group-open .notice-group-bar { white-space: normal; align-self: stretch; }
+.turn-card.notice-group-head.notice-group-open .turn-content { flex-direction: column; align-items: stretch; }
+/* 展开后组员左侧一条细线，看得出是同一组。 */
+.msg-overlay > .turn-card.notice-group-member.notice-group-open { box-shadow: inset 3px 0 0 var(--hw-line); }
+
 /* 2026-11-26 主题审视：卡片视图盖在终端上，但比终端容器矮 4px；暖米/紫留白/灰白三套的终端恒深，
    底边就露出一条黑横条（冷白的终端是浅色才没显出来）。卡片视图下终端容器不铺底，露出的是面板自己的底色。 */
 #terminal-panel.card-view-active > .terminal-container { background: transparent; }

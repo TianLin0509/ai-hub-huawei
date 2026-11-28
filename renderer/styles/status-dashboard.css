@@ -126,7 +126,7 @@
 #hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-claude { padding-right:0; border-bottom:0; }
 :root body #hub-system-footer:not([data-density='full']) #sidebar-strip :is(.strip-resources,.strip-network) { gap:6px; }
 :root body #hub-system-footer:not([data-density='full']) #sidebar-strip :is(.strip-transfer,.strip-route-domestic) { display:none; }
-:root body #hub-system-footer[data-density='minimal'] #sidebar-strip :is(.strip-location,.strip-gpu,.strip-disk) { display:none; }
+:root body #hub-system-footer[data-density='minimal'] #sidebar-strip :is(.strip-location,.strip-gpu,.strip-disk:not(.strip-resource-high)) { display:none; }
 :root body #hub-system-footer #sidebar-strip .strip-delay { flex:none; white-space:nowrap; }
 #footer-status-popover { position:fixed; z-index:2200; bottom:42px; right:8px; width:400px; max-width:calc(100vw - 16px); max-height:calc(100vh - 100px); box-sizing:border-box; overflow-y:auto; border:1px solid var(--border-mid); border-radius:10px; padding:14px; background:var(--surface-overlay); color:var(--fg-default); box-shadow:0 8px 26px rgba(20,35,55,.12); font:12px/1.7 var(--font-sans); }
 #footer-status-popover[hidden] { display:none; }
