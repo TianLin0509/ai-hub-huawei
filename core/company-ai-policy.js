@@ -15,10 +15,10 @@ function taskKindAllowed(kind) {
 }
 function assertTaskKind(kind) {
   assertKind(kind);
-  if (!taskKindAllowed(kind)) throw new Error('公司版造梦与组队只使用 CodeAgent；其他工具请从启动中心新建单会话。');
+  if (!taskKindAllowed(kind)) throw new Error('公司版造梦只使用 CodeAgent；其他工具请从启动中心新建单会话。');
 }
 // 群聊成员（2026-11-12 同事提出）：和启动中心的单会话一样可选 CodeAgent / Claude Code / Codex / DSH，默认仍是 CodeAgent。
-// 造梦与组队不变，仍只用 CodeAgent。
+// 造梦仍只用 CodeAgent。组队成员（R58b）另见 main/team/backends.js TEAM_MEMBER_KINDS，负责人仍只能是 CodeAgent。
 const COMPANY_GROUP_KINDS = ['codeagent', 'claude', 'codex', 'deepseek-acp'];
 function groupKindAllowed(kind) {
   return distribution.kindAllowed(kind)

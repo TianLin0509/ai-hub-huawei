@@ -3,9 +3,10 @@
 // 不需要额外配置。用法：
 //   hub-team status
 //   hub-team accounts
-//   accounts 返回号池 rows；用 account 指定账号，model 可选且须在该账号的 models 清单里。
+//   accounts 返回号池 rows、其他后端 backends 与混编配方 recommendedMix；CodeAgent 成员用 account 指定账号，其他后端写 kind、不写 account。
+//   kind 可选 codeagent / claude / codex / deepseek-acp（DSH，也可写 dsh）。
 //   省略 model 时沿用账号模型；不支持修改推理档位和速度。
-//   hub-team propose --plan-file 计划.json        计划：{"goal":"…","members":[{"role":"…","task":"…","account":"…","model":"…","cwd":"…","title":"…"}]}
+//   hub-team propose --plan-file 计划.json        计划：{"goal":"…","members":[{"role":"…","task":"…","kind":"codeagent|claude|codex|deepseek-acp","account":"…","model":"…","cwd":"…","title":"…"}]}
 //   hub-team send --to lead|m1 --message "…" [--wake|--no-wake] [--interrupt] [--deliver]
 //   hub-team send --to m1 --message-file 消息.md
 //   hub-team read --id 12（短号数字或 msg-xxx 长编号）读取完整原文；仅本队负责人和消息参与者可读
@@ -54,12 +55,14 @@ function buildRequest(argv) {
 }
 
 function post(body, env = process.env) {
-  const port = Number(env.CLAUDE_HUB_PORT), token = env.CLAUDE_HUB_TOKEN, sessionId = env.CLAUDE_HUB_SESSION_ID;
-  const teamToken = env.CLAUDE_HUB_TEAM_TOKEN;
-  const missing = ['CLAUDE_HUB_PORT', 'CLAUDE_HUB_TOKEN', 'CLAUDE_HUB_SESSION_ID', 'CLAUDE_HUB_TEAM_TOKEN'].filter(key => !env[key]);
+  // DSH 成员的终端会去掉名字带 TOKEN 的变量，Hub 另给了别名 CLAUDE_HUB_HOOK_AUTH / CLAUDE_HUB_TEAM_AUTH（core/acp-profiles.js）。
+  const token = env.CLAUDE_HUB_TOKEN || env.CLAUDE_HUB_HOOK_AUTH, teamToken = env.CLAUDE_HUB_TEAM_TOKEN || env.CLAUDE_HUB_TEAM_AUTH;
+  const port = Number(env.CLAUDE_HUB_PORT), sessionId = env.CLAUDE_HUB_SESSION_ID;
+  const missing = [['CLAUDE_HUB_PORT', env.CLAUDE_HUB_PORT], ['CLAUDE_HUB_TOKEN', token], ['CLAUDE_HUB_SESSION_ID', sessionId], ['CLAUDE_HUB_TEAM_TOKEN', teamToken]]
+    .filter(([, value]) => !value).map(([key]) => key);
   if (missing.length || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.reject(Error(
     `组队身份不可用：${missing.length ? '缺少 ' + missing.join(' / ') : 'CLAUDE_HUB_PORT 不是有效端口'}。` +
-    '请在 Hub 左侧栏新建或重新打开 CodeAgent PTY 会话后运行 status；CodeAgent-Lite（serve）、DSH 与外部终端目前未接通此组队入口。' +
+    '请在 Hub 左侧栏新建或重新打开 CodeAgent PTY 会话后运行 status；Hub 招来的成员（CodeAgent、Claude Code、Codex、DSH）启动时自动带身份，CodeAgent-Lite（serve）与外部终端目前未接通此组队入口。' +
     '若旧会话只缺 CLAUDE_HUB_TEAM_TOKEN，请重开该会话以注入身份。不要复制、打印或手工补写其他会话的令牌，无需重启整个 Hub。'));
   const data = Buffer.from(JSON.stringify({ ...body, token, sessionId, teamToken }), 'utf8');
   return new Promise((resolve, reject) => {

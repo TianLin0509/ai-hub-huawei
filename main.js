@@ -3770,7 +3770,7 @@ try {
   registerHelpAskIpc(ipcMain, helpAskService);
   app.on('will-quit', () => { helpAskService.dispose(); });
 } catch (error) { console.error('[help-ask] service unavailable:', error.message); }
-// 负责人组队：用户在侧栏批准后创建 CodeAgent 成员，命令安装在当前用户数据目录。
+// 负责人组队：用户在侧栏批准后创建成员（CodeAgent，或线路已配好的 Claude Code / Codex），命令安装在当前用户数据目录。
 if (require('./core/distribution').featureEnabled('leadTeam')) try {
   const teamCommand = path.join(getHubDataDir(), 'team', process.platform === 'win32' ? 'hub-team.cmd' : 'hub-team.sh');
   global.__teamService = require('./main/team/service').createTeamService({
@@ -3781,6 +3781,8 @@ if (require('./core/distribution').featureEnabled('leadTeam')) try {
     injectPrompt: createRunningInjector({ sessionManager, transcriptTap, groupChatWatcher: groupChatDispatcher.getGroupChatWatcher() }),
     restartSession: id => sessionOperations.restartSession(id),
     listAccounts: () => require('./main/team/codeagent-accounts').listTeamAccounts({ dataDir: getHubDataDir(), sessionManager }),
+    // CodeAgent 以外的成员后端：装没装、线路配没配、可选模型（只读本机检测结论和设置）。
+    listBackends: () => require('./main/team/backends').listTeamBackends({ config: getHubConfig(), dataDir: getHubDataDir() }),
     commandPath: () => teamCommand,
     // 2026-11-18：负责人招人默认按规则自动批准；设置里「负责人组队自动批准」（config team.autoApproveLeads=false）可关。
     getConfig: getHubConfig, autoApproveLeadsDefault: true,

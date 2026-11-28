@@ -15,5 +15,15 @@
   "中转参数已保存备用；当前订阅模式不会读取或发送中转 Key。": "Relay settings are saved for later; subscription mode never reads or sends the relay key.",
   "新建会话选「默认工作目录」时开在这里，保存后下一个新会话生效；已有会话不动。": "New sessions that choose Default working directory open here; applies to the next new session after saving, existing sessions are unchanged.",
   "未配置飞书接收对象，点击进入设置": "No Feishu recipient set; click to open Settings",
-  "关闭提示": "Dismiss"
+  "关闭提示": "Dismiss",
+  "不点名账号 · {0}": "No account named · {0}",
+  "这台电脑上不可用": "Not available on this computer",
+  "没有就绪": "Not ready",
+  "沿用线路默认模型": "Route default model",
+  "沿用线路默认模型 · {0}": "Route default model · {0}",
+  "逐个开成员会话": "Opening member sessions one by one",
+  "公司模型（CodeAgent 账号，经本机反代）": "Company models (CodeAgent account via the local proxy)",
+  "API 网关（部门 key，经本机反代）": "API gateway (department key via the local proxy)",
+  "自有接口（用户自己的 API）": "Own endpoint (your own API)",
+  "本机 CLI 自带配置": "Local CLI configuration"
 }

@@ -1,18 +1,18 @@
 ---
 name: company-team
-description: 用户说组队、开几个会话并行做、分给几个人做或当负责人时，在公司版 AI Hub 用 hub-team propose 创建显式侧栏成员；当前 CodeAgent 会话当负责人，从 accounts 选账号和模型，默认自动批准。支持一句话拆分、自动 worktree、任务派发、交付验收和接力。单人很快能做完的任务不组队。
+description: 用户说组队、开几个会话并行做、分给几个人做或当负责人时，在公司版 AI Hub 用 hub-team propose 创建显式侧栏成员；当前 CodeAgent 会话当负责人，成员可用 CodeAgent 或已就绪的 Claude Code、Codex、DSH，按 accounts 的混编配方选后端、账号和模型，默认自动批准。支持一句话拆分、自动 worktree、任务派发、交付验收和接力。单人很快能做完的任务不组队。
 ---
 
-# 公司版组队（CodeAgent 多会话协作）
+# 公司版组队（多会话协作）
 
-v0.6.0 · 随 AI Hub 安装。修正调用、模型选择与批准口径，相同计划 10 分钟去重。
+v0.7.0 · 随 AI Hub 安装。成员可用 CodeAgent 以外的后端（Claude Code、Codex、DSH），accounts 返回各后端就绪情况与混编配方；负责人仍是 CodeAgent。
 
 ## 一句话起显式侧栏团队（用户点名组队时照做）
 
 用户说「组个队 / 找几个人 / 并行做」加上一句任务描述时：
 
 1. 用户要组队或并行拆活时，用 `hub-team propose` 创建成员，让用户在左侧栏看到、点开和追问。你自带的 `Task`、`subagent`（子任务）工具只用于你自己做事，不算用户要的侧栏团队。按独立模块定 2–4 人，用户指定人数就按指定；能安全假设的细节先做并说明，不再劝用户单干。
-2. 跑一次 `status` 确认组队可用，再跑 `accounts`；未点名模型时可省略 `account / model`，有选型要求按第 2 节从账号清单选择。
+2. 跑一次 `status` 确认组队可用，再跑 `accounts`；按返回的 `recommendedMix` 配队（2 人以上建议至少 1 名非 CodeAgent 成员，建议不强制）；未点名模型时可省略 `account / model`，有选型要求按第 2 节选择。
    首屏即可复制运行（PowerShell）：
    ```powershell
    $hubData = $env:CLAUDE_HUB_DATA_DIR
@@ -63,7 +63,7 @@ v0.6.0 · 随 AI Hub 安装。修正调用、模型选择与批准口径，相�
 - 可用动作只有：`status`、`accounts`、`propose`、`send`、`read`、`allow`、`restart`、`dismiss`。
 - 身份由当前会话的环境变量自动提供。不要让用户复制任何令牌，不在消息、日志、文件里打印令牌，也不借用别的会话的身份。
 - 先跑一次 `status`，看到团队信息或「你还不在任何团队里」才算可用；无输出、超时、报错都不算。不可用就告诉用户，改为单会话继续。只改说明、讨论方案或做只读检查时，不必招人。
-- 缺身份时切到 Hub 内 CodeAgent PTY 会话；CodeAgent-Lite serve、DSH、外部终端尚未接通此入口。旧会话缺身份就重新打开该会话，不必重启整个 Hub，不复制其他会话令牌。
+- 负责人只能是 Hub 内 CodeAgent PTY 会话。成员是 Hub 建的 CodeAgent、Claude Code、Codex、DSH 会话时身份自动注入；CodeAgent-Lite serve、外部终端尚未接通此入口。旧会话缺身份就重新打开该会话，不必重启整个 Hub，不复制其他会话令牌。
 
 ## 1. 值不值得组队
 
@@ -77,13 +77,26 @@ v0.6.0 · 随 AI Hub 安装。修正调用、模型选择与批准口径，相�
    - `recommendedId`：推荐账号；
    - `rows`：每个号一行，字段有 `id`、`label`、`state`、`usable`、`activeSessions`、`models`、`modelsAuthoritative`、`defaultModel`，不可用时附原因。
 
+   - `backends`：CodeAgent 以外的后端，每个一行，字段有 `kind`、`label`、`use`（适合做什么）、`installed`、`route` 与 `routeLabel`（走哪条线路）、`companyRoute`（是否走公司模型或 API 网关，不花用户自己的钱）、`ready`、`models`、`defaultModel`，不可用时附 `unavailableReason`；
+   - `recommendedMix`：Hub 按本机已就绪且走公司线路的后端给出的配队建议，`slots` 写每个位置建议用哪个后端，`note` 是一句话说明。
+
    选号只看 `usable=true`，同一个号上的会话越少越好。号池没有额度百分比，不要估算余量。同一账号上多开会话共享该账号的限额，只有分到不同账号才可能分摊。
 
    `rows` 里 `id` 为 `personal` 的一行是个人账号。号池没有可用号时，`recommendedId` 就是它，只有一个号也能直接组队。选了它要告诉用户：这些成员和你共用同一个号的额度与并发，人多会变慢；想更快可以在号池再登一个别的号。个人账号上同时最多 3 位成员在干活，其余成员的消息自动排队，不用重新提交。
+   **各后端用途**（计划里用 `kind` 选后端，不写就是 `codeagent`）：
+
+   | kind | 后端 | 适合 | 账号与模型 |
+   |---|---|---|---|
+   | `codeagent` | CodeAgent | 默认主力：实现、改代码、用公司内网工具 | `account` 从 `rows` 选，`model` 从该号 `models` 选 |
+   | `claude` | Claude Code | 异构审查、方案复核、长文档归纳 | 不写 `account`；`model` 从 `backends` 里它的 `models` 选或省略 |
+   | `codex` | Codex | 异构审查、代码复核与补测试 | 同上 |
+   | `deepseek-acp`（可写 `dsh`） | DSH | 异构审查与推理复核；只在 `companyRoute=true`（公司模型或 API 网关）时进配方 | 同上 |
+
+   只招 `ready=true` 的后端；`ready=false` 的按 `unavailableReason` 告诉用户怎么补，本次改用 CodeAgent。用户点名的后端优先；没有理由不偏离 `recommendedMix`，偏离时在该成员的 `task` 里写一句理由。
 2. **写计划文件**（UTF-8 JSON），再 `propose --plan-file 计划.json`：
    ```json
    {"goal":"这批人一起要完成什么",
-    "members":[{"role":"分工（边界）","task":"开工任务，长的写任务书路径","title":"侧栏显示名","cwd":"工作目录","account":"号池账号 id","model":"模型"}]}
+    "members":[{"role":"分工（边界）","task":"开工任务，长的写任务书路径","title":"侧栏显示名","cwd":"工作目录","kind":"codeagent","account":"号池账号 id","model":"模型"}]}
    ```
    例如 `accounts` 当前返回同一可用账号的 `models` 含 `deepseek-v4-flash-0731` 和 `GLM-5.2-WX-Auto` 时，可直接写：
    ```json
@@ -91,11 +104,17 @@ v0.6.0 · 随 AI Hub 安装。修正调用、模型选择与批准口径，相�
      {"role":"资料调研","task":"阅读当前项目文档，写出现状与风险清单；选择 DeepSeek 做归纳和推理","title":"调研-DeepSeek","model":"deepseek-v4-flash-0731"},
      {"role":"方案对比","task":"独立比较两种实现方案，给出代价与推荐；选择 GLM 做异构复核","title":"对比-GLM","model":"GLM-5.2-WX-Auto"}]}
    ```
+   `recommendedMix` 建议审查位用 Claude Code 时，一实现一审查可写：
+   ```json
+   {"goal":"实现并独立审查导出功能","members":[
+     {"role":"实现","task":"按任务书实现导出功能并自测；CodeAgent 能用公司内网工具","title":"实现-CodeAgent"},
+     {"role":"独立审查","task":"审查实现成员的改动，对照需求找缺陷；按混编配方用 Claude Code 做异构审查","title":"审查-Claude","kind":"claude"}]}
+   ```
    样例的模型名只在本次 `accounts.models` 确实包含时照用；否则替换为清单中的实际名称。`cwd` 不写就用当前负责人目录，`account` 不写由 Hub 推荐，不编路径或账号。
-   - 支持字段：顶层 `goal / members`，成员 `role / task / title / cwd / account / model / fresh / worktree`；每人必须写 `role / task`，`cwd` 要已存在。`worktree:false` 不自动建副本，`fresh:true` 禁止叫回老成员。**不要写 `effort / fastMode / speed / codexSpeedTier / kind`；`race / access` 尚未支持。**
-   - `account` 可省略，省略时用 `recommendedId`。号池和个人账号都不可用时才会报错。
+   - 支持字段：顶层 `goal / members`，成员 `role / task / title / cwd / kind / account / model / fresh / worktree`；每人必须写 `role / task`，`cwd` 要已存在。`worktree:false` 不自动建副本，`fresh:true` 禁止叫回老成员。**不要写 `effort / fastMode / speed / codexSpeedTier`；`race / access` 尚未支持。**
+   - CodeAgent 成员的 `account` 可省略，省略时用 `recommendedId`，号池和个人账号都不可用时才会报错。其他后端不写 `account`，按启动中心配好的线路启动。
    - `model` 可省略，沿用该号 `defaultModel`；指定时从该号 `models` 选。清单外模型会进入共享模型校验/确认流程，不保证可用，不能凭记忆编型号。
-   - DeepSeek、GLM 都是 CodeAgent 的 `model`，不是 `kind`。复杂推理、代码定位可优先选清单中适合的 DeepSeek；常规实现选合适的 GLM 等，独立审查尽量与作者异构。用户点名的模型优先，选型理由写在 `task`，不新增字段。
+   - DeepSeek、GLM 都是 CodeAgent 的 `model`，不是 `kind`；`kind` 只用来选后端（上表）。复杂推理、代码定位可优先选清单中适合的 DeepSeek；常规实现选合适的 GLM 等，独立审查尽量与作者异构。用户点名的模型优先，选型理由写在 `task`，不新增字段。
    - 模型下线/无权限：先看返回的降级说明与 `status.error`，再从 `accounts.models` 选可用模型。服务仅对明确模型不可用尝试账号默认模型并告知负责人；不要把登录/网络失败当成模型问题。无可用号时在左侧栏「账号」恢复登录或启用账号，先推进单会话可做部分，不反复重发。
    - 在每人的 `task` 里写一句选这个模型的理由（按第 4 节），不新增计划字段，供用户批准时判断。
 3. **批准**。公司版默认开着「负责人组队自动批准」：账号和模型按号池校验通过，`propose` 直接返回 `status: approved` 并开始建成员，不用等用户。用户在设置里关掉后，提交的计划处于「待批准」（返回 `status: pending`），这时回复用户：「请在侧栏本会话那一行点『待批准』，可逐人修改账号和模型。」

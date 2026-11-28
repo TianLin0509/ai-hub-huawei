@@ -14,19 +14,21 @@ const TEAM_GUIDE = [
   '用户要组队、开几个会话并行、把活分给几个人做，或让你当负责人时：',
   '1. 先读内置技能 company-team，按其中步骤办；',
   '2. 用 Hub 的组队命令 hub-team（Hub 数据目录下 team\\hub-team.cmd）：先跑 status、accounts，再写计划文件执行 propose，成员会出现在左侧栏，用户点开就能追问；',
-  '3. 你自带的子任务工具只用于你自己干活，不算用户要的团队。',
+  '3. 你自带的子任务工具只用于你自己干活，不算用户要的团队；',
+  '4. 成员可用 CodeAgent 或 backends 里已就绪的后端，按 recommendedMix 配队。',
   '单人很快能做完的任务照常自己做。',
   'When the user asks to form a team, run several sessions in parallel, split work among several people, or make you the lead:',
   '1. Read the built-in company-team skill and follow its steps.',
   '2. Use the Hub team command hub-team (team\\hub-team.cmd under the Hub data directory): run status and accounts, then write a plan file and run propose; members appear in the left sidebar where the user can open them.',
   '3. Your own sub-task tools are for your own work and do not count as the team the user asked for.',
+  '4. Members can be CodeAgent or any ready backend listed under backends in accounts; follow recommendedMix when staffing.',
   'Small tasks one session can finish quickly stay with you.',
 ].join('\n');
 const GUIDE_VERSION = createHash('sha256').update(TEAM_GUIDE, 'utf8').digest('hex').slice(0, 12);
 
 // { label, text, version }；不该带时返回 null。Returns null when the session should not carry the guide.
 function teamGuideFor({ kind, purpose, hubTeamMember, meetingId } = {}) {
-  // HUB-H 组队只支持 CodeAgent，company-team 技能也只装在 CodeAgent 号池里。Team flow is CodeAgent-only.
+  // 负责人只能是 CodeAgent，company-team 技能也只装在 CodeAgent 号池里；成员可用其他后端（R58b）。The lead must be CodeAgent.
   if (!require('./ai-kinds').isCodeAgentKind(String(kind || ''))) return null;
   if (hubTeamMember) return null;
   // 群聊成员（会议室里的会话）是被叫来回答的，不自己组队。Group-chat members answer in the room; they do not form teams.

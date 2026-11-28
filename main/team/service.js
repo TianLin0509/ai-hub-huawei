@@ -21,6 +21,7 @@ const STALL_MS = 10 * 60 * 1000;
 const MISSING_ALERT_MS = 3 * 60 * 1000;
 const RETRY_BACKOFF_MS = [60 * 1000, 3 * 60 * 1000, 10 * 60 * 1000];
 const { PERSONAL_ACCOUNT_ID, PERSONAL_SHARED_NOTE } = require('./codeagent-accounts');
+const TeamBackends = require('./backends');
 const MemberWorktree = require('./member-worktree');
 const RESTART_COOLDOWN_MS = 30 * 60 * 1000;
 const NOWAKE_MAX_AGE_MS = 20 * 60 * 1000;
@@ -52,12 +53,14 @@ const SUSPEND_RETRY_ERRORS = ['pty-turn-unfinished', 'native-turn-unfinished', '
 const newId = prefix => `${prefix}-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
 
 function createTeamService(deps) {
-  const allowedKinds = ['codeagent'];
+  // 成员后端（R58b）：CodeAgent 走号池；其他后端按启动中心配好的线路启动，不点名账号。负责人仍只能是 CodeAgent。
+  // Member kinds: CodeAgent uses the pool; other backends start on the launch-center route. The lead stays CodeAgent.
+  const allowedKinds = ['codeagent', ...TeamBackends.TEAM_MEMBER_KINDS];
   const approver = '用户';
   const {
     getHubDataDir, sessionManager, sendToRenderer = () => {}, logger = console, now = () => Date.now(),
     createSession, submitPrompt, injectPrompt = null, restartSession = null, reconcileTurn = null,
-    listAccounts = () => ({ rows: [] }), commandPath = () => '', wakeSession = null,
+    listAccounts = () => ({ rows: [] }), listBackends = () => [], commandPath = () => '', wakeSession = null,
     getConfig = () => ({}),
     // 运行表里没有的会话，侧栏是否登记为可恢复（休眠）；用户主动关闭的返回 false。未接入时一律按不在运行处理。
     isResumable = () => false,
@@ -261,26 +264,43 @@ function createTeamService(deps) {
   function rejectTuning(raw) {
     const fields = ['model', 'effort', 'codexSpeedTier', 'fastMode', 'speed']
       .filter(key => key !== 'model' && Object.hasOwn(raw || {}, key));
-    if (fields.length) throw Error(`公司组队计划只支持选择账号和模型，不能指定 ${fields.join(' / ')}；去掉这些字段。如需指定 DeepSeek 模型，请先跑 accounts，从该账号的 models 中选择并填写 model 字段；不要用 effort、fastMode 或 kind 选模型`);
+    if (fields.length) throw Error(`公司组队计划只支持选择账号和模型，不能指定 ${fields.join(' / ')}；去掉这些字段。如需指定 DeepSeek 模型，请先跑 accounts，从该账号的 models 中选择并填写 model 字段；不要用 effort、fastMode 选模型`);
   }
   function normalizePlan(args, team, checkCapacity = true) {
     rejectTuning(args);
     const goal = String(args.goal || '').trim();
     const list = Array.isArray(args.members) ? args.members : [];
     if (!goal) throw Error('计划要写 goal：这批人一起要完成什么');
-    if (!list.length) throw Error('计划至少招 1 人：members 是数组，每项写 role、task，可选 title、cwd、account、model');
+    if (!list.length) throw Error('计划至少招 1 人：members 是数组，每项写 role、task，可选 title、cwd、kind、account、model');
     const active = occupiedSlots(team);
     if (checkCapacity && active + list.length > MAX_MEMBERS) throw Error(`每位负责人最多 ${MAX_MEMBERS} 名成员（现有 ${active} 名）`);
     const accountList=listAccounts();
+    let backendList=null;
+    const backendOf=kind=>(backendList||(backendList=listBackends()||[])).find(b=>b.kind===kind);
     return { goal, members: list.map((raw, i) => {
       rejectTuning(raw);
       const role = String(raw?.role || '').trim(), task = String(raw?.task || '').trim();
-      const kind = String(raw?.kind || 'codeagent').trim();
+      const kind = TeamBackends.resolveKind(raw?.kind || 'codeagent');
       if (!role || !task) throw Error(`第 ${i + 1} 人要写 role（分工）和 task（开工任务，可写任务书路径）`);
-      if (!allowedKinds.includes(kind)) throw Error(`第 ${i + 1} 人的 kind 只能是 ${allowedKinds.join(' / ')}；请去掉 kind。如需指定 DeepSeek 模型，请先跑 accounts，从该账号的 models 中选择并填写 model 字段`);
-      let account = String(raw?.account || accountList.recommendedId || '').trim();
+      if (!allowedKinds.includes(kind)) throw Error(`第 ${i + 1} 人的 kind「${String(raw?.kind)}」不可用；可选 ${allowedKinds.join(' / ')}，不写就是 codeagent。DeepSeek、GLM 等模型写在 CodeAgent 成员的 model 里，先跑 accounts 从账号 models 中选`);
+      let account = kind === 'codeagent' ? String(raw?.account || accountList.recommendedId || '').trim() : '';
       let model='';
-      {
+      if (kind !== 'codeagent') {
+        // 非 CodeAgent：按启动中心配好的线路启动，不点名账号；模型从这条线路的模型表选。
+        const label = TeamBackends.LABELS[kind] || kind, backend = backendOf(kind);
+        if (String(raw?.account || '').trim()) throw Error(`第 ${i + 1} 人的 ${label} 不点名账号：它按启动中心配好的线路启动；把 account 删掉再提交`);
+        if (!backend) throw Error(`第 ${i + 1} 人的 ${label} 在这台电脑上不可用；先跑 accounts 看 backends，或改用 CodeAgent`);
+        if (!backend.ready) throw Error(`第 ${i + 1} 人的 ${label} 还不能用：${backend.unavailableReason || '没有就绪'}；先跑 accounts 看 backends，或改用 CodeAgent`);
+        model = String(raw?.model || '').trim();
+        if (model && !require('../../core/codeagent-models').isSafeModelId(model)) throw Error(`第 ${i+1} 人的模型名称无效`);
+        if (model) {
+          const same = require('../../core/model-name-match').findSame(model, backend.models || []);
+          if (!same) throw Error((backend.models || []).length
+            ? `第 ${i + 1} 人的模型 ${model} 不在 ${label} 这条线路（${backend.routeLabel}）的可选模型里；从 accounts 的 backends.models 选：${backend.models.slice(0, 12).join(' / ')}`
+            : `第 ${i + 1} 人的 ${label} 沿用${backend.routeLabel}，计划里不能指定模型；把 model 删掉再提交`);
+          model = same;
+        }
+      } else {
         const rows=accountList.rows || [];
         let row=rows.find(a=>a.id===account);
         // 点名的号和个人账号（或号池里另一个号）是同一个人：换成那个本尊，单号也能组队，不再报「重复」。
@@ -470,17 +490,19 @@ function createTeamService(deps) {
         // 等 git 期间 Hub 开始关闭：不再建会话，名额留 creating，重启时按 interrupted 通知负责人（Codex 审查 P1）。
         if (frozen) break;
         // hubTeamMember：成员的系统提示不带组队指路（core/team-guide.js），成员不能再招人。Members skip the team guide.
+        const codeagent = spec.kind === 'codeagent';
         const opts = { cwd: worktree?.path || baseCwd, title: spec.title, workspaceLabel: spec.title, openInBackground: true, hubTeamMember: true,
-          ...(spec.account === PERSONAL_ACCOUNT_ID ? { codeagentAccount: 'personal' } : { codeagentAccount: 'pool', codeagentPoolPick: spec.account }),
+          ...(!codeagent ? {} : spec.account === PERSONAL_ACCOUNT_ID ? { codeagentAccount: 'personal' } : { codeagentAccount: 'pool', codeagentPoolPick: spec.account }),
           modelCreationContext: `负责人 ${lead?.title || leadSid} / 新成员 ${spec.title || spec.role}` };
-        if (spec.model) { opts.model = spec.model; opts.codeagentModelPick = true; }
+        if (spec.model) { opts.model = spec.model; if (codeagent) opts.codeagentModelPick = true; }
         let session;
         try { session = await createSession({ kind: spec.kind, opts }); }
         catch (error) {
           // 指定的模型没选上不让成员缺席：退回账号默认模型再建一次，并给负责人一行说明；默认模型也建不成才算失败。
           // 只有明确的「模型不可用」才退回默认模型；登录、CLI 启动、目录与权限等错误原样报出。
           // 用户在模型确认里点了取消（或确认界面中途丢失）是明确的「不建」，照旧不建。
-          if (!spec.model || frozen || error?.notCreated || error?.stopped || !modelUnavailable(error)) throw error;
+          // 退回默认模型只对 CodeAgent：其他后端的模型表来自它这条线路，选不中原样报出。
+          if (!codeagent || !spec.model || frozen || error?.notCreated || error?.stopped || !modelUnavailable(error)) throw error;
           const { model: _model, codeagentModelPick: _pick, ...plain } = opts;
           session = await createSession({ kind: spec.kind, opts: plain });
           modelFallbacks.push(`${spec.title}：模型 ${spec.model} 没选上（${String(error?.message || error).slice(0, 120)}），已用账号默认模型建会话`);
@@ -521,7 +543,7 @@ function createTeamService(deps) {
   function kickoff(team, member, spec, plan) {
     const cmd = commandPath();
     return [
-      `【组队开工 · 来自负责人】你是成员 ${member.memberId}，分工：${spec.role}。`,
+      `【组队开工 · 来自负责人】你是成员 ${member.memberId}（${TeamBackends.LABELS[spec.kind] || spec.kind}），分工：${spec.role}。`,
       `团队目标：${plan.goal}`,
       `你的任务：${spec.task}`,
       '',
@@ -1154,7 +1176,12 @@ function createTeamService(deps) {
 
   function accounts() {
     const list = listAccounts();
-    return { ...list, note: 'id 填进计划 account，model 从该账号 models 清单选择；省略 model 沿用账号设置。用户在批准时可改账号和模型。'
+    let backends = [];
+    try { backends = listBackends() || []; } catch (error) { logger.warn?.('[team] 读取其他后端失败', error.message); }
+    return { ...list, backends, recommendedMix: TeamBackends.recommendedMix(backends),
+      note: 'rows 是 CodeAgent 号池：id 填进计划 account，model 从该账号 models 清单选择；省略 model 沿用账号设置。'
+      + 'backends 是其他后端：计划里写 kind（如 claude），不写 account，model 从该后端 models 选或省略；只招 ready=true 的。'
+      + '按 recommendedMix 配队（建议，不强制）。用户在批准时可改账号和模型。'
       + (list.recommendedId === PERSONAL_ACCOUNT_ID ? `号池没有可用号，成员会用个人账号：${PERSONAL_SHARED_NOTE}。` : '') };
   }
   return { start, stop, invoke, decide, accounts, listTeams, teamOfLead, teamOfMember, flush: lead => { const t = teamOfLead(lead); return t ? flush(t) : null; },

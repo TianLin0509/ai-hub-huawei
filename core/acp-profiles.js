@@ -4,6 +4,11 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 
 const ACP_KINDS = ['qwen', 'deepseek-acp', 'glm'];
+const HUB_TEAM_ENV_KEYS = Object.freeze(['CLAUDE_HUB_SESSION_ID', 'CLAUDE_HUB_PORT', 'CLAUDE_HUB_TOKEN', 'CLAUDE_HUB_TEAM_TOKEN', 'CLAUDE_HUB_DATA_DIR']);
+// DSH 给命令工具起子进程时，会去掉名字像凭据的变量（@deepseek-ai/dsh-subprocess：/KEY|PASSWORD|SECRET|TOKEN/i），
+// 两个令牌到了成员的终端里就没了。另用这两个别名再给一份，scripts/hub-team.js 缺原名时读它们。
+// 只给本会话自己的身份；R58b 真机实测（DSH 0.2.2-rc.5）原名确实被清掉。
+const HUB_TEAM_ENV_ALIASES = Object.freeze({ CLAUDE_HUB_TOKEN: 'CLAUDE_HUB_HOOK_AUTH', CLAUDE_HUB_TEAM_TOKEN: 'CLAUDE_HUB_TEAM_AUTH' });
 const PLAN_BASE_URL = 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
 const { HARNESS_LABELS: LABELS } = require('./ai-kinds');
 // 终端里跑、由 Hub 观察扩展报状态的 provider CLI（不走 ACP 协议，但会话记录、恢复、卡片走同一套 acpSid / cliRuntime 管道）。
@@ -156,9 +161,14 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   fs.mkdirSync(home, { recursive: true });
   const env = { ...baseEnv, HOME: home, USERPROFILE: home };
   for (const name of Object.keys(env)) {
-    if (/API_KEY|AUTH_TOKEN|CODEX_THREAD|CODEX_SESSION|CLAUDE_HUB_(TOKEN|PORT|SESSION)|AI_TEAM_HUB_CALLBACK/.test(name)
+    if (/API_KEY|AUTH_TOKEN|CODEX_THREAD|CODEX_SESSION|CLAUDE_HUB_(TEAM_TOKEN|TOKEN|PORT|SESSION|HOOK_AUTH|TEAM_AUTH)|AI_TEAM_HUB_CALLBACK/.test(name)
         || /^(ZCODE_|DSH_|QWEN_|CODEX_)/.test(name)
         || ['AI_HUB_TOKEN_PLAN_KEY','ELECTRON_RUN_AS_NODE','NODE_OPTIONS','CLAUDECODE','CLAUDE_CONFIG_DIR'].includes(name)) delete env[name];
+  }
+  // Hub 招来的 DSH 组队成员（R58b）：补回本会话自己的组队身份，成员才能跑 hub-team send 交回执。只认这几项，别的照样清掉。
+  if (kind === 'deepseek-acp' && opts.hubTeamEnv && typeof opts.hubTeamEnv === 'object') {
+    for (const name of HUB_TEAM_ENV_KEYS) if (typeof opts.hubTeamEnv[name] === 'string' && opts.hubTeamEnv[name]) env[name] = opts.hubTeamEnv[name];
+    for (const [name, alias] of Object.entries(HUB_TEAM_ENV_ALIASES)) if (env[name]) env[alias] = env[name];
   }
   let args = [entry.entryPath];
   let authMethod;

@@ -121,8 +121,12 @@
   async function accounts() {
     const r = await ipcRenderer.invoke('team:accounts');
     if (!r?.ok) throw Error(r?.error || '号池读取失败');
-    return r.result.rows || [];
+    return { rows: r.result.rows || [], backends: r.result.backends || [] };
   }
+  // 成员后端的显示名（R58b：公司版组队成员可用 Claude Code、Codex）。
+  const KIND_LABELS = { codeagent: 'CodeAgent', claude: 'Claude Code', codex: 'Codex', 'deepseek-acp': 'DSH' };
+  const kindLabel = kind => KIND_LABELS[kind] || kind || 'CodeAgent';
+  const isCodeAgentMember = kind => !kind || kind === 'codeagent';
   function accountText(a) {
     return `${a.label || a.id} · ${a.activeSessions || 0} 个会话${a.usable ? '' : ' · ' + (a.unavailableReason || '暂不可用')}`;
   }
@@ -134,12 +138,14 @@
     return `${parts ? parts[2] + ' · ' : ''}${tail} · ${a.usable ? '可用' : (a.unavailableReason || '不可用')}`;
   }
 
-  function updatePlanSummary(opened, accountOptions = []) {
+  function updatePlanSummary(opened, accountOptions = [], backends = []) {
     const selected = [...opened.querySelectorAll('[data-team-account]')].map(sel => sel.value).filter(Boolean);
     const models = new Map();
     opened.querySelectorAll('[data-team-model]').forEach(sel => {
-      const account = opened.querySelector(`[data-team-account="${sel.dataset.teamModel}"]`)?.value;
-      const model = sel.value || accountOptions.find(a => a.id === account)?.defaultModel || '沿用账号模型';
+      const accountSel = opened.querySelector(`[data-team-account="${sel.dataset.teamModel}"]`);
+      const account = accountSel?.value, kind = accountSel?.dataset.teamKind;
+      const model = sel.value || (isCodeAgentMember(kind) ? accountOptions.find(a => a.id === account)?.defaultModel || '沿用账号模型'
+        : backends.find(b => b.kind === kind)?.defaultModel || '沿用线路默认模型');
       models.set(model, (models.get(model) || 0) + 1);
     });
     const items = [...models].map(([model, count]) => `${model} × ${count}`);
@@ -163,7 +169,7 @@
       const [firstTask, ...taskRest] = String(m.task || '').split(/\r?\n/);
       return `<section class="team-member" style="--team-accent:var(${['--hw-brand', '--hw-tint-meet', '--hw-tint-assist'][i % 3]})">
         <div class="team-member-head"><span class="team-member-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5" fill="currentColor"/><circle cx="17" cy="9" r="2.6" fill="currentColor"/><path d="M2 20c0-4 3-6 7-6s7 2 7 6zM16 14c3 0 6 1.6 6 5h-4" fill="currentColor"/></svg></span>
-          <div class="team-member-heading"><b>${esc(m.role || m.title)}</b><div class="team-sub">${m.title && m.title !== m.role ? esc(m.title) + ' · ' : ''}${m.kind === 'codeagent' ? 'CodeAgent' : esc(m.kind)}</div></div><span class="team-col-no">${i + 1}</span></div>
+          <div class="team-member-heading"><b>${esc(m.role || m.title)}</b><div class="team-sub">${m.title && m.title !== m.role ? esc(m.title) + ' · ' : ''}${esc(kindLabel(m.kind))}</div></div><span class="team-col-no">${i + 1}</span></div>
         <div class="team-task"><strong>${esc(firstTask)}</strong>${taskRest.length ? '\n' + esc(taskRest.join('\n')) : ''}</div>
         <div class="team-workdir" title="${esc(m.cwd || '与负责人相同目录')}">${esc(m.cwd || '与负责人相同目录')}</div>
         <div class="team-member-fields"><label><span>账号</span><select data-team-account="${i}" data-team-kind="${esc(m.kind)}">${options}</select><div class="team-sub" data-team-account-hint="${i}" hidden></div></label>
@@ -192,7 +198,7 @@
       const wait = require('./wait-progress');
       let stopTick = () => {};
       if (approve) {
-        act.innerHTML = wait.waitHtml({ label: `正在建 ${plan.members.length} 个会话`, from: Date.now(), hint: '逐个开 CodeAgent 会话' });
+        act.innerHTML = wait.waitHtml({ label: `正在建 ${plan.members.length} 个会话`, from: Date.now(), hint: '逐个开成员会话' });
         stopTick = wait.startWaitTicker(() => act);
       } else act.textContent = '正在驳回…';
       const r = await ipcRenderer.invoke('team:decide', { leadSid, planId: plan.id, approve, note: modal.querySelector('[data-team-note]').value, edits });
@@ -208,15 +214,34 @@
     const opened = modal;
     updatePlanSummary(opened);
     modal.querySelector('[data-team-act="approve"]').disabled=true;
-    accounts().then(accountOptions => {
+    accounts().then(({ rows: accountOptions, backends }) => {
       if (modal !== opened) return;
-      if(!accountOptions.length)throw Error('号池里还没有账号，请先在账号管理里添加账号。');
+      const selects = [...opened.querySelectorAll('select[data-team-account]')];
+      if(!accountOptions.length && selects.some(sel => isCodeAgentMember(sel.dataset.teamKind)))throw Error('号池里还没有账号，请先在账号管理里添加账号。');
+      const backendOf = sel => backends.find(b => b.kind === sel.dataset.teamKind);
       const updateApproval = () => {
-        opened.querySelector('[data-team-act="approve"]').disabled = [...opened.querySelectorAll('select[data-team-account]')]
-          .some(sel => !accountOptions.some(a => a.id === sel.value && a.usable));
-        updatePlanSummary(opened, accountOptions);
+        opened.querySelector('[data-team-act="approve"]').disabled = selects
+          .some(sel => isCodeAgentMember(sel.dataset.teamKind) ? !accountOptions.some(a => a.id === sel.value && a.usable) : !backendOf(sel)?.ready);
+        updatePlanSummary(opened, accountOptions, backends);
       };
-      modal.querySelectorAll('select[data-team-account]').forEach(sel => {
+      // 非 CodeAgent 成员不点名账号，按启动中心配好的线路启动；模型从这条线路的模型表选。
+      selects.filter(sel => !isCodeAgentMember(sel.dataset.teamKind)).forEach(sel => {
+        const i = sel.dataset.teamAccount, backend = backendOf(sel), model = opened.querySelector(`[data-team-model="${i}"]`);
+        const chosen = model.value;
+        sel.innerHTML = `<option value="">${esc(backend ? '不点名账号 · ' + backend.routeLabel : '这台电脑上不可用')}</option>`;
+        sel.value = ''; sel.disabled = true;
+        const hint = opened.querySelector(`[data-team-account-hint="${i}"]`);
+        hint.textContent = backend && !backend.ready ? (backend.unavailableReason || '没有就绪') : '';
+        hint.hidden = !hint.textContent;
+        opened.querySelector(`[data-team-model-hint="${i}"]`).hidden = true;
+        const available = backend?.models || [];
+        model.innerHTML = `<option value="">沿用线路默认模型${backend?.defaultModel ? ' · ' + esc(backend.defaultModel) : ''}</option>`
+          + available.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+        if (chosen && !available.includes(chosen)) model.insertAdjacentHTML('beforeend', `<option value="${esc(chosen)}">${esc(chosen)}</option>`);
+        model.value = chosen;
+        model.addEventListener('change', () => updatePlanSummary(opened, accountOptions, backends));
+      });
+      selects.filter(sel => isCodeAgentMember(sel.dataset.teamKind)).forEach(sel => {
         const rows = accountOptions;
         if (!rows) return;
         const keep = sel.value;
@@ -237,7 +262,7 @@
             model.value=chosen;
           };
           fill(true);sel.addEventListener('change',()=>{fill(false);updateApproval();});
-          model.addEventListener('change', () => updatePlanSummary(opened, accountOptions));
+          model.addEventListener('change', () => updatePlanSummary(opened, accountOptions, backends));
         }
       });
       updateApproval();

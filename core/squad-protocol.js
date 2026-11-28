@@ -81,10 +81,20 @@ function parseDispatch(text, resolve) {
   return { mode, tasks, skipped };
 }
 
+// 成员清单里写上每位的后端擅长什么，负责人好按长处分工（R58b 光杆司令修法 G1）。
+const KIND_STRENGTHS = Object.freeze({
+  codeagent: '擅长实现与改代码，能用公司内网工具',
+  claude: '适合异构审查、方案复核、长文档归纳',
+  codex: '适合异构审查、代码复核与补测试',
+  'deepseek-acp': '适合异构审查与推理复核',
+});
 function rosterLines(members, leaderMemberId) {
   return members.filter(m => m.memberId !== leaderMemberId)
     // 能看图的成员标出来，用户发了图片时负责人好把看图的活派给他。
-    .map(m => `- @${m.memberId}：${m.label}${m.kind ? `（${m.kind}${m.model ? ' / ' + m.model : ''}）` : ''}${imageInputSupport(m) === true ? '，能看图' : ''}`);
+    .map(m => {
+      const strength = KIND_STRENGTHS[String(m.kind || '').replace(/-(?:resume|lite)$/, '')];
+      return `- @${m.memberId}：${m.label}${m.kind ? `（${m.kind}${m.model ? ' / ' + m.model : ''}）` : ''}${imageInputSupport(m) === true ? '，能看图' : ''}${strength ? '，' + strength : ''}`;
+    });
 }
 
 function leaderPrompt(userText, { members = [], leaderMemberId = '', maxRounds = DEFAULT_MAX_ROUNDS } = {}) {
@@ -98,7 +108,8 @@ function leaderPrompt(userText, { members = [], leaderMemberId = '', maxRounds =
     '@m2：要做的事，写清目标和交付要求',
     '@m3：……',
     '「依次」按顺序一位做完再叫下一位，后一位能看到前一位的回答；「同时」一起开工。',
-    `成员做完 Hub 会自动把回答交回给你；你验收后可以再写派工块继续，或者不写派工块、直接给用户最终答复（先结论，再依据）。简单问题直接回答，不写派工块。每次用户发话后最多连续派工 ${maxRounds} 轮。`,
+    '用户开了小队就是希望分工：能拆开的活至少派给一位成员，你负责拆分、验收和汇总；只有一句话就能答完的问题才直接回答、不写派工块。',
+    `成员做完 Hub 会自动把回答交回给你；你验收后可以再写派工块继续，或者不写派工块、直接给用户最终答复（先结论，再依据）。每次用户发话后最多连续派工 ${maxRounds} 轮。`,
     '',
     '## 用户这次说',
     String(userText || ''),

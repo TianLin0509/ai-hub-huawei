@@ -39,14 +39,10 @@
     "sources": []
   },
   "releaseNotes": [
-    "R60 公司网页登录体检（登好/要登录时记 cookie 个数与剩余有效期，随一键反馈带回）；会议室「从页面读取」停在登录页时给登录按钮、组件 2.1.8 把登录状态记为失效",
-    "PPT Doctor、会议转写等组件第一次安装不再报「内源要求登录」，会自动借用本机 Edge 的登录查到版本",
-    "CodeAgent 顶部出现公告横幅时，新建会话的第一句话不再被挡住",
-    "CodeAgent-Lite 后台连接断开后自动接上；这一轮的结果会标明需要核对，不会自动重发",
-    "群聊加成员时模型下拉框能正常列出可用模型",
-    "公司模型代理按你在 Hub 里设的 CodeAgent 账号目录读取登录信息"
+    "修复绿区等隔离网络连不到收件机时的如实提示与顺序试址；新增内源只读黑板（收件机每小时更新榜单、隔离网络自动读榜）",
+    "R58b 公司版组队成员可选 Claude Code / Codex / DSH（负责人仍为 CodeAgent），accounts 给混编配方，小队默认分工；DSH 成员带组队身份交回执"
   ],
-  "version": "5.6.151",
+  "version": "5.6.152",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

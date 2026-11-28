@@ -1644,6 +1644,15 @@ class SessionManager extends EventEmitter {
   hookToken = null;
   teamTokenFor = null;
 
+  // DSH 组队成员的身份（R58b）：DSH 启动时会清掉继承来的 Hub 变量（core/acp-profiles.js），组队成员要跑 hub-team 交回执，
+  // 只给它单独补回这几项；数据目录一并给，成员按说明书找 hub-team 命令时不会落到别的目录。
+  _hubTeamEnv(id) {
+    const env = {};
+    this._applyHubSessionEnv(env, id);
+    env.CLAUDE_HUB_DATA_DIR = process.env.CLAUDE_HUB_DATA_DIR || getHubDataDir();
+    return env;
+  }
+
   _applyHubSessionEnv(sessionEnv, id) {
     sessionEnv.CLAUDE_HUB_SESSION_ID = id;
     const teamToken = this.teamTokenFor?.(id);
@@ -1653,6 +1662,9 @@ class SessionManager extends EventEmitter {
     delete sessionEnv.CLAUDE_HUB_PORT;
     if (this.hookPort) sessionEnv.CLAUDE_HUB_PORT = String(this.hookPort);
     if (this.hookToken) sessionEnv.CLAUDE_HUB_TOKEN = this.hookToken;
+    // DSH 成员用的令牌别名（core/acp-profiles.js）只由 DSH 启动时按需给，其他会话不继承父进程留下的。
+    delete sessionEnv.CLAUDE_HUB_HOOK_AUTH;
+    delete sessionEnv.CLAUDE_HUB_TEAM_AUTH;
   }
 
   constructor() {
@@ -2828,7 +2840,7 @@ class SessionManager extends EventEmitter {
       ? createDshCardDriver({ id, kind, opts, cwd: spawnCwd, env: sessionEnv, scope: dshCardScope })
       : isDshCli
       ? new (require('./dsh-cli-session').DshCliSession)(require('./dsh-cli-profile').buildDshCliOptions(kind,
-        {...opts,id,cwd:spawnCwd,...(dshCardScope ? {dshCardScope} : {})},getConfig(),getHubDataDir(),sessionEnv))
+        {...opts,id,cwd:spawnCwd,...(dshCardScope ? {dshCardScope} : {}),...(opts.hubTeamMember ? {hubTeamEnv:this._hubTeamEnv(id)} : {})},getConfig(),getHubDataDir(),sessionEnv))
       : isAcp
       ? new (isProviderCli ? (kind.replace(/-resume$/, '') === 'qwen' ? require('./qwen-cli-session').QwenCliSession : require('./martty-cli-session').MarttyCliSession) : require('./acp-session').AcpSession)(buildAcpOptions(kind,
         {...opts,id,cwd:spawnCwd},getConfig(),getHubDataDir(),sessionEnv))

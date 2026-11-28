@@ -124,7 +124,7 @@ async function main() {
   await until('typeof sessions !== "undefined" && typeof selectSession === "function"', '界面加载', 90000);
   report.hubVersion = await c.eval(`require('../package.json').version`).catch(() => null);
   report.skillVersion = await c.eval(`require('../core/codeagent-bundled-skills').TEAM_SKILL_VERSION`).catch(() => null);
-  check('隔离 Hub 起来了，内置组队技能 0.6.0', report.skillVersion === '0.6.0', { hub: report.hubVersion, skill: report.skillVersion });
+  check('隔离 Hub 起来了，内置组队技能 0.7.0', report.skillVersion === '0.7.0', { hub: report.hubVersion, skill: report.skillVersion });
   check('组队技能已装进个人账号目录', fs.existsSync(path.join(cac, 'skills', 'company-team', 'SKILL.md')));
   await sleep(1500);
   await shot('01-home');

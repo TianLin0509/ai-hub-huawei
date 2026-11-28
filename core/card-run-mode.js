@@ -2,7 +2,7 @@
 // Claude Code、DSH 的卡片运行方式（2026-11-22 第二个试点）：
 //   pty  —— 现有方式，一直开着真实终端，出厂默认；
 // 只开放给公司版经本机反代的两条线路（CodeAgent 账号、API 网关）；其他线路继续用真实终端。
-// 组队、群聊、助理和其他自动会话一律走 PTY。
+// 组队、群聊、助理和其他自动会话一律走 PTY。组队成员必须各用一个进程：卡片共用进程只能带一份组队身份，回执会记到别人头上。
 const { createHash } = require('node:crypto');
 const { EXCLUDED_PURPOSES } = require('./codeagent-run-mode');
 
@@ -24,7 +24,7 @@ function routeAllowed(kind, config = {}, opts = {}) {
 // 这个会话是否属于卡片试点（不论此刻在卡片还是在终端）。
 function isCardSession(kind, opts = {}, config = {}) {
   if (!supportsCardKind(kind) || normalizeCardMode(opts.cardRunMode) !== CARD) return false;
-  if (opts.resumePicker || opts.useContinue || opts.meetingId || opts.teamId || opts.teamRole) return false;
+  if (opts.resumePicker || opts.useContinue || opts.meetingId || opts.teamId || opts.teamRole || opts.hubTeamMember) return false;
   if (EXCLUDED_PURPOSES.has(opts.purpose)) return false;
   if (String(kind).endsWith('-resume') && !opts.resumeCCSessionId && !opts.acpSid) return false;
   return routeAllowed(kind, config, opts);

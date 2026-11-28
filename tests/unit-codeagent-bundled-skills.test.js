@@ -352,8 +352,12 @@ test('shipped instructions match current paths/CLI and contain no workstation or
   assert.match(text, /^---\r?\nname: company-team\r?\ndescription:/);
   assert.match(text, /CLAUDE_HUB_DATA_DIR/);
   assert.match(text, /\.ai-hub-community/);
-  assert.equal(bundled.TEAM_SKILL_VERSION, '0.6.0');
-  assert.match(text, /v0\.6\.0/);
+  assert.equal(bundled.TEAM_SKILL_VERSION, '0.7.0');
+  assert.match(text, /v0\.7\.0/);
+  // R58b：成员可用 Claude Code、Codex；说明书讲清 kind 怎么写、混编配方在哪。
+  assert.match(text, /recommendedMix/);
+  assert.match(text, /\| `claude` \| Claude Code \|/);
+  assert.doesNotMatch(text, /不要写 `[^`\n]*kind/);
   assert.match(text, /默认自动批准，侧栏可见/);
   assert.match(text, /`Task`、`subagent`/);
   assert.match(text, /让用户在左侧栏看到/);
@@ -365,9 +369,11 @@ test('shipped instructions match current paths/CLI and contain no workstation or
   const mixed = plans.find(p => p.members?.some(m => /^deepseek/i.test(m.model || '')) && p.members.some(m => /^GLM/i.test(m.model || '')));
   assert.ok(mixed, 'the skill contains a concrete DeepSeek and GLM proposal');
   assert.ok(mixed.members.every(m => !m.cwd && !m.account && !m.kind));
+  const kinded = plans.find(p => p.members?.some(m => m.kind === 'claude'));
+  assert.ok(kinded && kinded.members.every(m => !m.account), 'the skill shows a CodeAgent + Claude Code plan without account on the Claude member');
   assert.match(text, /--message-file/);
   assert.match(text, /DeepSeek、GLM/);
-  assert.doesNotMatch(text, /\.claude-session-hub|ai-peers|Codex|C:[\\/]Users[\\/]|D:[\\/]AIWork|\u7530\u54e5|\u6d3e\u6d3b/);
+  assert.doesNotMatch(text, /\.claude-session-hub|ai-peers|C:[\\/]Users[\\/]|D:[\\/]AIWork|\u7530\u54e5|\u6d3e\u6d3b/);
   const { buildRequest } = require('../scripts/hub-team');
   for (const action of ['status', 'accounts']) assert.equal(buildRequest([action]).action, action);
   assert.equal(buildRequest(['send', '--to', 'lead', '--message', 'done', '--no-wake']).args.wake, false);

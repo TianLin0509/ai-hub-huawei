@@ -38,7 +38,8 @@ function planRecalls(planMembers, team, { now, leadCwd, sessionInfo }) {
       if (used.has(m.memberId) || m.status !== 'dismissed' || m.dismissReason !== 'delivered' || !m.sid || m.kind !== spec.kind) return false;
       if (!m.dismissedAt || now < m.dismissedAt || now - m.dismissedAt > RECALL_WINDOW_MS) return false;
       const s = sessionInfo(m.sid);
-      if (!s?.exists || s.inOtherTeam || !/^codeagent(?:-resume)?$/.test(s.kind || '') || !want || (normDir(s.cwd) !== want && normDir(m.worktree?.repo) !== want)) return false;
+      // 会话本身的后端要和计划一致（R58b 起成员可以是 Claude Code、Codex 等）。
+      if (!s?.exists || s.inOtherTeam || String(s.kind || '').replace(/-resume$/, '') !== (spec.kind || 'codeagent') || !want || (normDir(s.cwd) !== want && normDir(m.worktree?.repo) !== want)) return false;
       // 号池身份与点名模型都要一致，避免复用成另一个账号或模型。
       if ((s.codeagentPoolAccount || m.account) !== spec.account) return false;
       const model = s.fixedModel || s.currentModel?.id || (typeof s.currentModel === 'string' ? s.currentModel : '') || m.model;
