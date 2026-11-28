@@ -10,7 +10,9 @@ const { HARNESS_LABELS: LABELS } = require('./ai-kinds');
 // pi（r39）：core/pi-cli-session.js。ACP_KINDS 仍只列有 ACP 设置页的三家。
 // opencode（2026-11-26）：core/opencode-cli-session.js，经它自带的本机服务收发。
 const PROVIDER_CLI_KINDS = ['pi', 'opencode'];
-function isAcpKind(kind) { const base = String(kind).replace(/-resume$/, ''); return ACP_KINDS.includes(base) || PROVIDER_CLI_KINDS.includes(base); }
+// Hermes（2026-11-28）：官方 ACP 服务，由卡片会话（core/acp-session.js）直接驱动，启动参数见 core/hermes-cli-profile.js。
+const NATIVE_ACP_KINDS = ['hermes'];
+function isAcpKind(kind) { const base = String(kind).replace(/-resume$/, ''); return ACP_KINDS.includes(base) || PROVIDER_CLI_KINDS.includes(base) || NATIVE_ACP_KINDS.includes(base); }
 function isPiKind(kind) { return String(kind || '').replace(/-resume$/, '') === 'pi'; }
 // Windows 上新建目录链接偶尔遇到 EBUSY/EPERM（杀毒或索引正占着刚建的目录）；短暂等一下重试，最多 5 次。
 // DSH 模型名校验：relaxed（公司模型 / 自有接口 / API 网关）允许 / : ( ) + @；套餐线路只允许字母数字和 . _ -。
@@ -295,4 +297,4 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     storeDir: path.join(dataDir, 'acp-history'), home, authMethod, authMeta,
     launch: { command: nodePath, args, cwd: opts.cwd, env, secrets: [key] } };
 }
-module.exports = { dshRuntimeFile, ACP_KINDS, PROVIDER_CLI_KINDS, LABELS, PLAN_BASE_URL, isAcpKind, isPiKind, buildAcpOptions, linkWithRetry, dshModelNameOk };
+module.exports = { dshRuntimeFile, ACP_KINDS, PROVIDER_CLI_KINDS, NATIVE_ACP_KINDS, LABELS, PLAN_BASE_URL, isAcpKind, isPiKind, buildAcpOptions, linkWithRetry, dshModelNameOk };

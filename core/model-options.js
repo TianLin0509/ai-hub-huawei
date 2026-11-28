@@ -19,6 +19,8 @@ const MODEL_OPTIONS_BY_KIND = {
   pi: [],
   // opencode（2026-11-26）：线路和 pi 同一套，启动中心打开时经 opencode:status 填进运行时清单。
   opencode: [],
+  // Hermes（2026-11-28）：线路和 opencode 同一套，启动中心打开时经 hermes:status 填进运行时清单；会话里不换模型（换模型请新建会话）。
+  hermes: [],
   claude: [
     { id: 'claude-opus-5-5[1m]', label: 'Opus 5.5 (1M context)' },
     { id: 'claude-opus-5-5',     label: 'Opus 5.5' },

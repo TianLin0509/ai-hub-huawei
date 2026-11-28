@@ -197,6 +197,12 @@ class AcpSession extends EventEmitter {
         if(!mode && this.options.permissionPolicy==='bypass')throw new Error('原生 Harness 未提供可确认的完全权限模式');
         if(mode)await this.configure({configId:mode.id,value:this.options.defaultMode},true);
       }
+      // 只用旧式 modes（session/set_mode）报权限档的 Harness（Hermes）：按启动档设一次；进程重启后模式不保留，恢复时也要设。
+      if (this.options.sessionModeId && this.modes?.currentModeId !== this.options.sessionModeId) {
+        if (!this.modes?.availableModes?.some(m => m.id === this.options.sessionModeId)) throw new Error('原生 Harness 未提供权限模式：' + this.options.sessionModeId);
+        await client.request('session/set_mode', { sessionId, modeId: this.options.sessionModeId });
+        this.modes = { ...this.modes, currentModeId: this.options.sessionModeId };
+      }
       // CodeAgent serve 不回 configOptions：没设过模型时用连接上确定的模型，界面与旁问才读得到当前模型。
       if (!this.currentModel && this.options.profileId === 'codeagent-serve' && typeof client?.model === 'string' && client.model) this.currentModel = client.model;
       this.bootstrapping = false;
@@ -588,7 +594,9 @@ class AcpSession extends EventEmitter {
   }
   async configure({ model, effort, configId, value:configValue }, starting = false) {
     if (!starting) await this.start();
-    if(model && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model))throw new Error('套餐 profile 不允许切到其他供应商命名空间');
+    // Hermes 的模型编号是「custom:<模型>」，公司网关的模型名可能带 /：只对它放宽，仍不收 ..。
+    const modelOk = this.options.kind === 'hermes' ? /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$/.test(model) && !model.includes('..') : /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model);
+    if(model && !modelOk)throw new Error('套餐 profile 不允许切到其他供应商命名空间');
     if (this.active) throw new Error('请等待当前轮次结束后修改模型');
     if(this.configuring)throw new Error('正在确认上一项配置');
     this.configuring=true;
@@ -725,4 +733,17 @@ class AcpSession extends EventEmitter {
     }
   }
 }
-module.exports = { AcpSession, BACKEND, acpTurnUsage };
+// 休眠会话（进程没起）读 Hub 自己存的 ACP 历史（Hermes 用；审查 P1-1）。配置域对不上或没存过时返回 null。
+function readStoredAcpTranscript({ id, kind, cwd, profileId, storeDir }, options = {}) {
+  if (!id || !storeDir || !cwd) return null;
+  const file = path.join(storeDir, createHash('sha256').update(id).digest('hex') + '.json');
+  if (!fs.existsSync(file + '.sqlite') && !fs.existsSync(file)) return null;
+  const reader = new AcpSession({ id, kind, cwd, profileId, storeDir });
+  try {
+    try { reader.loadHistory(); } catch (_) { return null; }
+    if (!reader.saved) return null;
+    reader.threadId = reader.saved.sessionId || null;
+    return reader.readTranscript(options);
+  } finally { try { reader._historyStore?.close(); } catch (_) {} try { reader.backstage?.close?.(); } catch (_) {} }
+}
+module.exports = { AcpSession, BACKEND, acpTurnUsage, readStoredAcpTranscript };

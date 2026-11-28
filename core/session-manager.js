@@ -2009,6 +2009,8 @@ class SessionManager extends EventEmitter {
     const isPiCli = kind.replace(/-resume$/, '') === 'pi';
     // opencode（2026-11-26）：终端里的 opencode + 它自带的本机服务（core/opencode-cli-session.js）。
     const isOpencodeCli = kind.replace(/-resume$/, '') === 'opencode';
+    // Hermes（2026-11-28）：官方 ACP 服务 + 卡片会话（core/hermes-cli-profile.js）。
+    const isHermes = kind.replace(/-resume$/, '') === 'hermes';
     const isProviderCli = (isDshCli && !isDshCard) || isPiCli || isOpencodeCli || (['qwen','glm'].includes(kind.replace(/-resume$/, '')) && require('./agent-runtime-mode').agentRuntimeMode() !== 'native');
     const isClaude = kind === 'claude' || kind === 'claude-resume';
     const isGemini = kind === 'gemini' || kind === 'gemini-resume';
@@ -2809,6 +2811,9 @@ class SessionManager extends EventEmitter {
       : isOpencodeCli
       ? new (require('./opencode-cli-session').OpencodeCliSession)(require('./opencode-cli-profile').buildOpencodeCliOptions(kind,
         {...opts,id,cwd:spawnCwd},getConfig(),getHubDataDir(),sessionEnv))
+      : isHermes
+      ? new (require('./acp-session').AcpSession)(require('./hermes-cli-profile').buildHermesOptions(kind,
+        {...opts,id,cwd:spawnCwd},getConfig(),getHubDataDir(),sessionEnv))
       : isPiCli
       ? new (require('./pi-cli-session').PiCliSession)(require('./pi-cli-profile').buildPiCliOptions(kind,
         {...opts,id,cwd:spawnCwd},getConfig(),getHubDataDir(),sessionEnv))
@@ -2919,6 +2924,9 @@ class SessionManager extends EventEmitter {
     } else if (isOpencodeCli) {
       const mid = ptyProcess.options.model || '';
       currentModel = { id: mid, displayName: mid || 'opencode 默认模型' };
+    } else if (isHermes) {
+      const mid = ptyProcess.options.hubModel || '';
+      currentModel = { id: mid, displayName: mid || 'Hermes 默认模型' };
     }
 
     const effectiveCodexMcpProfile = isCodexRuntime
@@ -3309,7 +3317,9 @@ class SessionManager extends EventEmitter {
         catch (error) { console.error('[session-owner] PID binding failed:', error.message); }
         if (bound.cwd) info.cwd = bound.cwd;
         if (Object.hasOwn(bound, 'path')) info.transcriptPath = bound.path;
-        if (bound.model) info.currentModel = {id:bound.model,displayName:bound.model};
+        // Hermes 报的是 custom:<模型>，Hub 显示和恢复都用「线路名/模型」（审查 P1-2）。
+        const boundModel = (ptyProcess.options?.kind === 'hermes' && ptyProcess.options.hubModel) || bound.model;
+        if (boundModel) info.currentModel = {id:boundModel,displayName:boundModel};
         if (bound.reasoningEffort) info.effort = bound.reasoningEffort;
         if (bound.codexSpeedTier) info.codexSpeedTier = bound.codexSpeedTier;
         publish();

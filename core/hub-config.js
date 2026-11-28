@@ -158,9 +158,11 @@ function normalizeCodexSubscriptionProfiles(profiles) {
 
 // 导出配置值（惰性求值，首次访问时计算）
 let _cachedConfig = null;
+let _cachedReady = false; // 缓存算出时应用是否已就绪：就绪前的那份在就绪后作废重读一次
 
 function getConfig() {
-  if (_cachedConfig) return _cachedConfig;
+  const ready = secretsReady();
+  if (_cachedConfig && (_cachedReady || !ready)) return _cachedConfig;
   const rawConfig = loadConfigJson();
   const codexProvider = (rawConfig.providers && rawConfig.providers.codex) || {};
   const codexSubscriptionProfiles = normalizeCodexSubscriptionProfiles(codexProvider.subscription_profiles);
@@ -220,7 +222,14 @@ function getConfig() {
     team: rawConfig.team && typeof rawConfig.team === 'object' && !Array.isArray(rawConfig.team) ? { ...rawConfig.team } : {},
   };
 
-  return require('./company-api-config').applyCompanyConfig(_cachedConfig, rawConfig);
+  const config = require('./company-api-config').applyCompanyConfig(_cachedConfig, rawConfig);
+  // 应用就绪前 safeStorage 解不开自有接口的 Key（会被当成「要重新填写」）：就绪前算出的那份只在就绪前复用，就绪后作废重读一次（复审 P2：避免就绪前反复读盘）。
+  // 2026-11-28 Hermes 界面端到端实测：重开 Hub 后自有接口的 Key 变空，恢复的会话被接口拒绝。
+  _cachedReady = ready;
+  return config;
+}
+function secretsReady() {
+  try { const { app } = require('electron'); return !app || typeof app.isReady !== 'function' || app.isReady(); } catch { return true; }
 }
 
 /**

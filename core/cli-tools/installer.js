@@ -18,7 +18,7 @@ const registry = require('./registry');
 const { extractTgz } = require('./tar');
 
 const CATALOG_TTL_MS = 10 * 60 * 1000;
-const NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH 运行环境', node: 'Node.js 运行环境', git: 'Git for Windows', pi: 'pi 终端 Agent', opencode: 'opencode 终端 Agent' };
+const NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH 运行环境', node: 'Node.js 运行环境', git: 'Git for Windows', pi: 'pi 终端 Agent', opencode: 'opencode 终端 Agent', hermes: 'Hermes Agent（含 Python）' };
 const gitBash = require('../git-bash');
 
 function resolveFetch(fetchImpl) {
@@ -416,6 +416,12 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
           if (!node) throw new Error(`${check.reason}，组件目录里也没有 Node.js，请先安装 Node.js ${minNode} 或更新版本`);
           plan.unshift(node);
         }
+      }
+      // Hermes（2026-11-28）：终端工具要 Git Bash；本机找不到就把 Git 组件排在前面一起装。
+      if (main.install.requires?.includes('git') && !gitBash.findGitBash(env)) {
+        const hit = await gitBash.searchGitBash(env).catch(() => null);
+        const git = !hit && cat.components.find(c => c.id === 'git');
+        if (git) plan.unshift(git);
       }
       const total = plan.reduce((n, c) => n + c.files[0].bytes, 0);
       let doneBytes = 0;

@@ -37,6 +37,8 @@ const SUPPORTED = Object.freeze({
   'deepseek-acp': Object.freeze(['bypassPermissions', 'acceptEdits', 'default']),
   // opencode（2026-11-26）：permission 配置（edit / bash 的 allow、ask、deny）+ 自带的 plan 智能体，见 core/opencode-cli-profile.js permissionConfig。
   opencode: Object.freeze(['bypassPermissions', 'acceptEdits', 'default', 'plan']),
+  // Hermes（2026-11-28 读 hermes-agent 0.19 acp_adapter）：会话模式 default / accept_edits / dont_ask，危险命令逐次确认，见 core/hermes-cli-profile.js permissionFor。
+  hermes: Object.freeze(['bypassPermissions', 'acceptEdits', 'default']),
 });
 const SWITCHABLE_KINDS = Object.freeze(Object.keys(SUPPORTED));
 

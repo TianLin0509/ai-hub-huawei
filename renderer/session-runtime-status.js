@@ -30,6 +30,7 @@ function providerLabel(session) {
   if (kind === 'codeagent') return 'CodeAgent';
   if (kind === 'pi') return 'pi';
   if (kind === 'opencode') return 'opencode';
+  if (kind === 'hermes') return 'Hermes';
   return 'AI';
 }
 

@@ -24,7 +24,7 @@ function registerAcpIpc(ipcMain, {sessionManager} = {}) {
   });
   ipcMain.handle('acp:tool-result', async (_event, reference = {}) => {
     const session = sessionManager?.getNativeSession(reference.hubSessionId);
-    if (!session?.readToolResult || session.options?.kind && !ACP_KINDS.includes(session.options.kind)) throw new Error('原生工具来源不可用，请重新载入会话');
+    if (!session?.readToolResult || session.options?.kind && !require('../../core/acp-profiles').isAcpKind(session.options.kind)) throw new Error('原生工具来源不可用，请重新载入会话');
     await session.start();
     return session.readToolResult(reference);
   });
@@ -38,6 +38,14 @@ function registerAcpIpc(ipcMain, {sessionManager} = {}) {
       routes: pi.availableRoutes(config, process.env, { dataDir }).map(route => ({ id: route.id, label: pi.routeLabel(route) })) };
   });
   // opencode（2026-11-26）：装没装、能用哪些模型线路（一键安装走 cli-tools:install，只从内源下载）。钥匙不出主进程。
+  // Hermes（2026-11-28）：装没装、能用哪些模型线路（一键安装走 cli-tools:install，只从内源下载）。钥匙不出主进程。
+  ipcMain.handle('hermes:status', () => {
+    const hm = require('../../core/hermes-cli-profile');
+    const config = getConfig(), dataDir = require('../../core/data-dir').getHubDataDir();
+    return { diagnosis: hm.diagnoseHermes(process.env), models: hm.hermesModelOptions(config, process.env, { dataDir }),
+      defaultModel: hm.defaultHermesModel(config, process.env, { dataDir }),
+      routes: hm.availableRoutes(config, process.env, { dataDir }).map(route => ({ id: route.id, label: hm.routeLabel(route) })) };
+  });
   ipcMain.handle('opencode:status', () => {
     const oc = require('../../core/opencode-cli-profile');
     const config = getConfig(), dataDir = require('../../core/data-dir').getHubDataDir();

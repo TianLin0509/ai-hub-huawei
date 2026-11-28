@@ -190,6 +190,9 @@
   // opencode（2026-11-26）：opencode:status 的结果；opencodeInstalling 时按钮显示进度。
   let opencodeStatus = null;
   let opencodeInstalling = false;
+  // Hermes（2026-11-28）：hermes:status 的结果；hermesInstalling 时按钮显示进度。
+  let hermesStatus = null;
+  let hermesInstalling = false;
   let piInstalling = false;
   let deepseekRouteTouched = false;
   function panelKind(kind) {
@@ -1863,6 +1866,47 @@
       install.textContent = opencodeInstalling ? '安装中…' : '一键安装 opencode';
     }
   }
+  // Hermes 没装：就地给「一键安装 Hermes」；装好了说明走哪条模型线路。
+  function paintHermesNote() {
+    const note = document.getElementById('new-session-hermes-note');
+    if (!note) return;
+    note.hidden = selectedKind !== 'hermes';
+    if (note.hidden) return;
+    const text = document.getElementById('new-session-hermes-note-text');
+    const install = document.getElementById('new-session-hermes-install');
+    const diagnosis = hermesStatus?.diagnosis;
+    const ready = diagnosis?.state === 'ready';
+    note.dataset.state = !hermesStatus || ready ? 'info' : 'error';
+    const routes = (hermesStatus?.routes || []).map(route => route.label).join('、');
+    const [headline, detail] = !hermesStatus ? ['正在检查 Hermes…', '']
+      : hermesInstalling ? ['正在安装 Hermes…', '从公司内源下载（约 60 MB，自带 Python），装进 Hub 自己的目录，不改你电脑上的 Python。']
+      : diagnosis?.state === 'none' ? ['这台电脑还没有 Hermes，点右边「一键安装 Hermes」。', '从公司内源下载（约 60 MB，自带 Python），装进 Hub 自己的目录；用官方脚本装过 Hermes 的会自动识别。']
+      : !ready ? [diagnosis.message, '']
+      : [`Hermes ${diagnosis.version || ''} 已就绪（${diagnosis.source === 'hub' ? 'Hub 安装' : '本机已装'}）。`, (routes
+        ? `模型线路：${routes}。`
+        : '没有找到 Hub 可用的模型钥匙：Hermes 会用它自己的配置（hermes model 里设置），或在设置里接入公司模型。')
+        + '对话在卡片里进行；换模型请新建会话。'];
+    fieldHint.setLabelText(text, headline);
+    fieldHint.setIconHint(text, detail);
+    if (install) {
+      install.hidden = !hermesStatus || ready;
+      install.disabled = hermesInstalling;
+      install.textContent = hermesInstalling ? '安装中…' : '一键安装 Hermes';
+    }
+  }
+  async function installHermesFromLaunch() {
+    if (hermesInstalling) return;
+    hermesInstalling = true; paintHermesNote();
+    const button = document.getElementById('new-session-hermes-install');
+    let host = document.querySelector('[data-hermes-dlp]');
+    if (!host && button) { button.insertAdjacentHTML('afterend', '<div data-hermes-dlp></div>'); host = document.querySelector('[data-hermes-dlp]'); }
+    const unmount = require('./download-progress-view').mount(host, 'cli:hermes', { title: '安装 Hermes', ipcRenderer });
+    try {
+      const result = await ipcRenderer.invoke('cli-tools:install', { id: 'hermes' });
+      if (!result?.ok) setError('安装 Hermes 没有成功：' + (result?.error || '未知原因'));
+    } catch (error) { setError('安装 Hermes 没有成功：' + error.message); }
+    finally { hermesInstalling = false; setTimeout(unmount, 7000); await loadModelCatalog('hermes'); paint(); }
+  }
   async function installOpencodeFromLaunch() {
     if (opencodeInstalling) return;
     opencodeInstalling = true; paintOpencodeNote();
@@ -1944,6 +1988,7 @@
     }
     paintPiNote();
     paintOpencodeNote();
+    paintHermesNote();
     paintLaunchLayout();
     const existingRow = document.getElementById('new-session-existing-path');
     menuEl.querySelectorAll('[data-project-path]').forEach(button => {
@@ -2335,6 +2380,11 @@
         return chatgptCatalog;
       });
     }
+    if (base === 'hermes') return ipcRenderer.invoke('hermes:status').then(status => {
+      setRuntimeModelOptions('hermes', (status?.models || []).filter(m => m.id));
+      hermesStatus = status || null;
+      return status;
+    }).catch(error => { console.warn('[hermes-status]', error.message); hermesStatus = null; return null; });
     if (base === 'opencode') return ipcRenderer.invoke('opencode:status').then(status => {
       setRuntimeModelOptions('opencode', (status?.models || []).filter(m => m.id));
       opencodeStatus = status || null;
@@ -2376,7 +2426,7 @@
   }
 
   function loadPrimaryModelCatalogs(options = {}) {
-    if (companyApi.isCompany()) return Promise.all(['claude', 'codex', 'deepseek-acp', 'codeagent', 'pi', 'opencode'].map(kind => loadModelCatalog(kind)));
+    if (companyApi.isCompany()) return Promise.all(['claude', 'codex', 'deepseek-acp', 'codeagent', 'pi', 'opencode', 'hermes'].map(kind => loadModelCatalog(kind)));
     return Promise.all([
       loadClaudeModelCatalog(options),
       loadCodexTuningCatalog(options),
@@ -2384,6 +2434,7 @@
       ...require('../core/acp-profiles').ACP_KINDS.map(kind=>loadModelCatalog(kind)),
       loadModelCatalog('pi'),
       loadModelCatalog('opencode'),
+      loadModelCatalog('hermes'),
     ]);
   }
 
@@ -2640,6 +2691,7 @@
     });
     document.getElementById('new-session-pi-install')?.addEventListener('click', () => { void installPiFromLaunch(); });
     document.getElementById('new-session-opencode-install')?.addEventListener('click', () => { void installOpencodeFromLaunch(); });
+    document.getElementById('new-session-hermes-install')?.addEventListener('click', () => { void installHermesFromLaunch(); });
     document.getElementById('new-session-deepseek-route')?.addEventListener('change', event => {
       setError('');
       void saveDeepseekRoute(event.target.value).then(paint);

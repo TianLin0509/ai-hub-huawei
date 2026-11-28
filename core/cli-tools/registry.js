@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const IDS = ['claude', 'codex', 'dsh', 'node', 'git', 'pi', 'opencode'];
+const IDS = ['claude', 'codex', 'dsh', 'node', 'git', 'pi', 'opencode', 'hermes'];
 const DSH_RUNTIME_FILES = ['@deepseek-ai/dsh/lib/bin.js', '@deepseek-harness-tui/dsh-tui/package.json'];
 
 function toolsRoot(env = process.env) {

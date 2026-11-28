@@ -1,6 +1,6 @@
 {
   "name": "ai-hub-community",
-  "version": "5.6.145",
+  "version": "5.6.146",
   "description": "Local multi-agent desktop workspace using your own AI accounts",
   "main": "main-bootstrap.js",
   "scripts": {
@@ -91,6 +91,7 @@
       "core/dsh-cli-launch.mjs",
       "core/dsh-cli-observer.mjs",
       "core/pi-cli-observer.mjs",
+      "core/hermes-acp-launch.py",
       "core/acp-dsh-stdio.mjs",
       "core/dsh-card-reminder.mjs",
       "scripts/ppt-doctor-extract.ps1",

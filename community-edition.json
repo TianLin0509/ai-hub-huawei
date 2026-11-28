@@ -29,6 +29,7 @@
     "deepseek-acp",
     "pi",
     "opencode",
+    "hermes",
     "powershell"
   ],
   "productName": "AI HUB-Huawei",
@@ -38,9 +39,9 @@
     "sources": []
   },
   "releaseNotes": [
-    "用公司模型的 Claude 会话按模型真实输入上限压缩（DeepSeek V4.1 约 344K），不再到约 200K 就提前压缩"
+    "新增 Hermes Agent 会话：启动中心选 Hermes，一键安装（内源组件，自带 Python），走公司模型线路或自有接口，对话在卡片里进行，支持关掉后恢复同一会话"
   ],
-  "version": "5.6.145",
+  "version": "5.6.146",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

@@ -365,6 +365,12 @@ async function parseProviderTranscript(args = {}, deps) {
     if (String(record?.kind || inKind).replace(/-resume$/, '') === 'pi' && transcriptPath && /\.jsonl$/i.test(transcriptPath)) {
       return { turns: require('../../core/pi-cli-session').readPiCliTranscript(transcriptPath, parseOpts), transcriptPath, source: 'provider-cli', error: null };
     }
+    // Hermes（2026-11-28）：卡片会话，记录在 Hub 的 ACP 历史库（<数据目录>/acp-history）；休眠时直接读它。
+    if (String(record?.kind || inKind).replace(/-resume$/, '') === 'hermes' && record) {
+      const turns = require('../../core/acp-session').readStoredAcpTranscript({ id: hubSessionId, kind: 'hermes', cwd: record.cwd,
+        profileId: record.acpProfileId, storeDir: require('node:path').join(deps.dataDir || require('../../core/data-dir').getHubDataDir(), 'acp-history') }, parseOpts);
+      if (turns) return { turns, transcriptPath: null, source: 'acp', error: null };
+    }
     // Cards and native sessions share one projection; legacy DeepSeek-Claude keeps its parser.
     const nativeProjection = typeof deps.parseClaudeTranscriptToNativeTurns === 'function'
       && !/^deepseek-legacy/.test(String(runtimeKind || ''));

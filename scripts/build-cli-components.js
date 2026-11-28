@@ -12,6 +12,7 @@
 //       --dsh-version 0.2.1-rc.2 --dsh-tui-version 0.16.1   --dsh-from <已装好的运行环境目录>（直接打包它，不再 npm install）
 //       --node-version v22.x.y（默认取 22 系列最新）   --registry https://registry.npmmirror.com
 //       --pi-version 1.5.2（pi 终端 Agent，--only 里写 pi 才打）
+//       --hermes-version 0.19.0（Hermes Agent，--only 里写 hermes 才打；本机要有 uv：装独立 Python 3.12 再 pip 装 hermes-agent[acp]，整包打成 tgz）
 //       --opencode-version 1.19.6（opencode 终端 Agent，--only 里写 opencode 才打；npm 上的 opencode-windows-x64 原包，单个 exe）
 //       --mirror-claude（Claude Code 也放一份到自家源，默认只写官方地址；许可见报告）
 //       --base <线上 components.json 的 https 地址或本地文件>（r41：以线上目录为底增量合并，验签后其余组件原样保留）
@@ -29,7 +30,7 @@ const { packTgz, listTree, extractTgz } = require('../core/cli-tools/tar');
 const catalogLib = require('../core/cli-tools/catalog');
 
 const DEFAULTS = { registry: 'https://registry.npmmirror.com', claude: 'latest', codex: 'latest', dsh: '0.2.1-rc.2', dshTui: '0.16.1', node: '22', git: 'latest',
-  pi: require('../core/pi-cli-profile').PI_VERSION, opencode: require('../core/opencode-cli-profile').OPENCODE_VERSION };
+  pi: require('../core/pi-cli-profile').PI_VERSION, opencode: require('../core/opencode-cli-profile').OPENCODE_VERSION, hermes: require('../core/hermes-cli-profile').HERMES_VERSION };
 const GIT_MIRROR = 'https://registry.npmmirror.com/-/binary/git-for-windows';
 const GIT_RELEASES = 'https://api.github.com/repos/git-for-windows/git/releases/tags';
 const NPMJS = 'https://registry.npmjs.org';
@@ -52,6 +53,7 @@ function parseArgs(argv) {
     else if (a === '--node-version') o.node = next();
     else if (a === '--pi-version') o.pi = next();
     else if (a === '--opencode-version') o.opencode = next();
+    else if (a === '--hermes-version') o.hermes = next();
     else if (a === '--git-version') o.git = next();
     else if (a === '--registry') o.registry = next().replace(/\/+$/, '');
     else if (a === '--mirror-claude') o.mirrorClaude = true;
@@ -194,6 +196,61 @@ async function planOpencode(o) {
   return { id: 'opencode', name: 'opencode 终端 Agent', version: meta.version, pkg, meta, file, license: meta.license || 'MIT',
     preferOfficial: false, mirror: true, official: officialTarballs(pkg, file),
     install: { strip: 'package', bin: 'bin/opencode.exe', versionArgs: ['--version'] } };
+}
+// Hermes（2026-11-28）：hermes-agent 是 Python 包。用 uv 装一份独立 Python（python-build-standalone，可整体搬走），
+// 把 hermes-agent[acp] 直接装进它的 site-packages，再整包打成 tgz；Hub 用里面的 python.exe 跑 -m acp_adapter（经 core/hermes-acp-launch.py）。
+// 不装 [all]：浏览器、语音、各家消息平台在公司内网用不上，包也小一半。Scripts 下的 exe 写死了打包机路径，删掉不打。
+async function planHermes(o) {
+  const { HERMES_PACKAGE, HERMES_PYTHON } = require('../core/hermes-cli-profile');
+  if (!/^\d+\.\d+\.\d+$/.test(String(o.hermes))) throw new Error('Hermes 版本请写成 x.y.z（--hermes-version）');
+  return { id: 'hermes', name: 'Hermes Agent（含 Python）', version: o.hermes, pkg: HERMES_PACKAGE, python: HERMES_PYTHON,
+    file: `hermes-agent-${o.hermes}-py${HERMES_PYTHON}-win-x64.tgz`, license: 'MIT（hermes-agent）；Python 运行时 PSF；依赖各自许可',
+    preferOfficial: false, mirror: true, official: [],
+    install: { bin: 'python/python.exe', requires: ['git'], versionArgs: ['--version'], check: ['python/Lib/site-packages/acp_adapter/__main__.py'] } };
+}
+// 只删标准库自带的测试与图形界面（Lib 下这几个目录和根目录的 tcl），第三方包一个不动；各处的 __pycache__ 到用户电脑上会重新生成。
+const PRUNE_STDLIB = ['test', 'idlelib', 'tkinter', 'turtledemo', 'ensurepip'];
+function pruneTree(py) {
+  for (const name of PRUNE_STDLIB) fs.rmSync(path.join(py, 'Lib', name), { recursive: true, force: true });
+  fs.rmSync(path.join(py, 'tcl'), { recursive: true, force: true });
+  const walk = dir => {
+    for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      const full = path.join(dir, d.name);
+      if (d.name === '__pycache__') fs.rmSync(full, { recursive: true, force: true });
+      else walk(full);
+    }
+  };
+  walk(py);
+}
+async function buildHermes(p, dir, staging, o) {
+  const root = path.join(staging, 'hermes-runtime');
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(root, { recursive: true });
+  const uv = o.uv || 'uv';
+  const pyStore = path.join(staging, 'uv-python');
+  log(`uv 安装独立 Python ${p.python}…`);
+  await run(uv, ['python', 'install', p.python, '--install-dir', pyStore, '--no-bin'], { env: { ...process.env, UV_PYTHON_INSTALL_DIR: pyStore } });
+  const found = fs.readdirSync(pyStore).find(n => n.startsWith(`cpython-${p.python}.`) && n.endsWith('-windows-x86_64-none'));
+  if (!found) throw new Error('uv 没装出 Python ' + p.python);
+  const py = path.join(root, 'python');
+  fs.cpSync(path.join(pyStore, found), py, { recursive: true });
+  fs.rmSync(path.join(py, 'Lib', 'EXTERNALLY-MANAGED'), { force: true });
+  const python = path.join(py, 'python.exe');
+  log(`pip 装 ${p.pkg}[acp]==${p.version}…`);
+  await run(uv, ['pip', 'install', '--python', python, '--link-mode', 'copy', '--no-cache', `${p.pkg}[acp]==${p.version}`]);
+  fs.rmSync(path.join(py, 'Scripts'), { recursive: true, force: true });
+  pruneTree(py);
+  for (const rel of p.install.check) if (!fs.existsSync(path.join(root, ...rel.split('/')))) throw new Error('Hermes 运行环境不完整：' + rel);
+  p.probeVersion = await run(python, ['-I', '-c', `import importlib.metadata as m, acp_adapter, hermes_cli; print('hermes-agent', m.version('${p.pkg}'), 'acp', m.version('agent-client-protocol'))`]);
+  if (!p.probeVersion.includes(p.version)) throw new Error('装出来的 Hermes 版本不对：' + p.probeVersion);
+  const entries = listTree(root);
+  log(`打包 Hermes 运行环境：${entries.length} 个文件…`);
+  const dest = path.join(dir, p.file);
+  await packTgz(entries, dest);
+  const h = await hashFile(dest);
+  p.fileCount = entries.length;
+  return { file: dest, bytes: fs.statSync(dest).size, sha256: h.sha256 };
 }
 // pi（r39）：@earendil-works/pi-coding-agent 连同依赖装好后整包打成 tgz，和 DSH 一样由 Hub 用 node 跑入口脚本。
 async function planPi(o) {
@@ -390,7 +447,7 @@ async function main() {
     const partial = catalogLib.IDS.some(id => !o.only.includes(id));
     if (partial && !previous.length && !o.fresh) throw new Error('只打部分组件（' + o.only.join(',') + '）却没有底目录，会丢掉其他组件；请加 --base <线上 components.json>，或确认要新目录时加 --fresh');
   }
-  const planners = { claude: planClaude, codex: planCodex, dsh: planDsh, node: planNode, git: planGit, pi: planPi, opencode: planOpencode };
+  const planners = { claude: planClaude, codex: planCodex, dsh: planDsh, node: planNode, git: planGit, pi: planPi, opencode: planOpencode, hermes: planHermes };
   const plans = [];
   for (const id of o.only) plans.push(await planners[id](o));
   log('计划：');
@@ -409,7 +466,7 @@ async function main() {
     const dir = p.mirror ? path.join(outRoot, p.id, p.version) : path.join(o.out, 'official-only', p.id, p.version);
     fs.mkdirSync(dir, { recursive: true });
     log(`== ${p.name} ${p.version}`);
-    const built = p.id === 'dsh' ? await buildDsh(p, dir, staging, o) : p.id === 'pi' ? await buildPi(p, dir, staging, o) : p.id === 'node' ? await buildNode(p, dir, staging)
+    const built = p.id === 'dsh' ? await buildDsh(p, dir, staging, o) : p.id === 'pi' ? await buildPi(p, dir, staging, o) : p.id === 'hermes' ? await buildHermes(p, dir, staging, o) : p.id === 'node' ? await buildNode(p, dir, staging)
       : p.id === 'git' ? await buildGit(p, dir, staging) : await buildNpmTarball(p, dir, staging);
     const rel = `${p.id}/${p.version}/${p.file}`;
     // 不放自家源的组件（默认 Claude Code）：文件仍留在输出目录方便核对，但不进目录的 url，也不用上传。
