@@ -38,10 +38,9 @@
     "sources": []
   },
   "releaseNotes": [
-    "会议室抢订提前天数可设 1–120 天（默认仍 7）；分身盯消息改为只盯选中的几个群；员工助手装在别处也认得出、技能广场一路失败不再整页空白；关助理就是真关、等你回复不再把自己算进去；社区共享不再对所有人开放；检查更新在版本索引读不到时借本人登录查版本",
-    "opencode 经公司模型时默认开启思考（和 DSH 一致），DeepSeek 不再一直以不思考模式作答"
+    "用公司模型的 Claude 会话按模型真实输入上限压缩（DeepSeek V4.1 约 344K），不再到约 200K 就提前压缩"
   ],
-  "version": "5.6.144",
+  "version": "5.6.145",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

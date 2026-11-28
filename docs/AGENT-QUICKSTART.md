@@ -1,20 +1,20 @@
 # Agent 安装手册：替用户装好并交付可用的 AI Hub
 
-适用：Windows 10/11 x64。固定发布版：**v5.6.144**。先选择「直接使用」或「借鉴开发」，不要把装好文件当成账号已经可用。
+适用：Windows 10/11 x64。固定发布版：**v5.6.145**。先选择「直接使用」或「借鉴开发」，不要把装好文件当成账号已经可用。
 
 > **⚠️ 下载与更新只在公司内源：** 最新版本仅发布于公司内源平台（OpenX，搜索 **AI Hub**（项目名 AI HUB-Huawei））。GitHub 页面不再推送新版本，仅作历史版本留档（停在 v5.6.107）。请前往公司内源下载 `AIHubHuawei-Setup-<版本>.exe`（安装版）或 `AIHubHuawei-<版本>-win-x64.zip`（免安装版），之后在应用内一键更新；本文的离线参数仍适用于从内源或同事处拿到的离线包。
 
 ## 可以直接交给 Agent 的任务
 
-> 请安装 AI HUB-Huawei v5.6.144：「下载」文件夹里有我从公司内源 OpenX 的 AI Hub 项目下载的 `install-release.ps1`、`AIHubHuawei-5.6.144-win-x64.zip` 和 `SHA256SUMS.txt`。读取 AGENTS.md 和 docs/AGENT-QUICKSTART.md，按便携安装路线执行，保留本机已有 Hub、CLI 和账号。默认复用现有 CLI；缺少时按我的账号选择 Claude 或 Codex，通过官方安装器补齐。完成下载校验、启动、官方登录状态检查和一条真实消息验收。需要本人授权时打开官方窗口让我完成，不索取密码、验证码或 token。把版本、安装目录、校验值、实际通过/失败项交付给我。公司网络不通时报告具体下载地址和错误，不绕过访问策略。
+> 请安装 AI HUB-Huawei v5.6.145：「下载」文件夹里有我从公司内源 OpenX 的 AI Hub 项目下载的 `install-release.ps1`、`AIHubHuawei-5.6.145-win-x64.zip` 和 `SHA256SUMS.txt`。读取 AGENTS.md 和 docs/AGENT-QUICKSTART.md，按便携安装路线执行，保留本机已有 Hub、CLI 和账号。默认复用现有 CLI；缺少时按我的账号选择 Claude 或 Codex，通过官方安装器补齐。完成下载校验、启动、官方登录状态检查和一条真实消息验收。需要本人授权时打开官方窗口让我完成，不索取密码、验证码或 token。把版本、安装目录、校验值、实际通过/失败项交付给我。公司网络不通时报告具体下载地址和错误，不绕过访问策略。
 
 ## 路线 A：直接使用（免 Node / Git / Python / 管理员权限）
 
-先从公司内源 OpenX 的 AI Hub 项目下载 `install-release.ps1`、`AIHubHuawei-5.6.144-win-x64.zip` 和 `SHA256SUMS.txt`，放进「下载」文件夹，再在 PowerShell 执行下面这一段。脚本固定版本，自动使用「下载」文件夹里的安装包并核对校验值；默认安装到用户自己的 LocalAppData，创建桌面入口并启动。
+先从公司内源 OpenX 的 AI Hub 项目下载 `install-release.ps1`、`AIHubHuawei-5.6.145-win-x64.zip` 和 `SHA256SUMS.txt`，放进「下载」文件夹，再在 PowerShell 执行下面这一段。脚本固定版本，自动使用「下载」文件夹里的安装包并核对校验值；默认安装到用户自己的 LocalAppData，创建桌面入口并启动。
 
 ```powershell
 $setup = Join-Path $env:USERPROFILE 'Downloads\install-release.ps1'
-powershell -NoProfile -ExecutionPolicy Bypass -File $setup -Version v5.6.144
+powershell -NoProfile -ExecutionPolicy Bypass -File $setup -Version v5.6.145
 ```
 
 已有 AI CLI 时到此不再安装其他工具。完全没有 CLI、希望使用 Codex 时，最后一行添加 `-Provider codex`；Claude 添加 `-Provider claude`。两者调用官方原生安装器，不依赖 Node。Gemini 需要另行具备 Node/npm，再使用 `-Provider gemini`。不自动升级已有 CLI、不自动选择较低模型。
@@ -30,12 +30,12 @@ Agent 无人值守安装文件时添加 `-NoLaunch -NoShortcut -ResultPath <绝�
 从同一个 Release 取得并通过公司批准渠道转入：
 
 - `install-release.ps1`
-- `AIHubHuawei-5.6.144-win-x64.zip`
+- `AIHubHuawei-5.6.145-win-x64.zip`
 - `SHA256SUMS.txt`
-- 可选：`AIHubHuawei-source-5.6.144.zip`，用于借鉴源码
+- 可选：`AIHubHuawei-source-5.6.145.zip`，用于借鉴源码
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install-release.ps1 -Version v5.6.144 -PackagePath .\AIHubHuawei-5.6.144-win-x64.zip -ChecksumPath .\SHA256SUMS.txt -NoLaunch -NoShortcut
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install-release.ps1 -Version v5.6.145 -PackagePath .\AIHubHuawei-5.6.145-win-x64.zip -ChecksumPath .\SHA256SUMS.txt -NoLaunch -NoShortcut
 ```
 
 离线模式本身不联网；不要添加 `-Provider`，否则可能触发 CLI 联网安装。Hub 的模型服务仍需要公司批准的网络与用户自己的账号。SHA256 校验用于确认下载内容与 GitHub 发布清单一致，不替代企业代码签名或软件准入。
@@ -90,4 +90,4 @@ AI Hub 版本：（窗口标题或 installation.json 里的版本）
 
 ## 路线 C：借鉴或定制
 
-下载同版本源码 ZIP，或者 clone 后 checkout `v5.6.144`。先读 [ARCHITECTURE.md](ARCHITECTURE.md)，再按 [CUSTOMIZE.md](CUSTOMIZE.md) 的任务模板建立自己的分支或仓库。安装包的 `resources/guides` 内也包含说明，离线可以读。
+下载同版本源码 ZIP，或者 clone 后 checkout `v5.6.145`。先读 [ARCHITECTURE.md](ARCHITECTURE.md)，再按 [CUSTOMIZE.md](CUSTOMIZE.md) 的任务模板建立自己的分支或仓库。安装包的 `resources/guides` 内也包含说明，离线可以读。

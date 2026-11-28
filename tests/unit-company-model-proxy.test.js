@@ -2353,3 +2353,14 @@ test('codeagentInstallDir: from the CodeAgent Hub uses to the folder holding bin
     assert.equal(codeagentInstallDir({ AI_HUB_CODEAGENT_COMMAND: lone, PATH: '' }), '');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('Claude 会话按公司模型目录的输入上限设上下文窗口，不再按 Claude Code 默认的约 200K 提前压缩', () => {
+  const dataDir = hubData();
+  const glm = {};
+  assert.equal(hubProxy.applyClaudeEnv(glm, { dataDir, sessionId: 'ctx-1', model: 'GLM-5.2-WX' }), 'GLM-5.2-WX');
+  assert.equal(glm.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '169984');
+  const ds = { CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1' };
+  assert.equal(hubProxy.applyClaudeEnv(ds, { dataDir, sessionId: 'ctx-2', model: 'deepseek-v4.1-flash-1017' }), 'deepseek-v4.1-flash-1017');
+  assert.equal(ds.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '344064');
+  assert.equal(hubProxy.claudeContextOf(dataDir, 'no-such-model', false), 0, '目录里没有的模型不设，保持 CLI 默认');
+});

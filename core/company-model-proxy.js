@@ -151,6 +151,22 @@ function applyEndpointNoProxy(env, endpoint) {
   for (const name of ['NO_PROXY', 'no_proxy']) if (!env[name].split(',').includes(host)) env[name] += ',' + host;
 }
 
+// Claude Code 认不出公司/网关模型名时按自己的默认窗口（约 200K）提前自动压缩，公司模型目录里的真实输入上限用不上
+// （WeLink 反馈：DeepSeek V4.1 输入上限 344064，Claude 会话 200K 就压缩）。按目录的输入上限告诉它（CLAUDE_CODE_MAX_CONTEXT_TOKENS，
+// Claude Code 对未知模型的提示里就是这么建议的）；取输入上限不取总窗口，理由同 dshContextOf。读不到真实值（网关目录没缓存时
+// contextOf 回的是保守默认）就不设，保持 CLI 默认。
+function claudeContextOf(dataDir, model, gateway) {
+  let value = 0;
+  if (gateway) {
+    const c = gatewayConfig().contextOf(dataDir, model);
+    value = c === require('./api-gateway-catalog').DEFAULT_CONTEXT ? 0 : c;
+  } else {
+    const m = companyModels(dataDir).find(x => x.id === model);
+    value = m ? m.input : 0;
+  }
+  return Number.isInteger(value) && value >= 32000 ? value : 0;
+}
+
 function applyClaudeEnv(env, { dataDir, sessionId, model, account, gateway = false }) {
   const endpoint = requireEndpoint(dataDir, { gateway });
   const chosen = launchModel(model, { gateway, dataDir });
@@ -164,6 +180,8 @@ function applyClaudeEnv(env, { dataDir, sessionId, model, account, gateway = fal
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
     CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1', API_TIMEOUT_MS: '900000',
   });
+  const window = claudeContextOf(dataDir, chosen, gateway);
+  if (window) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(window); else delete env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
   applyEndpointNoProxy(env, endpoint);
   return chosen;
 }
@@ -374,7 +392,7 @@ module.exports = {
   ZONE_CHOICES, upstreamFile, readUpstreamConfig, setUpstreamZone, chosenZone,
   companyModels, companyModelIds, companyDefaultModel, DEFAULT_PORT, KEY_ENV, PROVIDER_ID, LABEL, GATEWAY_LABEL, GATEWAY_SUFFIX, usesGateway, gatewayModelIds, CODEX_WINDOWS_SANDBOX_DEFAULT, codexWindowsSandbox,
   proxyDir, endpointFile, readEndpoint, noteLiveEndpoint, ensureEndpoint, setEndpointPort, sessionTag, sessionKey, normalizePin, normalizeModel, launchModel,
-  applyNoProxy, applyEndpointNoProxy, usesProxy, applyClaudeEnv, codexCatalog, codexHome, ensureCodexHome, applyCodexEnv, dshRoute, dshContextOf, dshOwnRoute, findNodeOnPath,
+  applyNoProxy, applyEndpointNoProxy, usesProxy, applyClaudeEnv, claudeContextOf, codexCatalog, codexHome, ensureCodexHome, applyCodexEnv, dshRoute, dshContextOf, dshOwnRoute, findNodeOnPath,
 };
 // 现取的清单（旧代码按常量读，名字保留）。
 Object.defineProperty(module.exports, 'MODELS', { enumerable: true, get: () => companyModels() });
