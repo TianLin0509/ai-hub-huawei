@@ -126,7 +126,8 @@ test('会话环境：Claude 会话的 key 带 __gw、模型照网关表；Codex 
   proxy.applyCodexEnv(companyCodex, { dataDir: dir, sessionId: 'sess-5', model: '', projectDir: dir });
   // R61：公司上游也交给 Codex 重发 2 次（出字后反代没法重试）
   assert.match(fs.readFileSync(path.join(companyCodex.CODEX_HOME, 'config.toml'), 'utf8'), /stream_max_retries = 2/);
-  assert.ok(proxy.dshRoute({ dataDir: dir, sessionId: 'sess-6', model: '' }).providerConfig.models.every(m => m.maxTokens === 16384));
+  // 11-28 白天复测：公司上游同样会截断（5 次），一并放到 32768（与反代全局上限、Claude Code 的 32000 一致）
+  assert.ok(proxy.dshRoute({ dataDir: dir, sessionId: 'sess-6', model: '' }).providerConfig.models.every(m => m.maxTokens === 32768));
 });
 
 test('验证 key 时网关先回响应头、正文卡住：在超时内结束并提示连不上，不会一直「正在验证」', async () => {

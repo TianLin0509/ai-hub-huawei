@@ -167,8 +167,10 @@ function buildOpencodeCliOptions(kind, opts, config = {}, dataDir, baseEnv = pro
   const providers = {};
   if (route) {
     env[route.keyEnv] = route.key;
+    // 单步输出上限：公司线路（公司上游 / API 网关）放到 32768，和 DSH、pi 一致（11-28 黄区实测 16384 会截断长输出；opencode 自己再按 32000 封顶）；
+    // 其他线路（自有接口、DeepSeek 官方、Token Plan）的上限各家不同，保持 16384。
     providers[route.provider] = { npm: '@ai-sdk/openai-compatible', name: routeLabel(route), options: { baseURL: route.baseURL, apiKey: `{env:${route.keyEnv}}` },
-      models: Object.fromEntries(route.models.map(m => [m, { name: m, limit: { context: route.contextOf(m), output: 16384 } }])) };
+      models: Object.fromEntries(route.models.map(m => [m, { name: m, limit: { context: route.contextOf(m), output: route.id === 'company' ? 32768 : 16384 } }])) };
     // 公司反代在本机，绕开代理；自有接口沿用系统代理设置（和 DSH 自有接口一致）。
     if (route.id === 'company') { try { require('./company-model-proxy').applyEndpointNoProxy(env, { origin: route.baseURL }); } catch (_) {} }
   }

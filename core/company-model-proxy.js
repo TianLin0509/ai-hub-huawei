@@ -288,8 +288,10 @@ function dshRoute({ dataDir, sessionId, model, account, gateway = false, midStre
     providerConfig: { api: 'openai-completions', baseURL: origin(endpoint) + '/v1', apiKeyEnv: KEY_ENV,
       retryPolicy: { mode: 'normal', maxRetries: !gateway && midStreamRetry ? 2 : 0 }, reasoning: 'high',
       // 单步输出上限：网关的 GLM 想得多，16384 常常想到一半就被截断，DSH 把它当成「本轮完成」直接停下（11-28 黄区夜测 12 轮失败里 9 轮）。
-      // 网关路线放到反代的全局上限 32768（Claude Code 走网关一直发 32000，网关接受）；公司上游实测 16384 够用，不动。
-      models: ids.map(id => ({ id, contextWindow: contextOf(id), maxTokens: gateway ? 32768 : 16384, reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
+      // 网关路线放到反代的全局上限 32768（Claude Code 走网关一直发 32000，网关接受）。
+      // 公司上游也放到 32768（11-28 白天复测：公司上游同样截断过 5 次——DeepSeek 写长 HTML 报告 3 次、GLM-5.3 / GLM-5.2 各 1 次；
+      // Claude Code 走公司上游一直发 32000，三个模型都接受；DeepSeek 上游自报单步上限 65536）。
+      models: ids.map(id => ({ id, contextWindow: contextOf(id), maxTokens: 32768, reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
         compat: { supportsDeveloperRole: false, thinkingFormat: 'deepseek', supportsStore: false, maxTokensField: 'max_tokens' } })) },
     disabledPatches: DSH_DISABLED.map(id => ({ id, disabled: true })),
   };
